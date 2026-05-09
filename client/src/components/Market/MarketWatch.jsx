@@ -260,6 +260,7 @@ function IndexStatusBar({ tabId, watchlist }) {
 
             {totalBull != null && (
                 <div className="mw-status-overall">
+                    <span className="mw-status-combined-label">Combined</span>
                     <span className="sig-bull">{totalBull}↑</span>
                     <span className="sig-bear">{totalBear}↓</span>
                     <span className={`mw-status-overall-label ${sigClass(bias)}`}>
@@ -399,7 +400,7 @@ function StockFuturesPanel({
 }) {
     const [names, setNames] = useState([]);
     const [minPct, setMinPct] = useState("6");
-    const [maxPct, setMaxPct] = useState("8");
+    const [maxPct, setMaxPct] = useState("");
     const [moversLoading, setMoversLoading] = useState(false);
 
     useEffect(() => {
@@ -453,7 +454,7 @@ function StockFuturesPanel({
                 <input
                     className="mw-movers-input"
                     type="number"
-                    placeholder="Max %"
+                    placeholder="Max % (e.g. 8)"
                     value={maxPct}
                     onChange={e => setMaxPct(e.target.value)}
                     min="0"
@@ -961,6 +962,7 @@ export default function MarketWatch() {
                 </div>
                 {activeTab !== "INDEX" && activeTab !== "STOCKS" && (
                     <div className="mw-interval-pills">
+                        {/* Pills — visible on desktop */}
                         {INTERVALS.map(i => (
                             <button
                                 key={i.value}
@@ -970,6 +972,16 @@ export default function MarketWatch() {
                                 {i.label}
                             </button>
                         ))}
+                        {/* Select — visible on mobile only */}
+                        <select
+                            className="mw-interval-select"
+                            value={interval}
+                            onChange={e => setInterval(e.target.value)}
+                        >
+                            {INTERVALS.map(i => (
+                                <option key={i.value} value={i.value}>{i.label}</option>
+                            ))}
+                        </select>
                     </div>
                 )}
             </div>

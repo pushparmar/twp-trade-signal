@@ -30,6 +30,8 @@ const PAGES = {
 export default function App() {
   const [activePage, setActivePage] = useState('market');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Settings tab visible only when ?setting=1 is in the URL
+  const showSettings = new URLSearchParams(window.location.search).get('setting') === '1';
   const setKiteConnected = useAppStore((s) => s.setKiteConnected);
   const setPollingStatus = useAppStore((s) => s.setPollingStatus);
   const setTestMode = useAppStore((s) => s.setTestMode);
@@ -93,6 +95,7 @@ export default function App() {
         orderCount={orders.length}
         tickerConnected={tickerConnected}
         testMode={testMode}
+        showSettings={showSettings}
         onToggleTestMode={() => {
           const next = !testMode;
           setTestMode(next);

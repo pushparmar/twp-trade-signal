@@ -442,6 +442,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom:8px;
 }
 .count-badge {
   background: var(--card);
@@ -1048,8 +1049,8 @@ body {
   .sidebar { position: fixed; z-index: 100; }
   .sidebar--collapsed { width: 0; border: none; }
   .main-area { width: 100%; }
-  .page { padding: 16px; }
-  .summary-row { grid-template-columns: repeat(2, 1fr); }
+  .page { padding: 16px;margin-top:70px; }
+  .summary-row { grid-template-columns: repeat(1, 1fr); }
   .field-row { grid-template-columns: 1fr; }
   .systems-grid { grid-template-columns: 1fr; }
 }
@@ -1329,6 +1330,9 @@ body {
   font-weight: 600;
 }
 
+/* Hidden on desktop — shown only on mobile */
+.mw-interval-select { display: none; }
+
 /* ── Index status bar ───────────────────────────── */
 .mw-status-bar {
   display: flex;
@@ -1400,6 +1404,18 @@ body {
   border-radius: 6px;
   background: var(--surface);
   border: 1px solid var(--border);
+}
+
+.mw-status-combined-label {
+  font-size: 10px;
+  font-weight: 500;
+  font-family: system-ui;
+  color: var(--txt2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding-right: 2px;
+  border-right: 1px solid var(--border2);
+  margin-right: 2px;
 }
 
 .mw-status-overall-label {
@@ -1637,17 +1653,19 @@ body {
 
   .app-shell { flex-direction: column; }
 
-  /* Sidebar becomes a bottom bar: nav items + test mode on next line */
+  /* Sidebar becomes a bottom navigation bar — single row */
   .sidebar {
     width: 100% !important;
     height: auto;
-    flex-direction: column;
+    min-height: 52px;
+    flex-direction: row;
+    align-items: center;
     border-right: none;
     border-top: 1px solid var(--border);
     order: 2;
     overflow: visible;
     z-index: 100;
-    padding: 0;
+    padding: 0 8px;
   }
 
   .sidebar-brand,
@@ -1655,14 +1673,13 @@ body {
   .sidebar-stats,
   .sidebar-footer { display: none !important; }
 
-  /* Row 1: Dashboard · Market Watch · Settings */
+  /* Nav items flex in a row */
   .sidebar-nav {
     flex-direction: row;
-    padding: 6px 8px 4px;
+    padding: 6px 0;
     gap: 4px;
-    flex: unset;
+    flex: 1;
     justify-content: space-around;
-    width: 100%;
   }
 
   .sidebar-nav-item {
@@ -1685,20 +1702,54 @@ body {
 
   .nav-badge { display: none; }
 
-  /* Row 2: Test Mode toggle — full width compact strip */
+  /* Test mode sits inline at the right, separated from nav items */
   .sidebar-testmode {
-    width: 100%;
-    border-top: 1px solid var(--border);
-    padding: 4px 12px;
+    padding: 0;
+    border-top: none;
+    border-left: 1px solid var(--border);
+    margin-left: 8px;
+    padding-left: 8px;
+    flex-shrink: 0;
   }
 
   .sidebar-testmode-btn {
-    width: 100%;
-    justify-content: center;
-    gap: 8px;
-    font-size: 11px;
-    padding: 4px 0;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 9px;
+    padding: 5px 8px;
+    border-radius: 8px;
   }
+
+  /* Floating theme toggle — bottom-right, mobile only */
+  .sidebar-footer {
+    display: flex !important;
+    position: fixed;
+    bottom: 50px;
+    right: 12px;
+    z-index: 200;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 36px;
+    height: 36px;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    padding: 0;
+  }
+
+  .sidebar-footer-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    gap: 0;
+  }
+
+  /* Hide the "Light Mode / Dark Mode" label text on mobile */
+  .sidebar-footer-btn span { display: none; }
 
   /* Main area fills the screen above the bottom nav */
   .main-area {
@@ -1710,7 +1761,8 @@ body {
   }
 
   /* ── Page ────────────────────────────────────────── */
-  .page { padding: 12px 12px 16px; }
+  /* bottom-nav (~52px) + floating theme btn + breathing room */
+  .page { padding: 12px 12px 110px; }
 
   .page-header {
     flex-direction: row;
@@ -1778,9 +1830,25 @@ body {
   .mw-interval-pills {
     flex-wrap: wrap;
     gap: 4px;
+    width:100%;
+    flex-direction: column;
   }
 
-  .mw-interval-pill { padding: 4px 9px; font-size: 11px; }
+  /* On mobile, hide buttons and show the <select> instead */
+  .mw-interval-pill { display: none; }
+
+  .mw-interval-select {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--txt);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 4px 8px;
+    cursor: pointer;
+    outline: none;
+  }
 
   /* ── Page loader ─────────────────────────────────── */
   .mw-page-loader { padding: 40px 16px; }

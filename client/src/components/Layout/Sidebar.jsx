@@ -48,8 +48,10 @@ export default function Sidebar({
   testMode,
   onToggleTestMode,
   tickerConnected,
+  showSettings = false,
 }) {
   const isLive = pollingStatus === 'running';
+  const visibleNav = NAV_ITEMS.filter(item => item.id !== 'settings' || showSettings);
 
   return (
     <aside className={`sidebar ${collapsed ? 'sidebar--collapsed' : ''}`}>
@@ -81,7 +83,7 @@ export default function Sidebar({
 
       {/* Navigation */}
       <nav className="sidebar-nav">
-        {NAV_ITEMS.map((item) => (
+        {visibleNav.map((item) => (
           <button
             key={item.id}
             className={`sidebar-nav-item ${activePage === item.id ? 'sidebar-nav-item--active' : ''}`}
