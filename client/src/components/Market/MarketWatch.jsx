@@ -753,29 +753,24 @@ export default function MarketWatch() {
     // Module-level set used directly — no ref needed
 
     // On mount: load watchlist + subscribe all 3 index underlyings in parallel.
-    // No ATM options subscribed on init — those subscribe lazily on tab click.
-    // _initDone flag prevents re-running when user navigates away and back.
+    // Retries every 5 s if the instrument cache isn't ready yet (503) so the
+    // page self-heals after the owner authenticates without requiring a reload.
     useEffect(() => {
+        let retryTimer = null;
+
         async function init() {
-            if (_initDone) {
-                setPageLoading(false);
-                return;
-            }
-            _initDone = true;
+            if (_initDone) { setPageLoading(false); return; }
             setPageLoading(true);
             setPageLoadMsg("Loading indices…");
             try {
                 const [wl] = await Promise.all([
                     api.get("/instruments/watchlist"),
-                    api
-                        .get("/instruments/status")
-                        .then(r => setStatus(r.data))
-                        .catch(() => {})
+                    api.get("/instruments/status").then(r => setStatus(r.data)).catch(() => {})
                 ]);
                 setWatchlist(wl.data);
 
-                // Subscribe all 3 underlyings in parallel
-                await Promise.allSettled(
+                // Subscribe all 3 underlyings — if cache not ready yet, throws 503
+                const results = await Promise.allSettled(
                     Object.entries(TAB_INDEX).map(async ([, info]) => {
                         const r = await api.get("/instruments/search", {
                             params: { q: info.q, exchange: info.exchange }
@@ -785,13 +780,30 @@ export default function MarketWatch() {
                             const sub = await api.post("/instruments/subscribe", inst);
                             setWatchlist(sub.data.watchlist);
                         }
+                        return inst;
                     })
                 );
+
+                const anyFailed = results.some(r => r.status === "rejected");
+                const anyMissing = results.some(r => r.status === "fulfilled" && !r.value);
+                if (anyFailed || anyMissing) {
+                    // Cache not ready — reset flag and retry in 5 s
+                    setPageLoadMsg("Waiting for instrument cache…");
+                    retryTimer = setTimeout(() => { init(); }, 5000);
+                    return;
+                }
+
+                _initDone = true;
+            } catch {
+                // Network error — retry
+                retryTimer = setTimeout(() => { init(); }, 5000);
+                return;
             } finally {
                 setPageLoading(false);
             }
         }
         init();
+        return () => { if (retryTimer) clearTimeout(retryTimer); };
     }, [setWatchlist]);
 
     async function handleAdd(instrument) {
