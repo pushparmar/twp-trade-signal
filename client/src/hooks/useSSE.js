@@ -18,7 +18,11 @@ export default function useSSE() {
   const setIchiSignal = useAppStore((s) => s.setIchiSignal);
 
   useEffect(() => {
-    const es = new EventSource('/api/stream');
+    // In production VITE_API_URL points to Railway — SSE cannot go through Vercel rewrites.
+    const streamUrl = import.meta.env.VITE_API_URL
+      ? `${import.meta.env.VITE_API_URL}/api/stream`
+      : '/api/stream';
+    const es = new EventSource(streamUrl);
 
     es.addEventListener('signal', (e) => addSignal(JSON.parse(e.data)));
     es.addEventListener('order_placed', (e) => addOrder(JSON.parse(e.data)));

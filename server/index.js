@@ -27,6 +27,10 @@ app.use(express.json());
 
 // SSE stream endpoint — clients connect once and receive all events
 app.get('/api/stream', (req, res) => {
+  // Explicit CORS for SSE — required for cross-origin streaming (Vercel → Railway)
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
