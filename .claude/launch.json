@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "client",
+      "runtimeExecutable": "/Users/pushpendraparmar/.nvm/versions/node/v20.19.6/bin/node",
+      "runtimeArgs": ["node_modules/.bin/vite"],
+      "port": 5173,
+      "cwd": "client"
+    }
+  ],
+  "autoVerify": false
+}

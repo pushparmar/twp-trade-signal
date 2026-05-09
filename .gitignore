@@ -1,0 +1,9 @@
+node_modules/
+server/node_modules/
+client/node_modules/
+server/config.json
+client/dist/
+.env
+server/.env
+.env.local
+.env.*.local

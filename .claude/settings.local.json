@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_start",
+      "Bash(curl -s -X POST http://localhost:3001/api/test/signal -H 'Content-Type: application/json' -d '{\"message\":\"nifty24550ce\\\\n216,-205\\\\n200\\\\n289-310\"}')",
+      "Bash(node -e ' *)",
+      "Bash(curl -s -X POST http://localhost:3001/api/telegram/start -H \"Content-Type: application/json\")"
+    ]
+  }
+}
