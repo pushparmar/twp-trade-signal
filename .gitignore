@@ -7,3 +7,4 @@ client/dist/
 server/.env
 .env.local
 .env.*.local
+.claude/worktrees/

@@ -13,6 +13,12 @@ const useAppStore = create((set) => ({
   tradingDefaults: { quantity: 1, exchange: 'NFO', product: 'MIS' },
   toasts: [],
 
+  // Market watch
+  watchlist: [],       // [{ instrumentToken, tradingsymbol, exchange, name, lotSize, expiry }]
+  ticks: {},           // { [instrumentToken]: { lastPrice, ohlc, volume, change, prevPrice } }
+  tickerConnected: false,
+  ichiSignals: {},  // { [`${token}:${interval}`]: ichimokuSignals } — pushed by server on candle close
+
   setPollingStatus: (pollingStatus) => set({ pollingStatus }),
   setKiteConnected: (kiteConnected) => set({ kiteConnected }),
   setTestMode: (testMode) => set({ testMode }),
@@ -56,6 +62,36 @@ const useAppStore = create((set) => ({
     set((state) => ({ toasts: [...state.toasts, { id: Date.now() + Math.random(), ...toast }] })),
   removeToast: (id) =>
     set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
+
+  // Market watch actions
+  setWatchlist: (watchlist) => set({ watchlist }),
+  addToWatchlist: (item) =>
+    set((state) => {
+      if (state.watchlist.find((i) => i.instrumentToken === item.instrumentToken)) return state;
+      return { watchlist: [...state.watchlist, item] };
+    }),
+  removeFromWatchlist: (instrumentToken) =>
+    set((state) => ({
+      watchlist: state.watchlist.filter((i) => i.instrumentToken !== instrumentToken),
+    })),
+  updateTick: (tick) =>
+    set((state) => {
+      const prev = state.ticks[tick.instrumentToken];
+      return {
+        ticks: {
+          ...state.ticks,
+          [tick.instrumentToken]: {
+            ...tick,
+            prevPrice: prev?.lastPrice ?? tick.lastPrice,
+          },
+        },
+      };
+    }),
+  setTickerConnected: (tickerConnected) => set({ tickerConnected }),
+  setIchiSignal: ({ token, interval, ...signals }) =>
+    set((state) => ({
+      ichiSignals: { ...state.ichiSignals, [`${token}:${interval}`]: signals },
+    })),
 }));
 
 export default useAppStore;

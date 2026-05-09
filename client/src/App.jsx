@@ -5,6 +5,7 @@ import useSSE from './hooks/useSSE';
 import Sidebar from './components/Layout/Sidebar';
 import Dashboard from './components/Dashboard/Dashboard';
 import SettingsPanel from './components/Settings/SettingsPanel';
+import MarketWatch from './components/Market/MarketWatch';
 import ToastContainer from './components/Toast/Toast';
 import './App.css';
 
@@ -22,6 +23,7 @@ function useTheme() {
 
 const PAGES = {
   dashboard: Dashboard,
+  market: MarketWatch,
   settings: SettingsPanel,
 };
 
@@ -38,6 +40,7 @@ export default function App() {
   const pollingStatus = useAppStore((s) => s.pollingStatus);
   const signals = useAppStore((s) => s.signals);
   const orders = useAppStore((s) => s.orders);
+  const tickerConnected = useAppStore((s) => s.tickerConnected);
   const { theme, toggle: toggleTheme } = useTheme();
 
   useSSE();
@@ -88,6 +91,7 @@ export default function App() {
         pollingStatus={pollingStatus}
         signalCount={signals.length}
         orderCount={orders.length}
+        tickerConnected={tickerConnected}
         testMode={testMode}
         onToggleTestMode={() => {
           const next = !testMode;

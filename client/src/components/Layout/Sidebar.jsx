@@ -14,6 +14,16 @@ const NAV_ITEMS = [
     ),
   },
   {
+    id: 'market',
+    label: 'Market Watch',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+        <polyline points="16 7 22 7 22 13" />
+      </svg>
+    ),
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: (
@@ -37,6 +47,7 @@ export default function Sidebar({
   orderCount,
   testMode,
   onToggleTestMode,
+  tickerConnected,
 }) {
   const isLive = pollingStatus === 'running';
 
@@ -50,7 +61,7 @@ export default function Sidebar({
             <polyline points="16 7 22 7 22 13" />
           </svg>
         </div>
-        {!collapsed && <span className="brand-text">TradeFlow</span>}
+        {!collapsed && <span className="brand-text">TWP</span>}
         <button className="sidebar-collapse-btn" onClick={onToggleCollapse} title={collapsed ? 'Expand' : 'Collapse'}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             {collapsed ? (
@@ -81,6 +92,9 @@ export default function Sidebar({
             {!collapsed && <span className="nav-label">{item.label}</span>}
             {!collapsed && item.id === 'dashboard' && signalCount > 0 && (
               <span className="nav-badge">{signalCount}</span>
+            )}
+            {item.id === 'market' && (
+              <span className={`nav-ticker-dot ${tickerConnected ? 'nav-ticker-dot--on' : 'nav-ticker-dot--off'}`} title={tickerConnected ? 'Ticker connected' : 'Ticker disconnected'} />
             )}
           </button>
         ))}

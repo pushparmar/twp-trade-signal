@@ -10,7 +10,13 @@ const kiteAuthRouter = require('./routes/kiteAuth');
 const telegramRouter = require('./routes/telegram');
 const paperTradesRouter = require('./routes/paperTrades');
 const settingsRouter = require('./routes/settings');
+const instrumentsRouter = require('./routes/instruments');
+const historicalRouter = require('./routes/historical');
+const ichimokuRouter = require('./routes/ichimoku');
 const telegramPoller = require('./services/telegramPoller');
+const instrumentCache = require('./services/instrumentCache');
+const kiteTicker = require('./services/kiteTicker');
+const store = require('./store');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -57,13 +63,40 @@ app.use('/api/kite', kiteRouter);
 app.use('/api/telegram', telegramRouter);
 app.use('/api/paper', paperTradesRouter);
 app.use('/api/settings', settingsRouter);
+app.use('/api/instruments', instrumentsRouter);
+app.use('/api/historical', historicalRouter);
+app.use('/api/ichimoku', ichimokuRouter);
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
+
   try {
     telegramPoller.start();
     console.log('[Telegram] Auto-started polling on server boot');
   } catch (err) {
     console.warn('[Telegram] Could not auto-start polling:', err.message);
+  }
+
+  // Init market data — load instruments and connect ticker if Kite is authenticated
+  const { kite } = store.getConfig();
+  if (kite.accessToken) {
+    try {
+      await instrumentCache.load();
+    } catch (err) {
+      console.warn('[InstrumentCache] Load failed on boot:', err.message);
+    }
+
+    try {
+      kiteTicker.connect();
+      // Clear the entire watchlist on every boot — each session starts fresh.
+      // The client re-subscribes index underlyings and fresh ATM strikes on load.
+      // This also prevents stale/expired option strikes from persisting day-to-day.
+      store.setWatchlist([]);
+      console.log('[KiteTicker] Watchlist cleared on boot — client will re-subscribe on connect');
+    } catch (err) {
+      console.warn('[KiteTicker] Could not connect on boot:', err.message);
+    }
+  } else {
+    console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }
 });

@@ -64,4 +64,30 @@ async function getOrder(orderId) {
   return response.data;
 }
 
-module.exports = { placeOrder, placeGTT, getOrders, getOrder };
+/**
+ * Get LTP for one or more instruments.
+ * symbols: array of "EXCHANGE:TRADINGSYMBOL" strings, e.g. ['NSE:NIFTY 50', 'BSE:SENSEX']
+ * Returns { 'NSE:NIFTY 50': { instrument_token, last_price }, ... }
+ */
+async function getLTP(symbols) {
+  const query = symbols.map((s) => `i=${encodeURIComponent(s)}`).join('&');
+  const response = await axios.get(`${KITE_BASE}/quote/ltp?${query}`, { headers: buildHeaders() });
+  return response.data.data || {};
+}
+
+/**
+ * Get full quote (OHLC + LTP + volume) for one or more instruments.
+ * Kite supports up to 500 instruments per call.
+ * symbols: array of "EXCHANGE:TRADINGSYMBOL" strings
+ * Returns { 'NFO:RELIANCE24JANFUT': { last_price, ohlc: { open, high, low, close }, change, ... }, ... }
+ */
+async function getQuote(symbols) {
+  const query = symbols.map((s) => `i=${encodeURIComponent(s)}`).join('&');
+  const response = await axios.get(`${KITE_BASE}/quote?${query}`, {
+    headers: buildHeaders(),
+    timeout: 20_000,
+  });
+  return response.data.data || {};
+}
+
+module.exports = { placeOrder, placeGTT, getOrders, getOrder, getLTP, getQuote };

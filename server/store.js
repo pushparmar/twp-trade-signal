@@ -119,10 +119,37 @@ function autoClosePaperTrades(symbol, exitPrice, exitAction) {
 function getPaperTrades() { return _paperTrades; }
 function clearPaperTrades() { _paperTrades = []; }
 
+// ── Watchlist (persisted) ────────────────────────────
+function getWatchlist() {
+  const config = readConfig();
+  return config.watchlist || [];
+}
+
+function setWatchlist(items) {
+  const config = readConfig();
+  config.watchlist = items;
+  writeConfig(config);
+}
+
+function addToWatchlist(item) {
+  const list = getWatchlist();
+  if (list.find((i) => i.instrumentToken === item.instrumentToken)) return list;
+  const updated = [...list, item];
+  setWatchlist(updated);
+  return updated;
+}
+
+function removeFromWatchlist(instrumentToken) {
+  const updated = getWatchlist().filter((i) => i.instrumentToken !== Number(instrumentToken));
+  setWatchlist(updated);
+  return updated;
+}
+
 module.exports = {
   getConfig, setAccessToken,
   getTradingDefaults, setTradingDefaults,
   getTestMode, setTestMode,
   addPaperTrade, closePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
   getPaperBalance, setPaperInitialBalance, getPaperInitialBalance,
+  getWatchlist, setWatchlist, addToWatchlist, removeFromWatchlist,
 };

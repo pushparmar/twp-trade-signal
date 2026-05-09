@@ -13,6 +13,9 @@ export default function useSSE() {
   const setTestMode = useAppStore((s) => s.setTestMode);
   const setPaperBalance = useAppStore((s) => s.setPaperBalance);
   const addToast = useAppStore((s) => s.addToast);
+  const updateTick = useAppStore((s) => s.updateTick);
+  const setTickerConnected = useAppStore((s) => s.setTickerConnected);
+  const setIchiSignal = useAppStore((s) => s.setIchiSignal);
 
   useEffect(() => {
     const es = new EventSource('/api/stream');
@@ -39,6 +42,10 @@ export default function useSSE() {
     es.addEventListener('paper_balance', (e) => setPaperBalance(JSON.parse(e.data)));
     // paper_trade_pending is informational — no state needed, toast handled on paper_trade fill
 
+    es.addEventListener('tick', (e) => updateTick(JSON.parse(e.data)));
+    es.addEventListener('ticker_status', (e) => setTickerConnected(JSON.parse(e.data).connected));
+    es.addEventListener('ichimoku_update', (e) => setIchiSignal(JSON.parse(e.data)));
+
     return () => es.close();
-  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast]);
+  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal]);
 }

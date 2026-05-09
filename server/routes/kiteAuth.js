@@ -1,7 +1,9 @@
 const express = require('express');
 const crypto = require('crypto');
 const axios = require('axios');
-const { getConfig, setAccessToken } = require('../store');
+const { getConfig, setAccessToken, getWatchlist } = require('../store');
+const instrumentCache = require('../services/instrumentCache');
+const kiteTicker = require('../services/kiteTicker');
 
 const router = express.Router();
 
@@ -78,12 +80,14 @@ router.get('/status', async (req, res) => {
 });
 
 // Callback — Kite redirects here after login, auto-exchanges token and redirects to dashboard
-// Set your Kite app's redirect URL to: http://localhost:3001/api/kite/auth/callback
+// Set your Kite app's redirect URL to: https://<your-railway-server>/api/kite/auth/callback
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+
 router.get('/callback', async (req, res) => {
   const { request_token, status } = req.query;
 
   if (status !== 'success' || !request_token) {
-    return res.redirect('http://localhost:5173?kite=error');
+    return res.redirect(`${FRONTEND_URL}?kite=error`);
   }
 
   const { kite } = getConfig();
@@ -104,10 +108,22 @@ router.get('/callback', async (req, res) => {
 
     setAccessToken(accessToken);
     console.log('[Kite Auth] Access token activated via callback');
-    res.redirect('http://localhost:5173?kite=connected');
+
+    // Init market data now that we have a valid token
+    instrumentCache.load().catch((e) => console.warn('[InstrumentCache] Load failed:', e.message));
+    kiteTicker.connect();
+    const watchlist = getWatchlist();
+    if (watchlist.length > 0) {
+      // Small delay to let ticker connect before subscribing
+      setTimeout(() => {
+        kiteTicker.subscribe(watchlist.map((i) => i.instrumentToken));
+      }, 2000);
+    }
+
+    res.redirect(`${FRONTEND_URL}?kite=connected`);
   } catch (err) {
     console.error('[Kite Auth] Callback token exchange failed:', err.response?.data?.message || err.message);
-    res.redirect('http://localhost:5173?kite=error');
+    res.redirect(`${FRONTEND_URL}?kite=error`);
   }
 });
 
