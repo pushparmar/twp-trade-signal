@@ -1777,89 +1777,15 @@ body {
 
   .idx-sig-cell { padding: 10px 8px; font-size: 10px; }
 
-  /* ── Watchlist table — card layout on mobile ────────
-     Each row becomes two visual lines:
-       Line 1: Symbol (flex-grow) · LTP · Chg% · Remove
-       Line 2: Signal badge -or- TF signal cells (1m/5m/15m)
-  ───────────────────────────────────────────────────── */
-  .kite-table-wrap { overflow-x: unset; }
+  /* ── Watchlist table — horizontal scroll like index tab ── */
+  .kite-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
-  /* Kill the default table layout so flex takes over */
-  .kite-table,
-  .kite-table thead,
-  .kite-table tbody,
-  .kite-table tfoot,
-  .kite-table tr,
-  .kite-table th,
-  .kite-table td { display: block; }
+  .kite-table th { padding: 8px 8px; font-size: 10px; white-space: nowrap; }
+  .kite-table td { padding: 8px 8px; font-size: 11px; white-space: nowrap; }
 
-  /* Hide header row — labels aren't needed in card view */
-  .kite-table thead tr { display: none; }
-
-  /* Each data row = two-line flex card */
-  .kite-table tbody tr {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border1);
-    gap: 0;
-  }
-
-  /* Line 1 cells: Symbol · LTP · Chg% · Remove */
-  /* Symbol — grows to fill remaining space on line 1 */
-  .kite-table tbody td:nth-child(1) {
-    flex: 1 1 0;
-    min-width: 0;
-    order: 1;
-    padding: 0 6px 0 0;
-  }
-  /* LTP */
-  .kite-table tbody td:nth-child(2) {
-    order: 2;
-    padding: 0 6px;
-    white-space: nowrap;
-    font-size: 13px;
-  }
-  /* Chg% */
-  .kite-table tbody td:nth-child(3) {
-    order: 3;
-    padding: 0 6px;
-    white-space: nowrap;
-    font-size: 12px;
-  }
-  /* Remove button — far right of line 1 */
-  .kite-table tbody td:last-child {
-    order: 4;
-    padding: 0 0 0 6px;
-    margin-left: auto;
-  }
-
-  /* Line 2 — all cells between col 3 and the last col
-     (Signal badge for NIFTY tabs, 1m/5m/15m for Stocks tab)   */
-  .kite-table tbody td:not(:nth-child(1)):not(:nth-child(2)):not(:nth-child(3)):not(:last-child) {
-    flex-basis: 100%;
-    order: 5;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 0 2px 0;
-    font-size: 11px;
-  }
-
-  /* idx-sig-cell inside the second line keeps its own sizing */
-  .kite-table tbody td.idx-sig-cell {
-    flex: 1;
-    justify-content: center;
-    text-align: center;
-    font-size: 11px;
-    padding: 5px 4px 2px;
-    min-width: 0;
-  }
-
-  .mw-sym-name  { font-size: 12px; }
+  .mw-sym-name  { font-size: 11px; white-space: nowrap; }
   .mw-sym-meta  { font-size: 10px; }
-  .mw-ltp-val   { font-size: 13px; }
+  .mw-ltp-val   { font-size: 12px; }
 
   /* ── Futures / movers panel ──────────────────────── */
   .mw-futures-panel { padding: 10px 12px; }
