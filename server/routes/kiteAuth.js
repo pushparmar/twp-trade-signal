@@ -95,6 +95,41 @@ router.get('/status', async (req, res) => {
   }
 });
 
+// Silently pushes the new access token to Railway env vars so it survives redeployments.
+// Requires RAILWAY_API_TOKEN + RAILWAY_SERVICE_ID + RAILWAY_ENVIRONMENT_ID in env.
+async function pushTokenToRailway(token) {
+  const { RAILWAY_API_TOKEN, RAILWAY_PROJECT_ID, RAILWAY_SERVICE_ID, RAILWAY_ENVIRONMENT_ID } = process.env;
+  if (!RAILWAY_API_TOKEN || !RAILWAY_SERVICE_ID || !RAILWAY_ENVIRONMENT_ID) return;
+
+  const mutation = `
+    mutation variableUpsert($input: VariableUpsertInput!) {
+      variableUpsert(input: $input)
+    }
+  `;
+  try {
+    await axios.post(
+      'https://backboard.railway.app/graphql/v2',
+      {
+        query: mutation,
+        variables: {
+          input: {
+            projectId: RAILWAY_PROJECT_ID,
+            serviceId: RAILWAY_SERVICE_ID,
+            environmentId: RAILWAY_ENVIRONMENT_ID,
+            name: 'KITE_ACCESS_TOKEN',
+            value: token,
+          },
+        },
+      },
+      { headers: { Authorization: `Bearer ${RAILWAY_API_TOKEN}`, 'Content-Type': 'application/json' } },
+    );
+    console.log('[Kite Auth] KITE_ACCESS_TOKEN updated in Railway env vars');
+  } catch (err) {
+    // Non-fatal — token is already in memory, Railway update is best-effort
+    console.warn('[Kite Auth] Could not update Railway env var:', err.message);
+  }
+}
+
 // Callback — Kite redirects here after login, auto-exchanges token and redirects to dashboard
 // Set your Kite app's redirect URL to: https://<your-railway-server>/api/kite/auth/callback
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -124,6 +159,9 @@ router.get('/callback', async (req, res) => {
 
     setAccessToken(accessToken);
     console.log('[Kite Auth] Access token activated via callback');
+
+    // Push token to Railway env vars so it survives restarts (best-effort, non-blocking)
+    pushTokenToRailway(accessToken).catch(() => {});
 
     // Init market data now that we have a valid token
     instrumentCache.load().catch((e) => console.warn('[InstrumentCache] Load failed:', e.message));
