@@ -17,6 +17,22 @@ router.get('/login-url', (req, res) => {
   res.json({ loginUrl });
 });
 
+// Owner-only daily token refresh page — bookmark this URL.
+// Visiting it redirects straight to Kite login without needing the frontend.
+// Protected by OWNER_SECRET env var (set a random string in Railway).
+router.get('/owner-refresh', (req, res) => {
+  const secret = process.env.OWNER_SECRET;
+  if (secret && req.query.secret !== secret) {
+    return res.status(403).send('Forbidden');
+  }
+  const { kite } = getConfig();
+  if (!kite.apiKey) {
+    return res.status(400).send('KITE_API_KEY not configured');
+  }
+  const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${kite.apiKey}&v=3`;
+  res.redirect(loginUrl);
+});
+
 // Called after Kite redirects back with request_token
 // POST /api/kite/auth/token  { requestToken }
 router.post('/token', async (req, res) => {
