@@ -1,7 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_PATH = path.join(__dirname, 'config.json');
+// Use Railway persistent volume if available, otherwise fall back to local file.
+// On Railway: add a Volume mounted at /data in the dashboard.
+const CONFIG_PATH = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'config.json')
+  : path.join(__dirname, 'config.json');
 
 const DEFAULT_TRADING = { quantity: 1, exchange: 'NFO', product: 'MIS' };
 
