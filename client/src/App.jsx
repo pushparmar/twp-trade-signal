@@ -28,7 +28,7 @@ const PAGES = {
 };
 
 export default function App() {
-  const [activePage, setActivePage] = useState('dashboard');
+  const [activePage, setActivePage] = useState('market');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const setKiteConnected = useAppStore((s) => s.setKiteConnected);
   const setPollingStatus = useAppStore((s) => s.setPollingStatus);

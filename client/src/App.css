@@ -1108,6 +1108,16 @@ body {
 .mw-ticker-badge--off  { background: var(--red-dim); color: var(--red); }
 .mw-ticker-badge--warn { background: rgba(212,160,23,0.12); color: var(--yellow); }
 .mw-ticker-badge--idle { background: var(--border); color: var(--txt3); }
+
+/* Simple connection dot — replaces text badge in header */
+.mw-conn-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.mw-conn-dot--on  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.mw-conn-dot--off { background: var(--red);   box-shadow: 0 0 4px var(--red); }
 .mw-status-meta { font-size: 12px; color: var(--txt3); }
 
 .mw-atm-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -1627,17 +1637,17 @@ body {
 
   .app-shell { flex-direction: column; }
 
-  /* Sidebar becomes a bottom navigation bar */
+  /* Sidebar becomes a bottom bar: nav items + test mode on next line */
   .sidebar {
     width: 100% !important;
     height: auto;
-    min-height: 56px;
-    flex-direction: row;
+    flex-direction: column;
     border-right: none;
     border-top: 1px solid var(--border);
     order: 2;
     overflow: visible;
     z-index: 100;
+    padding: 0;
   }
 
   .sidebar-brand,
@@ -1645,18 +1655,20 @@ body {
   .sidebar-stats,
   .sidebar-footer { display: none !important; }
 
+  /* Row 1: Dashboard · Market Watch · Settings */
   .sidebar-nav {
     flex-direction: row;
-    padding: 6px 8px;
+    padding: 6px 8px 4px;
     gap: 4px;
-    flex: 1;
+    flex: unset;
     justify-content: space-around;
+    width: 100%;
   }
 
   .sidebar-nav-item {
     flex-direction: column;
     gap: 3px;
-    padding: 6px 10px;
+    padding: 5px 10px;
     font-size: 10px;
     flex: 1;
     justify-content: center;
@@ -1668,10 +1680,25 @@ body {
 
   .sidebar--collapsed .sidebar-nav-item {
     flex-direction: column;
-    padding: 6px 10px;
+    padding: 5px 10px;
   }
 
   .nav-badge { display: none; }
+
+  /* Row 2: Test Mode toggle — full width compact strip */
+  .sidebar-testmode {
+    width: 100%;
+    border-top: 1px solid var(--border);
+    padding: 4px 12px;
+  }
+
+  .sidebar-testmode-btn {
+    width: 100%;
+    justify-content: center;
+    gap: 8px;
+    font-size: 11px;
+    padding: 4px 0;
+  }
 
   /* Main area fills the screen above the bottom nav */
   .main-area {
@@ -1686,10 +1713,11 @@ body {
   .page { padding: 12px 12px 16px; }
 
   .page-header {
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
     gap: 8px;
     margin-bottom: 12px;
-    align-items: flex-start;
   }
 
   .page-title { font-size: 16px; }
@@ -1715,9 +1743,21 @@ body {
   /* ── Tab bar ─────────────────────────────────────── */
   .mw-tab-bar {
     flex-direction: column;
-    gap: 8px;
+    gap: 0;
     margin-bottom: 10px;
     align-items: flex-start;
+  }
+
+  /* Index/Nifty tabs row */
+  .mw-tabs {
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border1);
+    margin-bottom: 8px;
+  }
+
+  /* Interval pills row */
+  .mw-interval-pills {
+    padding-top: 2px;
   }
 
   .mw-tabs {

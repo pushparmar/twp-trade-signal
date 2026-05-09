@@ -927,25 +927,12 @@ export default function MarketWatch() {
 
             {/* Page header */}
             <div className="page-header" style={{ marginBottom: 16 }}>
-                <div>
-                    <h2 className="page-title">Market Watch</h2>
-                    <p className="page-sub">Live prices via Kite WebSocket</p>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    {tickerConnected ? (
-                        <span className="mw-ticker-badge mw-ticker-badge--on">
-                            <span className="conn-dot" />
-                            Live
-                        </span>
-                    ) : (
-                        <span className="mw-ticker-badge mw-ticker-badge--idle">Offline</span>
-                    )}
-                    {status?.instrumentCount > 0 && (
-                        <span className="page-sub">
-                            {Number(status.instrumentCount).toLocaleString("en-IN")} instruments
-                            {status.subscribedCount > 0 ? ` · ${status.subscribedCount} subscribed` : ""}
-                        </span>
-                    )}
+                <h2 className="page-title">Market Watch</h2>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span
+                        className={`mw-conn-dot ${tickerConnected ? "mw-conn-dot--on" : "mw-conn-dot--off"}`}
+                        title={tickerConnected ? "Ticker connected" : "Ticker offline"}
+                    />
                     <button
                         className="mw-reset-btn"
                         onClick={handleHardReset}
