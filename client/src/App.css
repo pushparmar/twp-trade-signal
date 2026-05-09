@@ -1530,6 +1530,19 @@ body {
   transition: background 0.15s;
 }
 .mw-clear-btn:hover { background: var(--red-dim, rgba(215,90,74,0.12)); }
+
+.mw-reset-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--txt2);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.mw-reset-btn:hover { background: var(--border1); color: var(--txt1); }
 .mw-movers-wrap {
   display: flex;
   align-items: center;

@@ -138,25 +138,35 @@ function IndexStatusBar({ tabId, watchlist }) {
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (!info) {
-            setToken(null);
-            return;
-        }
+        if (!info) { setToken(null); return; }
+
+        // If already in watchlist, use it immediately
         const found = watchlist.find(i => i.tradingsymbol === info.match);
-        if (found) {
-            setToken(found.instrumentToken);
-            return;
-        }
+        if (found) { setToken(found.instrumentToken); return; }
+
+        // Otherwise search — retry every 5 s until cache is ready
         let cancelled = false;
-        api.get("/instruments/search", { params: { q: info.q, exchange: info.exchange } })
-            .then(r => {
+        let retryTimer = null;
+
+        async function trySearch() {
+            if (cancelled) return;
+            try {
+                const r = await api.get("/instruments/search", {
+                    params: { q: info.q, exchange: info.exchange }
+                });
                 const inst = r.data.find(i => i.tradingsymbol === info.match);
-                if (inst && !cancelled) setToken(inst.instrumentToken);
-            })
-            .catch(() => {});
-        return () => {
-            cancelled = true;
-        };
+                if (inst) {
+                    if (!cancelled) setToken(inst.instrumentToken);
+                } else {
+                    retryTimer = setTimeout(trySearch, 5000);
+                }
+            } catch {
+                // 503 — cache not ready yet, retry
+                retryTimer = setTimeout(trySearch, 5000);
+            }
+        }
+        trySearch();
+        return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
     }, [tabId, watchlist, info]);
 
     // Fetch only the timeframes not yet in the store; results written to store.
@@ -862,6 +872,14 @@ export default function MarketWatch() {
         }
     }
 
+    // Hard reset — clears all module-level flags, empties the store, reloads page
+    function handleHardReset() {
+        _initDone = false;
+        _subscribedTabs.clear();
+        useAppStore.getState().setIchiSignal && useAppStore.setState({ ichiSignals: {} });
+        window.location.reload();
+    }
+
     // Tab click: switch tab, reset stock filter, subscribe ATM only if not already done
     async function handleTabClick(tabId) {
         setActiveTab(tabId);
@@ -928,6 +946,13 @@ export default function MarketWatch() {
                             {status.subscribedCount > 0 ? ` · ${status.subscribedCount} subscribed` : ""}
                         </span>
                     )}
+                    <button
+                        className="mw-reset-btn"
+                        onClick={handleHardReset}
+                        title="Hard reset — clears all state and reloads"
+                    >
+                        ↺ Reset
+                    </button>
                 </div>
             </div>
 
