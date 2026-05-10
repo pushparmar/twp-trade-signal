@@ -13,6 +13,7 @@ const settingsRouter = require('./routes/settings');
 const instrumentsRouter = require('./routes/instruments');
 const historicalRouter = require('./routes/historical');
 const ichimokuRouter = require('./routes/ichimoku');
+const macroRouter    = require('./routes/macro');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
@@ -71,6 +72,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/instruments', instrumentsRouter);
 app.use('/api/historical', historicalRouter);
 app.use('/api/ichimoku', ichimokuRouter);
+app.use('/api/macro',   macroRouter);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);

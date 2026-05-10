@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
+import MacroPanel from "./MacroPanel";
 
 function fmt(n) {
     if (n == null || isNaN(n)) return "—";
@@ -42,7 +43,8 @@ const TABS = [
     // { id: "NIFTY", label: "Nifty" }, // hidden — ATM options handled via signal resolver
     // { id: "BANKNIFTY", label: "Bank Nifty" },
     // { id: "SENSEX", label: "Sensex" },
-    { id: "STOCKS", label: "Stocks" }
+    { id: "STOCKS", label: "Stocks" },
+    { id: "MACRO", label: "Macro" }
 ];
 
 const TAB_INDEX = {
@@ -980,36 +982,13 @@ export default function MarketWatch() {
                         </button>
                     ))}
                 </div>
-                {activeTab !== "INDEX" && activeTab !== "STOCKS" && (
-                    <div className="mw-interval-pills">
-                        {/* Pills — visible on desktop */}
-                        {INTERVALS.map(i => (
-                            <button
-                                key={i.value}
-                                className={`mw-interval-pill ${interval === i.value ? "mw-interval-pill--active" : ""}`}
-                                onClick={() => setInterval(i.value)}
-                            >
-                                {i.label}
-                            </button>
-                        ))}
-                        {/* Select — visible on mobile only */}
-                        <select
-                            className="mw-interval-select"
-                            value={interval}
-                            onChange={e => setInterval(e.target.value)}
-                        >
-                            {INTERVALS.map(i => (
-                                <option key={i.value} value={i.value}>
-                                    {i.label}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-                )}
             </div>
 
             {/* INDEX tab — multi-timeframe signal table */}
             {activeTab === "INDEX" && <IndexTab watchlist={watchlist} />}
+
+            {/* Macro tab — VIX + Crude contra view */}
+            {activeTab === "MACRO" && <MacroPanel />}
 
             {/* Ichimoku status bar — NIFTY/BANKNIFTY/SENSEX option tabs only */}
             {TAB_INDEX[activeTab] && <IndexStatusBar tabId={activeTab} watchlist={watchlist} />}
