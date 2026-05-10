@@ -186,7 +186,7 @@ async function _notify(indexName, signalType, signals, candles, interval) {
 
   const slPct = _indexSlPct(candles, signals, signalType);
   const { entry, sl, target } = _optionLevels(optionLtp, slPct);
-  const text = _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval);
+  const text = _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval, signals);
 
   try {
     await telegramNotifier.sendMessage(chatId, text);
@@ -196,7 +196,7 @@ async function _notify(indexName, signalType, signals, candles, interval) {
   }
 }
 
-function _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval) {
+function _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval, signals) {
   const emoji = signalType === 'PUT_BUY' ? '🔴' : '🟢';
   const label = signalType === 'PUT_BUY' ? 'PUT BUY' : 'CALL BUY';
   const inst  = atmOption.instrument;
