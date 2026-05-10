@@ -8,16 +8,17 @@
  *   goes false    : reset — next true will fire again
  *   midnight IST  : full reset so a fresh day can re-trigger
  *
- * Entry / SL logic:
- *   Price crosses chikou → pulls back to chikou → enter at chikou ± 1%
- *   CALL BUY: entry = chikou + 1%,  SL = swing low  if ≤5% from chikou, else chikou − 5%
- *   PUT  BUY: entry = chikou − 1%,  SL = swing high if ≤5% from chikou, else chikou + 5%
+ * Signal → ATM option → option LTP → entry/SL/target in option premium terms
+ *   Entry  = option LTP at signal time
+ *   SL     = entry − (index SL% × option LTP), capped at 25% of option LTP
+ *   Target = entry + 2 × risk  (1:2 RR)
  */
 
 const candleStore = require('./candleStore');
 const { getSignals } = require('./ichimoku');
 const atmResolver = require('./atmResolver');
 const telegramNotifier = require('./telegramNotifier');
+const kiteService = require('./kiteService');
 const store = require('../store');
 
 // All token+interval combinations to watch
@@ -58,45 +59,52 @@ function _getState(key) {
 }
 
 /**
- * Entry  = chikou ± 1%  (price expected to pull back to chikou before moving)
- * SL     = swing low/high of last 5 candles IF within 5% of chikou
- *          otherwise cap at chikou ∓ 5% (avoid oversized risk)
+ * Given the option's current LTP and the index SL % distance from chikou,
+ * compute option entry, SL, and target (1:2 RR).
  *
- * chikou = signals.price26ago (close from 26 bars ago — the level price crossed)
+ * CALL BUY: entry = optionLtp, SL below, target above
+ * PUT  BUY: entry = optionLtp, SL below (options lose value going wrong way), target above
+ *
+ * SL distance mirrors the index SL % capped at 25% of option LTP.
+ * Target = entry + 2 × risk  (1:2 reward:risk).
  */
-function _calculateEntryAndSL(candles, signals, signalType) {
+function _optionLevels(optionLtp, indexSlPct) {
+  const risk   = Math.round(optionLtp * Math.min(indexSlPct / 100, 0.25) * 100) / 100;
+  const entry  = Math.round(optionLtp * 100) / 100;
+  const sl     = Math.round((entry - risk) * 100) / 100;
+  const target = Math.round((entry + risk * 2) * 100) / 100;
+  return { entry, sl, target };
+}
+
+/**
+ * Compute how far the index SL is from chikou as a %.
+ * CALL: SL = swing low of last 5 candles if ≤5% from chikou, else chikou − 5%
+ * PUT:  SL = swing high of last 5 candles if ≤5% from chikou, else chikou + 5%
+ */
+function _indexSlPct(candles, signals, signalType) {
   const chikou = signals.price26ago;
-  if (!chikou) return { entry: null, sl: null, slBasis: 'n/a' };
+  if (!chikou) return 5; // default 5%
 
   const n     = candles.length;
-  const slice = candles.slice(Math.max(0, n - 6), n - 1); // 5 candles before current
+  const slice = candles.slice(Math.max(0, n - 6), n - 1);
 
   if (signalType === 'CALL_BUY') {
-    const entry    = Math.round(chikou * 1.01 * 100) / 100;
     const lows     = slice.map((c) => c.low).filter(Boolean);
     const swingLow = lows.length > 0 ? Math.min(...lows) : null;
-
     if (swingLow != null) {
       const distPct = ((chikou - swingLow) / chikou) * 100;
-      if (distPct <= 5) {
-        return { entry, sl: Math.round(swingLow * 100) / 100, slBasis: `swing low (${distPct.toFixed(1)}% from chikou)` };
-      }
+      return distPct <= 5 ? distPct : 5;
     }
-    return { entry, sl: Math.round(chikou * 0.95 * 100) / 100, slBasis: 'chikou − 5%' };
+    return 5;
   }
 
-  // PUT_BUY
-  const entry     = Math.round(chikou * 0.99 * 100) / 100;
   const highs     = slice.map((c) => c.high).filter(Boolean);
   const swingHigh = highs.length > 0 ? Math.max(...highs) : null;
-
   if (swingHigh != null) {
     const distPct = ((swingHigh - chikou) / chikou) * 100;
-    if (distPct <= 5) {
-      return { entry, sl: Math.round(swingHigh * 100) / 100, slBasis: `swing high (${distPct.toFixed(1)}% from chikou)` };
-    }
+    return distPct <= 5 ? distPct : 5;
   }
-  return { entry, sl: Math.round(chikou * 1.05 * 100) / 100, slBasis: 'chikou + 5%' };
+  return 5;
 }
 
 /**
@@ -120,15 +128,13 @@ async function onCandleClose(token, interval) {
     if (signals.putBuySignal && !st.putBuySignal) {
       st.putBuySignal  = true;
       st.callBuySignal = false;
-      const { entry, sl, slBasis } = _calculateEntryAndSL(candles, signals, 'PUT_BUY');
-      await _notify(cfg.name, 'PUT_BUY', signals, entry, sl, slBasis, interval);
+      await _notify(cfg.name, 'PUT_BUY', signals, candles, interval);
     }
 
     if (signals.callBuySignal && !st.callBuySignal) {
       st.callBuySignal = true;
       st.putBuySignal  = false;
-      const { entry, sl, slBasis } = _calculateEntryAndSL(candles, signals, 'CALL_BUY');
-      await _notify(cfg.name, 'CALL_BUY', signals, entry, sl, slBasis, interval);
+      await _notify(cfg.name, 'CALL_BUY', signals, candles, interval);
     }
 
     // Reset when signal clears so the next crossing can fire again
@@ -140,7 +146,7 @@ async function onCandleClose(token, interval) {
   }
 }
 
-async function _notify(indexName, signalType, signals, entry, sl, slBasis, interval) {
+async function _notify(indexName, signalType, signals, candles, interval) {
   const chatId = store.getTelegramChatId();
   if (!chatId) {
     console.warn('[IndexSignalWatcher] No Telegram chat ID configured — signal not sent');
@@ -148,54 +154,63 @@ async function _notify(indexName, signalType, signals, entry, sl, slBasis, inter
   }
 
   const optionType = signalType === 'PUT_BUY' ? 'PE' : 'CE';
+
+  // Resolve ATM option
   let atmOption = null;
   try {
     atmOption = await atmResolver.resolve(indexName, optionType);
   } catch (e) {
-    atmOption = { error: e.message };
+    console.warn(`[IndexSignalWatcher] ATM resolve failed: ${e.message}`);
   }
 
-  const text = _formatMessage(indexName, signalType, signals, entry, sl, slBasis, interval, atmOption);
+  if (!atmOption || atmOption.error) {
+    console.warn('[IndexSignalWatcher] Skipping — no ATM option resolved');
+    return;
+  }
+
+  // Get option's current LTP
+  let optionLtp = null;
+  try {
+    const inst = atmOption.instrument;
+    const symbol = `${inst.exchange}:${inst.tradingsymbol}`;
+    const ltpData = await kiteService.getLTP([symbol]);
+    optionLtp = ltpData[symbol]?.last_price ?? Object.values(ltpData)[0]?.last_price ?? null;
+  } catch (e) {
+    console.warn(`[IndexSignalWatcher] Option LTP fetch failed: ${e.message}`);
+  }
+
+  if (!optionLtp) {
+    console.warn('[IndexSignalWatcher] Skipping — could not fetch option LTP');
+    return;
+  }
+
+  const slPct = _indexSlPct(candles, signals, signalType);
+  const { entry, sl, target } = _optionLevels(optionLtp, slPct);
+  const text = _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval);
 
   try {
     await telegramNotifier.sendMessage(chatId, text);
-    console.log(`[IndexSignalWatcher] Sent ${signalType} on ${indexName} (${interval})`);
+    console.log(`[IndexSignalWatcher] Sent ${signalType} on ${indexName} (${interval}) — option LTP ${optionLtp}`);
   } catch (err) {
     console.error('[IndexSignalWatcher] Telegram send failed:', err.message);
   }
 }
 
-function _formatMessage(indexName, signalType, signals, entry, sl, slBasis, interval, atmOption) {
-  const optionType  = signalType === 'PUT_BUY' ? 'PE' : 'CE';
-  const emoji       = signalType === 'PUT_BUY' ? '🔴' : '🟢';
-  const label       = signalType === 'PUT_BUY' ? 'PUT BUY' : 'CALL BUY';
-  const crossDir    = signalType === 'CALL_BUY' ? 'above' : 'below';
-  const entryOffset = signalType === 'CALL_BUY' ? '+1%' : '−1%';
+function _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval) {
+  const emoji = signalType === 'PUT_BUY' ? '🔴' : '🟢';
+  const label = signalType === 'PUT_BUY' ? 'PUT BUY' : 'CALL BUY';
+  const inst  = atmOption.instrument;
 
-  const lines = [
+  return [
     `${emoji} <b>${label} — ${indexName} (${interval})</b>`,
     ``,
-    `Close  : ${signals.close}`,
-    `Chikou : <b>${signals.price26ago}</b>  (price closed ${crossDir})`,
-    `Kijun  : ${signals.kijun}  |  Expansion: ${signals.expansionPct}%`,
+    `<b>${inst.tradingsymbol}</b>`,
+    `Expiry : ${inst.expiry}`,
     ``,
-    `Entry  : <b>${entry ?? '—'}</b>  <i>(chikou ${entryOffset} on pullback)</i>`,
-    `SL     : <b>${sl ?? '—'}</b>  <i>(${slBasis})</i>`,
-  ];
-
-  if (atmOption && !atmOption.error) {
-    const inst = atmOption.instrument;
-    lines.push(``);
-    lines.push(`<b>ATM ${optionType}: ${inst?.tradingsymbol || `${indexName} ${atmOption.atmStrike}${optionType}`}</b>`);
-    if (atmOption.atmStrike) lines.push(`Strike : ${atmOption.atmStrike}`);
-    if (inst?.expiry)        lines.push(`Expiry : ${inst.expiry}`);
-    if (atmOption.ltp)       lines.push(`Index LTP: ${atmOption.ltp}`);
-  } else if (atmOption?.error) {
-    lines.push(``);
-    lines.push(`ATM resolve failed: ${atmOption.error}`);
-  }
-
-  return lines.join('\n');
+    `Entry  : <b>${entry}</b>`,
+    `SL     : <b>${sl}</b>`,
+    `Target : <b>${target}</b>`,
+  ].join('\n');
 }
 
 /**

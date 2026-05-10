@@ -68,6 +68,12 @@ async function handleUpdate(update) {
 
   const chatId = String(message.chat?.id || '');
 
+  // Auto-register the first chat that messages the bot
+  if (chatId && !store.getTelegramChatId()) {
+    store.setTelegramChatId(chatId);
+    console.log(`[Telegram] Auto-registered chat ID: ${chatId}`);
+  }
+
   const parsed = signalParser.parse(text);
 
   lastMessages.unshift({
