@@ -16,6 +16,7 @@ const ichimokuRouter = require('./routes/ichimoku');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
+const indexSignalWatcher = require('./services/indexSignalWatcher');
 const store = require('./store');
 
 const app = express();
@@ -99,6 +100,12 @@ app.listen(PORT, async () => {
       console.log('[KiteTicker] Watchlist cleared on boot — client will re-subscribe on connect');
     } catch (err) {
       console.warn('[KiteTicker] Could not connect on boot:', err.message);
+    }
+
+    try {
+      indexSignalWatcher.start();
+    } catch (err) {
+      console.warn('[IndexSignalWatcher] Could not start:', err.message);
     }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');

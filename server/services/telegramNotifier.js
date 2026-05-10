@@ -1,0 +1,19 @@
+const axios = require('axios');
+const store = require('../store');
+
+async function sendMessage(chatId, text) {
+  const { telegram } = store.getConfig();
+  if (!telegram.botToken) throw new Error('Telegram bot token not configured');
+  if (!chatId) throw new Error('Chat ID is required');
+
+  const url = `https://api.telegram.org/bot${telegram.botToken}/sendMessage`;
+  const response = await axios.post(url, {
+    chat_id: chatId,
+    text,
+    parse_mode: 'HTML',
+  }, { timeout: 10_000 });
+
+  return response.data;
+}
+
+module.exports = { sendMessage };

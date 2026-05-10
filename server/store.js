@@ -68,6 +68,19 @@ function setTradingDefaults(updates) {
   return config.tradingDefaults;
 }
 
+// ── Telegram alert target chat ID (persisted) ────────
+function getTelegramChatId() {
+  const config = readConfig();
+  return config.telegramChatId || process.env.TELEGRAM_CHAT_ID || '';
+}
+
+function setTelegramChatId(chatId) {
+  const config = readConfig();
+  config.telegramChatId = String(chatId).trim();
+  writeConfig(config);
+  return config.telegramChatId;
+}
+
 // ── Test / Paper trading ─────────────────────────────
 let _testMode = false;
 let _paperTrades = [];
@@ -152,6 +165,7 @@ function removeFromWatchlist(instrumentToken) {
 module.exports = {
   getConfig, setAccessToken,
   getTradingDefaults, setTradingDefaults,
+  getTelegramChatId, setTelegramChatId,
   getTestMode, setTestMode,
   addPaperTrade, closePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
   getPaperBalance, setPaperInitialBalance, getPaperInitialBalance,

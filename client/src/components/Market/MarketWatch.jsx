@@ -39,9 +39,9 @@ const STOCK_TFS = [
 
 const TABS = [
     { id: "INDEX", label: "Index" },
-    { id: "NIFTY", label: "Nifty" },
-    { id: "BANKNIFTY", label: "Bank Nifty" },
-    { id: "SENSEX", label: "Sensex" },
+    // { id: "NIFTY", label: "Nifty" }, // hidden — ATM options handled via signal resolver
+    // { id: "BANKNIFTY", label: "Bank Nifty" },
+    // { id: "SENSEX", label: "Sensex" },
     { id: "STOCKS", label: "Stocks" }
 ];
 
@@ -138,11 +138,17 @@ function IndexStatusBar({ tabId, watchlist }) {
     const [loading, setLoading] = useState(false);
 
     useEffect(() => {
-        if (!info) { setToken(null); return; }
+        if (!info) {
+            setToken(null);
+            return;
+        }
 
         // If already in watchlist, use it immediately
         const found = watchlist.find(i => i.tradingsymbol === info.match);
-        if (found) { setToken(found.instrumentToken); return; }
+        if (found) {
+            setToken(found.instrumentToken);
+            return;
+        }
 
         // Otherwise search — retry every 5 s until cache is ready
         let cancelled = false;
@@ -166,7 +172,10 @@ function IndexStatusBar({ tabId, watchlist }) {
             }
         }
         trySearch();
-        return () => { cancelled = true; if (retryTimer) clearTimeout(retryTimer); };
+        return () => {
+            cancelled = true;
+            if (retryTimer) clearTimeout(retryTimer);
+        };
     }, [tabId, watchlist, info]);
 
     // Fetch only the timeframes not yet in the store; results written to store.
@@ -321,19 +330,17 @@ function IndexSignalCell({ token, interval }) {
 
     // Fallback: show compact condition count e.g. "3↑ 1↓"
     const factors = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
-    const up   = factors.filter(s => s === 'bullish').length;
-    const down = factors.filter(s => s === 'bearish').length;
+    const up = factors.filter(s => s === "bullish").length;
+    const down = factors.filter(s => s === "bearish").length;
     const title = [
         `Chikou: ${ichi.chikouSignal}`,
         `Kijun: ${ichi.kijunSignal}`,
         `Cloud: ${ichi.cloudSignal}`,
-        `Tenkan: ${ichi.tenkanSignal}`,
-    ].join(' · ');
+        `Tenkan: ${ichi.tenkanSignal}`
+    ].join(" · ");
     return (
         <td className="idx-sig-cell idx-sig-cell--cond" title={title}>
-            <span className="idx-cond-up">{up}↑</span>
-            {' '}
-            <span className="idx-cond-down">{down}↓</span>
+            <span className="idx-cond-up">{up}↑</span> <span className="idx-cond-down">{down}↓</span>
         </td>
     );
 }
@@ -668,19 +675,20 @@ function WatchRow({ item, interval, onRemove, mode = "full" }) {
                         <span className="mw-sig-badge mw-sig-badge--put">PUT BUY</span>
                     ) : ichi?.callBuySignal ? (
                         <span className="mw-sig-badge mw-sig-badge--call">CALL BUY</span>
-                    ) : ichi ? (() => {
-                        const factors = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
-                        const up   = factors.filter(s => s === 'bullish').length;
-                        const down = factors.filter(s => s === 'bearish').length;
-                        const title = `Chikou: ${ichi.chikouSignal} · Kijun: ${ichi.kijunSignal} · Cloud: ${ichi.cloudSignal} · Tenkan: ${ichi.tenkanSignal}`;
-                        return (
-                            <span className="mw-sig-cond" title={title}>
-                                <span className="idx-cond-up">{up}↑</span>
-                                {' '}
-                                <span className="idx-cond-down">{down}↓</span>
-                            </span>
-                        );
-                    })() : (
+                    ) : ichi ? (
+                        (() => {
+                            const factors = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
+                            const up = factors.filter(s => s === "bullish").length;
+                            const down = factors.filter(s => s === "bearish").length;
+                            const title = `Chikou: ${ichi.chikouSignal} · Kijun: ${ichi.kijunSignal} · Cloud: ${ichi.cloudSignal} · Tenkan: ${ichi.tenkanSignal}`;
+                            return (
+                                <span className="mw-sig-cond" title={title}>
+                                    <span className="idx-cond-up">{up}↑</span>{" "}
+                                    <span className="idx-cond-down">{down}↓</span>
+                                </span>
+                            );
+                        })()
+                    ) : (
                         <span className="mw-sig-badge mw-sig-badge--none">—</span>
                     )}
                 </td>
@@ -770,13 +778,19 @@ export default function MarketWatch() {
         let retryTimer = null;
 
         async function init() {
-            if (_initDone) { setPageLoading(false); return; }
+            if (_initDone) {
+                setPageLoading(false);
+                return;
+            }
             setPageLoading(true);
             setPageLoadMsg("Loading indices…");
             try {
                 const [wl] = await Promise.all([
                     api.get("/instruments/watchlist"),
-                    api.get("/instruments/status").then(r => setStatus(r.data)).catch(() => {})
+                    api
+                        .get("/instruments/status")
+                        .then(r => setStatus(r.data))
+                        .catch(() => {})
                 ]);
                 setWatchlist(wl.data);
 
@@ -800,21 +814,27 @@ export default function MarketWatch() {
                 if (anyFailed || anyMissing) {
                     // Cache not ready — reset flag and retry in 5 s
                     setPageLoadMsg("Waiting for instrument cache…");
-                    retryTimer = setTimeout(() => { init(); }, 5000);
+                    retryTimer = setTimeout(() => {
+                        init();
+                    }, 5000);
                     return;
                 }
 
                 _initDone = true;
             } catch {
                 // Network error — retry
-                retryTimer = setTimeout(() => { init(); }, 5000);
+                retryTimer = setTimeout(() => {
+                    init();
+                }, 5000);
                 return;
             } finally {
                 setPageLoading(false);
             }
         }
         init();
-        return () => { if (retryTimer) clearTimeout(retryTimer); };
+        return () => {
+            if (retryTimer) clearTimeout(retryTimer);
+        };
     }, [setWatchlist]);
 
     async function handleAdd(instrument) {
@@ -889,17 +909,17 @@ export default function MarketWatch() {
         // Auto-select the interval that the index is signalling on
         if (TAB_INDEX[tabId]) setInterval(getActiveIndexTF(tabId));
 
-        if (ATM_OFFSETS[tabId] && !_subscribedTabs.has(tabId)) {
-            setTabLoading(true);
-            try {
-                const r = await api.post("/instruments/subscribe-atm", { index: tabId, offsets: ATM_OFFSETS[tabId] });
-                setWatchlist(r.data.watchlist);
-                _subscribedTabs.add(tabId);
-            } catch {
-            } finally {
-                setTabLoading(false);
-            }
-        }
+        // ATM series subscribe disabled — options resolved automatically via Ichimoku signal
+        // if (ATM_OFFSETS[tabId] && !_subscribedTabs.has(tabId)) {
+        //     setTabLoading(true);
+        //     try {
+        //         const r = await api.post("/instruments/subscribe-atm", { index: tabId, offsets: ATM_OFFSETS[tabId] });
+        //         setWatchlist(r.data.watchlist);
+        //         _subscribedTabs.add(tabId);
+        //     } finally {
+        //         setTabLoading(false);
+        //     }
+        // }
     }
 
     const allTabItems = activeTab === "INDEX" ? [] : getTabItems(watchlist, activeTab);
@@ -979,7 +999,9 @@ export default function MarketWatch() {
                             onChange={e => setInterval(e.target.value)}
                         >
                             {INTERVALS.map(i => (
-                                <option key={i.value} value={i.value}>{i.label}</option>
+                                <option key={i.value} value={i.value}>
+                                    {i.label}
+                                </option>
                             ))}
                         </select>
                     </div>

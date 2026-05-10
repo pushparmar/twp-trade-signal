@@ -3,6 +3,7 @@ const { getConfig } = require('../store');
 const { broadcast } = require('../sseHub');
 const candleStore = require('./candleStore');
 const { getSignals } = require('./ichimoku');
+const indexSignalWatcher = require('./indexSignalWatcher');
 
 let _ticker = null;
 let _connected = false;
@@ -94,6 +95,9 @@ function connect() {
             if (signals) broadcast('ichimoku_update', { token, interval, ...signals });
           }
         } catch {}
+
+        // Check index signals immediately on candle close — no polling delay
+        indexSignalWatcher.onCandleClose(token, interval).catch(() => {});
       });
     }
   });

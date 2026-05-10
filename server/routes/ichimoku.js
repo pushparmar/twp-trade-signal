@@ -1,12 +1,21 @@
 const express = require('express');
 const candleStore = require('../services/candleStore');
 const { getSignals } = require('../services/ichimoku');
+const atmResolver = require('../services/atmResolver');
+const instrumentCache = require('../services/instrumentCache');
 
 const router = express.Router();
 
-// GET /api/ichimoku/:token?interval=15minute&bars=100
-// Returns Ichimoku signals at the latest candle.
-// Candles come from the ring buffer (seeded once from Kite history, kept live by ticks).
+// Map instrument token → index name for ATM resolution
+const TOKEN_TO_INDEX = {
+  256265:  'NIFTY',
+  260105:  'BANKNIFTY',
+  BSE_SENSEX: 'SENSEX',
+};
+
+// GET /api/ichimoku/:token?interval=15minute
+// Returns Ichimoku signals. If putBuySignal or callBuySignal fires,
+// also resolves and attaches the ATM CE/PE instrument for that index.
 router.get('/:token', async (req, res) => {
   const token = Number(req.params.token);
   if (!token) return res.status(400).json({ error: 'Invalid token' });
@@ -22,7 +31,23 @@ router.get('/:token', async (req, res) => {
     }
 
     const signals = getSignals(candles, interval);
-    res.json({ token, interval, ...signals });
+
+    // Resolve ATM option when a signal fires
+    let atmOption = null;
+    const indexName = TOKEN_TO_INDEX[token]
+      || instrumentCache.getByToken(token)?.name?.toUpperCase();
+
+    if ((signals.putBuySignal || signals.callBuySignal) && indexName) {
+      const optionType = signals.putBuySignal ? 'PE' : 'CE';
+      try {
+        atmOption = await atmResolver.resolve(indexName, optionType);
+      } catch (e) {
+        console.warn(`[Ichimoku] ATM resolve failed for ${indexName} ${optionType}:`, e.message);
+        atmOption = { error: e.message };
+      }
+    }
+
+    res.json({ token, interval, ...signals, atmOption });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
