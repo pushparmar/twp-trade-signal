@@ -21,7 +21,7 @@ router.get('/:token', async (req, res) => {
       });
     }
 
-    const signals = getSignals(candles);
+    const signals = getSignals(candles, interval);
     res.json({ token, interval, ...signals });
   } catch (err) {
     res.status(500).json({ error: err.message });

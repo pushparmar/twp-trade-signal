@@ -128,7 +128,14 @@ function snapshot(candles) {
  * Threshold: (max - min) / avg < thresholdPct%
  * For NIFTY at ~22000 with 0.1% threshold that's ~22 points range.
  */
-function isKijunFlat(results, lastIdx, lookback = 6, thresholdPct = 0.1) {
+const KIJUN_FLAT_PARAMS = {
+  '1minute':   { lookback: 30, thresholdPct: 0.05 },
+  '5minute':   { lookback: 20, thresholdPct: 0.10 },
+  '15minute':  { lookback: 10, thresholdPct: 0.15 },
+};
+
+function isKijunFlat(results, lastIdx, interval = '15minute') {
+  const { lookback, thresholdPct } = KIJUN_FLAT_PARAMS[interval] || KIJUN_FLAT_PARAMS['15minute'];
   const kijuns = [];
   for (let i = lastIdx - lookback + 1; i <= lastIdx; i++) {
     if (i >= 0 && results[i] && results[i].kijun != null) kijuns.push(results[i].kijun);
@@ -160,7 +167,7 @@ function isKijunFlat(results, lastIdx, lookback = 6, thresholdPct = 0.1) {
  *   chikou (close) < kijun  AND  kijun flat last 6 candles
  *   AND price just crossed ABOVE chikou level (price26ago) for the first time
  */
-function getSignals(candles) {
+function getSignals(candles, interval = '15minute') {
   if (!candles || candles.length < 52) return null;
 
   const results = calculate(candles);
@@ -202,20 +209,27 @@ function getSignals(candles) {
   const bearCount = signals.filter((s) => s === 'bearish').length;
   const overallSignal = bullCount >= 3 ? 'bullish' : bearCount >= 3 ? 'bearish' : 'neutral';
 
-  // PUT BUY: chikou > kijun, kijun flat, price first-time cross BELOW chikou level
-  const kijunFlat = isKijunFlat(results, n - 1);
+  // How far has close expanded from Kijun (as %)
+  const expansionPct = last.kijun > 0
+    ? Math.abs(last.close - last.kijun) / last.kijun * 100
+    : 0;
+
+  // PUT BUY: chikou expanded above kijun, kijun flat, price first-time cross BELOW chikou level
+  const kijunFlat = isKijunFlat(results, n - 1, interval);
   const putBuySignal = !!(
     last.kijun != null && price26ago != null && prevClose != null &&
     last.close > last.kijun &&        // chikou (= close) is above kijun
+    expansionPct >= 0.5 &&            // expanded at least 0.5% from kijun
     kijunFlat &&                      // kijun has been flat last 6 candles
     prevClose >= price26ago &&        // previous candle was at or above chikou level
     last.close < price26ago           // current candle just closed below chikou level
   );
 
-  // CALL BUY: chikou < kijun, kijun flat, price first-time cross ABOVE chikou level
+  // CALL BUY: chikou expanded below kijun, kijun flat, price first-time cross ABOVE chikou level
   const callBuySignal = !!(
     last.kijun != null && price26ago != null && prevClose != null &&
     last.close < last.kijun &&        // chikou (= close) is below kijun
+    expansionPct >= 0.5 &&            // expanded at least 0.5% from kijun
     kijunFlat &&                      // kijun has been flat last 6 candles
     prevClose <= price26ago &&        // previous candle was at or below chikou level
     last.close > price26ago           // current candle just closed above chikou level
@@ -249,6 +263,7 @@ function getSignals(candles) {
     // Summary
     overallSignal,
     // Index tab signals
+    expansionPct:  Math.round(expansionPct * 100) / 100,
     putBuySignal,
     callBuySignal,
     candleCount:   n,
