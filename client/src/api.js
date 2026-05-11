@@ -6,6 +6,12 @@ const baseURL = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : '/api';
 
-const api = axios.create({ baseURL });
+const api = axios.create({
+  baseURL,
+  headers: {
+    // VITE_API_KEY must be set in client/.env (local) and Vercel env vars (prod)
+    'X-API-Key': import.meta.env.VITE_API_KEY || '',
+  },
+});
 
 export default api;
