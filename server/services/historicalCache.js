@@ -59,10 +59,16 @@ async function fetchLastNCandles(instrumentToken, interval, count) {
   const now = new Date();
   const to = formatDate(now);
 
-  // Add 14 calendar days minimum to absorb weekends + holidays regardless of interval.
-  // Without this, a 15-min request on Monday only looks back ~2 days and misses Friday+.
+  // Indian market trades only 6.25h/day on 5 of 7 days, so calendar lookback must be
+  // much wider than raw (count × minutesPerCandle) to guarantee enough candles.
+  //   – 60minute: needs a 45-day floor so _to4H() always produces ≥26 4h candles
+  //   – day: 60-day floor → ≥42 trading days of daily history
+  //   – all others: 14-day floor (enough for 15m / 30m / 1m signals)
   const minutesPerCandle = intervalToMinutes(interval);
-  const minutesNeeded = Math.max(count * minutesPerCandle * 2.5, 14 * 24 * 60);
+  const minDays =
+    interval === '60minute' ? 45 :
+    interval === 'day'      ? 60 : 14;
+  const minutesNeeded = Math.max(count * minutesPerCandle * 2.5, minDays * 24 * 60);
   const from = formatDate(new Date(now.getTime() - minutesNeeded * 60 * 1000));
 
   const candles = await fetchCandles(instrumentToken, interval, from, to);

@@ -18,8 +18,9 @@ const useAppStore = create((set) => ({
   ticks: {},           // { [instrumentToken]: { lastPrice, ohlc, volume, change, prevPrice } }
   tickerConnected: false,
   ichiSignals: {},  // { [`${token}:${interval}`]: ichimokuSignals } — pushed by server on candle close
-  macroData: null,    // { vix, crude, gold, silver, usdinr } — pushed by server on every macro candle close
-  macroPrices: null,  // { vix, crude, gold, silver, usdinr } — live price pushed on every tick
+  macroData: null,         // { vix, crude, gold, silver, usdinr } — pushed by server on every macro candle close
+  macroPrices: null,       // { vix, crude, gold, silver, usdinr } — live price pushed on every tick
+  selectedInstrument: null, // { type, key?, token, label, sublabel? } — instrument selected in sidebar
 
   setPollingStatus: (pollingStatus) => set({ pollingStatus }),
   setKiteConnected: (kiteConnected) => set({ kiteConnected }),
@@ -94,8 +95,9 @@ const useAppStore = create((set) => ({
     set((state) => ({
       ichiSignals: { ...state.ichiSignals, [`${token}:${interval}`]: signals },
     })),
-  setMacroData:   (macroData)   => set({ macroData }),
-  setMacroPrices: (macroPrices) => set({ macroPrices }),
+  setMacroData:          (macroData)          => set({ macroData }),
+  setMacroPrices:        (macroPrices)        => set({ macroPrices }),
+  setSelectedInstrument: (selectedInstrument) => set({ selectedInstrument }),
 }));
 
 export default useAppStore;

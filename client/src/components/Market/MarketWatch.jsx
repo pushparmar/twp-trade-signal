@@ -1,51 +1,20 @@
 import { useState, useEffect, useRef } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
-import MacroPanel from "./MacroPanel";
 
+// ── Format helper ──────────────────────────────────────────────────────────────
 function fmt(n) {
     if (n == null || isNaN(n)) return "—";
     return Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ATM_OFFSETS = {
-    NIFTY: [-2, -1, 0, 1, 2],
-    BANKNIFTY: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5],
-    SENSEX: [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
-};
 
-const INTERVALS = [
-    { value: "5minute", label: "5m" },
-    { value: "15minute", label: "15m" },
-    { value: "30minute", label: "30m" },
-    { value: "60minute", label: "1h" },
-    { value: "day", label: "D" }
-];
-
-// Timeframes shown on the INDEX tab
 const INDEX_TFS = [
     { value: "15minute", label: "15m" },
     { value: "60minute", label: "1h" },
-    { value: "4h",       label: "4h" },
-    { value: "day",      label: "1d" }
-];
-
-// Timeframes shown on the Stocks tab — matches macro/index panel set
-const STOCK_TFS = [
-    { value: "15minute", label: "15m" },
-    { value: "60minute", label: "1h" },
-    { value: "4h",       label: "4h" },
-    { value: "day",      label: "1d" },
-];
-
-const TABS = [
-    { id: "INDEX", label: "Index" },
-    // { id: "NIFTY", label: "Nifty" }, // hidden — ATM options handled via signal resolver
-    // { id: "BANKNIFTY", label: "Bank Nifty" },
-    // { id: "SENSEX", label: "Sensex" },
-    { id: "STOCKS", label: "Stocks" },
-    { id: "MACRO", label: "Macro" }
+    { value: "4h", label: "4h" },
+    { value: "day", label: "1d" }
 ];
 
 const TAB_INDEX = {
@@ -63,39 +32,42 @@ const SYMBOL_TO_TAB = {
 const INDEX_NAMES = new Set(["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "BANKEX"]);
 const INDEX_SYMBOLS = new Set(Object.keys(SYMBOL_TO_TAB));
 
-const STATUS_TFS = [
-    { value: "minute", label: "1m" },
-    { value: "15minute", label: "15m" },
-    { value: "30minute", label: "30m" }
+/** Macro instrument keys — tokens resolved from macroData store at render time */
+const MACRO_KEYS = [
+    { key: "vix", label: "India VIX" },
+    { key: "crude", label: "Crude Oil" },
+    { key: "gold", label: "Gold" },
+    { key: "silver", label: "Silver" },
+    { key: "usdinr", label: "USD / INR" }
 ];
+
+const SCAN_TFS = [
+    { value: "15minute", label: "15m" },
+    { value: "60minute", label: "1h" },
+    { value: "4h", label: "4h" },
+    { value: "day", label: "1d" }
+];
+
+// ── Module-level flags ────────────────────────────────────────────────────────
+let _initDone = false;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getTabItems(watchlist, tabId) {
-    const items =
-        tabId === "STOCKS"
-            ? watchlist.filter(i => !INDEX_NAMES.has(i.name) && !INDEX_SYMBOLS.has(i.tradingsymbol))
-            : watchlist.filter(i => i.name === tabId || SYMBOL_TO_TAB[i.tradingsymbol] === tabId);
-
-    return [...items].sort((a, b) => {
-        const aD = ["CE", "PE", "FUT"].includes(a.instrumentType);
-        const bD = ["CE", "PE", "FUT"].includes(b.instrumentType);
-        if (aD !== bD) return aD ? 1 : -1;
-        if (a.expiry !== b.expiry) return (a.expiry || "") < (b.expiry || "") ? -1 : 1;
-        return (a.strike || 0) - (b.strike || 0);
-    });
+function overallSig(ichi) {
+    if (!ichi) return "neutral";
+    if (ichi.callBuySignal) return "bullish";
+    if (ichi.putBuySignal) return "bearish";
+    const sigs = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
+    const bull = sigs.filter(s => s === "bullish").length;
+    const bear = sigs.filter(s => s === "bearish").length;
+    return bull > bear ? "bullish" : bear > bull ? "bearish" : "neutral";
 }
 
-function sigClass(s) {
-    return s === "bullish" ? "sig-bull" : s === "bearish" ? "sig-bear" : "";
+function sigColor(sig) {
+    return sig === "bullish" ? "var(--green)" : sig === "bearish" ? "var(--red)" : "var(--txt3)";
 }
 
-function Dot({ signal }) {
-    const bg = signal === "bullish" ? "var(--green)" : signal === "bearish" ? "var(--red)" : "var(--border2)";
-    return <span className="sig-dot" style={{ background: bg }} />;
-}
-
-// ── Page-level spinner ────────────────────────────────────────────────────────
+// ── PageLoader ────────────────────────────────────────────────────────────────
 function PageLoader({ message }) {
     return (
         <div className="mw-page-loader">
@@ -105,189 +77,9 @@ function PageLoader({ message }) {
     );
 }
 
-// ── Index price bar ───────────────────────────────────────────────────────────
-function IndexPriceBar() {
-    const ticks = useAppStore(s => s.ticks);
-    const watchlist = useAppStore(s => s.watchlist);
-
-    return (
-        <div className="mw-price-bar">
-            {Object.entries(TAB_INDEX).map(([tabId, info]) => {
-                const inst = watchlist.find(i => i.tradingsymbol === info.match);
-                const tick = inst ? ticks[inst.instrumentToken] : null;
-                const change = tick?.change ?? null;
-                const chgCls = change > 0 ? "sig-bull" : change < 0 ? "sig-bear" : "td-muted";
-
-                return (
-                    <div key={tabId} className="mw-price-card">
-                        <span className="mw-price-label">{info.label}</span>
-                        <span className="mw-price-ltp">{tick ? fmt(tick.lastPrice) : "—"}</span>
-                        <span className={`mw-price-change ${chgCls}`}>
-                            {change != null ? `${change > 0 ? "+" : ""}${Number(change).toFixed(2)}%` : ""}
-                        </span>
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-// ── Ichimoku signal summary bar ───────────────────────────────────────────────
-function IndexStatusBar({ tabId, watchlist }) {
-    const info = TAB_INDEX[tabId];
-    const ichiSignals = useAppStore(s => s.ichiSignals);
-    const setIchiSignal = useAppStore(s => s.setIchiSignal);
-    const [token, setToken] = useState(null);
-    const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        if (!info) {
-            setToken(null);
-            return;
-        }
-
-        // If already in watchlist, use it immediately
-        const found = watchlist.find(i => i.tradingsymbol === info.match);
-        if (found) {
-            setToken(found.instrumentToken);
-            return;
-        }
-
-        // Otherwise search — retry every 5 s until cache is ready
-        let cancelled = false;
-        let retryTimer = null;
-
-        async function trySearch() {
-            if (cancelled) return;
-            try {
-                const r = await api.get("/instruments/search", {
-                    params: { q: info.q, exchange: info.exchange }
-                });
-                const inst = r.data.find(i => i.tradingsymbol === info.match);
-                if (inst) {
-                    if (!cancelled) setToken(inst.instrumentToken);
-                } else {
-                    retryTimer = setTimeout(trySearch, 5000);
-                }
-            } catch {
-                // 503 — cache not ready yet, retry
-                retryTimer = setTimeout(trySearch, 5000);
-            }
-        }
-        trySearch();
-        return () => {
-            cancelled = true;
-            if (retryTimer) clearTimeout(retryTimer);
-        };
-    }, [tabId, watchlist, info]);
-
-    // Fetch only the timeframes not yet in the store; results written to store.
-    useEffect(() => {
-        if (!token) return;
-        const stored = useAppStore.getState().ichiSignals;
-        const missing = STATUS_TFS.filter(tf => !stored[`${token}:${tf.value}`]);
-        if (!missing.length) return;
-
-        let cancelled = false;
-        setLoading(true);
-        Promise.all(
-            missing.map(tf =>
-                api
-                    .get(`/ichimoku/${token}`, { params: { interval: tf.value, bars: 100 } })
-                    .then(r => ({ tf, data: r.data }))
-                    .catch(() => null)
-            )
-        )
-            .then(results => {
-                if (cancelled) return;
-                results.forEach(res => {
-                    if (res?.data) setIchiSignal({ token, interval: res.tf.value, ...res.data });
-                });
-            })
-            .finally(() => {
-                if (!cancelled) setLoading(false);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [token, setIchiSignal]);
-
-    // Derive display statuses directly from the store — no local statuses state needed
-    const statuses = token
-        ? (() => {
-              const out = {};
-              for (const tf of STATUS_TFS) {
-                  const d = ichiSignals[`${token}:${tf.value}`];
-                  if (!d) {
-                      out[tf.value] = null;
-                      continue;
-                  }
-                  const sigs = [d.chikouSignal, d.kijunSignal, d.cloudSignal, d.tenkanSignal];
-                  out[tf.value] = {
-                      bull: sigs.filter(s => s === "bullish").length,
-                      bear: sigs.filter(s => s === "bearish").length,
-                      signals: sigs
-                  };
-              }
-              return out;
-          })()
-        : null;
-
-    if (!info) return null;
-
-    const totalBull = statuses ? STATUS_TFS.reduce((n, tf) => n + (statuses[tf.value]?.bull ?? 0), 0) : null;
-    const totalBear = statuses ? STATUS_TFS.reduce((n, tf) => n + (statuses[tf.value]?.bear ?? 0), 0) : null;
-    const bias =
-        totalBull != null ? (totalBull > totalBear ? "bullish" : totalBull < totalBear ? "bearish" : "neutral") : null;
-
-    return (
-        <div className="mw-status-bar">
-            <span className="mw-status-bar-label">{info.match}</span>
-            {loading && !statuses && <span className="mw-status-bar-loading">loading…</span>}
-
-            {statuses &&
-                STATUS_TFS.map(tf => {
-                    const s = statuses[tf.value];
-                    return (
-                        <div key={tf.value} className="mw-status-tf">
-                            <span className="mw-status-tf-label">{tf.label}</span>
-                            <span className="mw-status-dots">
-                                {s ? (
-                                    s.signals.map((sig, i) => <Dot key={i} signal={sig} />)
-                                ) : (
-                                    <span className="td-muted" style={{ fontSize: 11 }}>
-                                        —
-                                    </span>
-                                )}
-                            </span>
-                            {s && (
-                                <span className="mw-status-tf-count">
-                                    <span className="sig-bull">{s.bull}↑</span>
-                                    <span className="sig-bear">{s.bear}↓</span>
-                                </span>
-                            )}
-                        </div>
-                    );
-                })}
-
-            {totalBull != null && (
-                <div className="mw-status-overall">
-                    <span className="mw-status-combined-label">Combined</span>
-                    <span className="sig-bull">{totalBull}↑</span>
-                    <span className="sig-bear">{totalBear}↓</span>
-                    <span className={`mw-status-overall-label ${sigClass(bias)}`}>
-                        {bias === "bullish" ? "Bullish" : bias === "bearish" ? "Bearish" : "Neutral"}
-                    </span>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ── Index tab — multi-timeframe Ichimoku signal table ────────────────────────
-
-function IndexSignalCell({ token, interval }) {
-    const ichi = useAppStore(s => s.ichiSignals[`${token}:${interval}`]);
+// ── useIchiSignal ─────────────────────────────────────────────────────────────
+function useIchiSignal(token, interval) {
+    const ichi = useAppStore(s => (token ? s.ichiSignals[`${token}:${interval}`] : null));
     const setIchiSignal = useAppStore(s => s.setIchiSignal);
     const [loading, setLoading] = useState(false);
 
@@ -309,95 +101,550 @@ function IndexSignalCell({ token, interval }) {
         };
     }, [token, interval, setIchiSignal]);
 
-    if (!token || loading) return <td className="idx-sig-cell idx-sig-cell--loading">·</td>;
-    if (!ichi) return <td className="idx-sig-cell">—</td>;
+    return { ichi, loading };
+}
 
-    if (ichi.putBuySignal)
-        return (
-            <td
-                className="idx-sig-cell idx-sig-cell--put"
-                title="Chikou&gt;Kijun · Kijun flat · Price crossed below Chikou"
-            >
-                PUT BUY
-            </td>
-        );
-    if (ichi.callBuySignal)
-        return (
-            <td
-                className="idx-sig-cell idx-sig-cell--call"
-                title="Chikou&lt;Kijun · Kijun flat · Price crossed above Chikou"
-            >
-                CALL BUY
-            </td>
-        );
+// ── TFCard ────────────────────────────────────────────────────────────────────
+function TFCard({ token, interval, label }) {
+    const { ichi, loading } = useIchiSignal(token, interval);
+    const sig = overallSig(ichi);
+    const color = sigColor(sig);
+    const cardMod =
+        !loading && ichi ? (sig === "bullish" ? "mw-tf-card--bull" : sig === "bearish" ? "mw-tf-card--bear" : "") : "";
 
-    // Fallback: show compact condition count e.g. "3↑ 1↓"
-    const factors = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
-    const up = factors.filter(s => s === "bullish").length;
-    const down = factors.filter(s => s === "bearish").length;
-    const title = [
-        `Chikou: ${ichi.chikouSignal}`,
-        `Kijun: ${ichi.kijunSignal}`,
-        `Cloud: ${ichi.cloudSignal}`,
-        `Tenkan: ${ichi.tenkanSignal}`
-    ].join(" · ");
+    const factors = ichi ? [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal] : [];
+    const bull = factors.filter(s => s === "bullish").length;
+    const bear = factors.filter(s => s === "bearish").length;
+
+    let sigLabel;
+    if (loading) sigLabel = "·";
+    else if (!ichi) sigLabel = "—";
+    else if (ichi.callBuySignal) sigLabel = "CALL BUY";
+    else if (ichi.putBuySignal) sigLabel = "PUT BUY";
+    else sigLabel = sig.charAt(0).toUpperCase() + sig.slice(1);
+
     return (
-        <td className="idx-sig-cell idx-sig-cell--cond" title={title}>
-            <span className="idx-cond-up">{up}↑</span> <span className="idx-cond-down">{down}↓</span>
-        </td>
+        <div className={`mw-tf-card ${cardMod}`}>
+            <div className="mw-tf-card-label">{label}</div>
+            <div className="mw-tf-card-signal" style={{ color }}>
+                {sigLabel}
+            </div>
+            {ichi && !loading && (
+                <div className="mw-tf-card-counts">
+                    <span className="sig-bull">{bull}↑</span> <span className="sig-bear">{bear}↓</span>
+                </div>
+            )}
+        </div>
     );
 }
 
-// ── Index tab test panel ──────────────────────────────────────────────────────
+// ── OverallSignalCard — aggregates all 4 TF Ichimoku signals into one verdict ──
+// Shows CALL BUY / PUT BUY when any TF fires that strong signal, otherwise
+// computes majority of bullish/bearish across all timeframes.
+function OverallSignalCard({ token }) {
+    const tf15 = useIchiSignal(token, "15minute");
+    const tf1h = useIchiSignal(token, "60minute");
+    const tf4h = useIchiSignal(token, "4h");
+    const tf1d = useIchiSignal(token, "day");
 
-function IndexTab({ watchlist }) {
-    const ticks = useAppStore(s => s.ticks);
+    const tfs = [
+        { label: "15m", ...tf15 },
+        { label: "1h", ...tf1h },
+        { label: "4h", ...tf4h },
+        { label: "1d", ...tf1d }
+    ];
 
-    const rows = Object.entries(TAB_INDEX).map(([key, info]) => {
-        const inst = watchlist.find(i => i.tradingsymbol === info.match);
-        const tick = inst ? ticks[inst.instrumentToken] : null;
-        const chg = tick?.change ?? null;
-        const chgCls = chg > 0 ? "mw-up" : chg < 0 ? "mw-down" : "";
-        return { key, info, token: inst?.instrumentToken ?? null, tick, chg, chgCls };
+    const loading = tfs.some(tf => tf.loading);
+    const anyData = tfs.some(tf => tf.ichi != null);
+
+    // Strong signals: any timeframe firing CALL BUY / PUT BUY takes priority
+    const hasCallBuy = tfs.some(tf => tf.ichi?.callBuySignal);
+    const hasPutBuy = tfs.some(tf => tf.ichi?.putBuySignal);
+
+    // Per-TF overall direction
+    const tfSignals = tfs.map(tf => overallSig(tf.ichi));
+    const bullCount = tfSignals.filter(s => s === "bullish").length;
+    const bearCount = tfSignals.filter(s => s === "bearish").length;
+
+    let finalSig, finalLabel;
+    if (hasCallBuy && !hasPutBuy) {
+        finalSig = "bullish";
+        finalLabel = "CALL BUY";
+    } else if (hasPutBuy && !hasCallBuy) {
+        finalSig = "bearish";
+        finalLabel = "PUT BUY";
+    } else if (bullCount > bearCount) {
+        finalSig = "bullish";
+        finalLabel = "BULLISH";
+    } else if (bearCount > bullCount) {
+        finalSig = "bearish";
+        finalLabel = "BEARISH";
+    } else {
+        finalSig = "neutral";
+        finalLabel = "NEUTRAL";
+    }
+
+    const color = sigColor(finalSig);
+    const cardMod =
+        !loading && anyData
+            ? finalSig === "bullish"
+                ? "mw-tf-card--bull"
+                : finalSig === "bearish"
+                ? "mw-tf-card--bear"
+                : ""
+            : "";
+
+    // Per-TF arrow/dot indicators for the breakdown row
+    const breakdown = tfs.map(tf => {
+        if (!tf.ichi) return { label: tf.label, symbol: "–", color: "var(--txt3)" };
+        if (tf.ichi.callBuySignal) return { label: tf.label, symbol: "●", color: "var(--green)" };
+        if (tf.ichi.putBuySignal) return { label: tf.label, symbol: "●", color: "var(--red)" };
+        const s = overallSig(tf.ichi);
+        return {
+            label: tf.label,
+            symbol: s === "bullish" ? "▲" : s === "bearish" ? "▼" : "–",
+            color: sigColor(s)
+        };
     });
 
     return (
-        <>
-            <div className="idx-table-wrap">
-                <table className="idx-table">
-                    <thead>
-                        <tr>
-                            <th className="idx-th-name">Index</th>
-                            <th className="idx-th-ltp">LTP</th>
-                            <th className="idx-th-chg">Chg%</th>
-                            {INDEX_TFS.map(tf => (
-                                <th key={tf.value} className="idx-th-tf">
-                                    {tf.label}
-                                </th>
-                            ))}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map(({ key, info, token, tick, chg, chgCls }) => (
-                            <tr key={key}>
-                                <td className="idx-td-name">{info.label}</td>
-                                <td className="idx-td-ltp td-mono">{tick ? fmt(tick.lastPrice) : "—"}</td>
-                                <td className={`idx-td-chg td-mono ${chgCls}`}>
-                                    {chg != null ? `${chg > 0 ? "+" : ""}${Number(chg).toFixed(2)}%` : "—"}
-                                </td>
-                                {INDEX_TFS.map(tf => (
-                                    <IndexSignalCell key={tf.value} token={token} interval={tf.value} />
-                                ))}
-                            </tr>
+        <div className={`mw-tf-card mw-overall-card ${cardMod}`}>
+            <div className="mw-tf-card-label">Overall Bias</div>
+
+            {loading && !anyData ? (
+                <div className="mw-overall-signal" style={{ color: "var(--txt3)" }}>
+                    ·
+                </div>
+            ) : !anyData ? (
+                <div className="mw-overall-signal" style={{ color: "var(--txt3)" }}>
+                    —
+                </div>
+            ) : (
+                <>
+                    <div className="mw-overall-signal" style={{ color }}>
+                        {finalLabel}
+                    </div>
+
+                    {/* Per-TF arrow indicators */}
+                    <div className="mw-overall-breakdown">
+                        {breakdown.map(b => (
+                            <span
+                                key={b.label}
+                                className="mw-overall-tf-dot"
+                                style={{ color: b.color }}
+                                title={b.label}
+                            >
+                                {b.symbol}
+                            </span>
                         ))}
-                    </tbody>
-                </table>
+                    </div>
+
+                    <div className="mw-tf-card-counts">
+                        <span className="sig-bull">{bullCount}↑</span> <span className="sig-bear">{bearCount}↓</span>
+                        {(bullCount > 0 || bearCount > 0) && (
+                            <span style={{ marginLeft: 5, color: "var(--txt3)" }}>
+                                ({finalSig === "bullish" ? bullCount : bearCount}/4)
+                            </span>
+                        )}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+// ── Stock timeframe signal badges (1m / 5m / 15m) ────────────────────────────
+const STOCK_TFS = [
+    { value: "minute", label: "1m" },
+    { value: "5minute", label: "5m" },
+    { value: "15minute", label: "15m" }
+];
+
+// Ordered list of the 4 Ichimoku indicators shown per-TF
+const ICHI_INDS = [
+    { key: "chikou", title: "Chikou", sigFn: i => i.chikouSignal },
+    { key: "kijun", title: "Kijun", sigFn: i => i.kijunSignal },
+    { key: "cloud", title: "Cloud", sigFn: i => i.cloudSignal },
+    { key: "tenkan", title: "Tenkan", sigFn: i => i.tenkanSignal }
+];
+
+function StockIchiBadges({ token }) {
+    const tf1 = useIchiSignal(token, "minute");
+    const tf5 = useIchiSignal(token, "5minute");
+    const tf15 = useIchiSignal(token, "15minute");
+
+    const tfs = [
+        { label: "1m", ...tf1 },
+        { label: "5m", ...tf5 },
+        { label: "15m", ...tf15 }
+    ];
+
+    return (
+        <div className="stock-ichi-badges">
+            {tfs.map(tf => {
+                const sig = overallSig(tf.ichi);
+                const mod = !tf.ichi
+                    ? tf.loading
+                        ? "loading"
+                        : "flat"
+                    : sig === "bullish"
+                    ? "bull"
+                    : sig === "bearish"
+                    ? "bear"
+                    : "flat";
+
+                return (
+                    <div key={tf.label} className={`stock-ichi-tf-group stock-ichi-tf-group--${mod}`}>
+                        {/* TF label */}
+                        <span className="stock-ichi-tf-label">{tf.label}</span>
+
+                        {/* 4 individual indicator arrows, or CB/PB badge for strong signals */}
+                        {tf.ichi ? (
+                            <div className="stock-ichi-arrows">
+                                {tf.ichi.callBuySignal ? (
+                                    <span
+                                        className="stock-ichi-special stock-ichi-special--bull"
+                                        title="Call Buy signal"
+                                    >
+                                        CB
+                                    </span>
+                                ) : tf.ichi.putBuySignal ? (
+                                    <span
+                                        className="stock-ichi-special stock-ichi-special--bear"
+                                        title="Put Buy signal"
+                                    >
+                                        PB
+                                    </span>
+                                ) : (
+                                    ICHI_INDS.map(ind => {
+                                        const s = ind.sigFn(tf.ichi) ?? "neutral";
+                                        return (
+                                            <span
+                                                key={ind.key}
+                                                className={`stock-ichi-arrow stock-ichi-arrow--${s}`}
+                                                title={`${ind.title}: ${s}`}
+                                            >
+                                                {s === "bullish" ? "▲" : s === "bearish" ? "▼" : "–"}
+                                            </span>
+                                        );
+                                    })
+                                )}
+                            </div>
+                        ) : (
+                            <span className="stock-ichi-loading">·</span>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+// ── OhlcItem ──────────────────────────────────────────────────────────────────
+function OhlcItem({ label, value, cls = "" }) {
+    return (
+        <div className="mw-detail-ohlc-item">
+            <span className="mw-detail-ohlc-label">{label}</span>
+            <span className={`mw-detail-ohlc-value ${cls}`}>{value}</span>
+        </div>
+    );
+}
+
+// ── InstrumentDetail — detail panel for a selected instrument ─────────────────
+function InstrumentDetail({ token, label, sublabel }) {
+    const tick = useAppStore(s => (token ? s.ticks[token] : null));
+    const ltp = tick?.lastPrice ?? null;
+    const change = tick?.change ?? null;
+    const ohlc = tick?.ohlc ?? {};
+
+    const chgMod =
+        change > 0 ? "mw-detail-chg-pill--up" : change < 0 ? "mw-detail-chg-pill--down" : "mw-detail-chg-pill--flat";
+
+    const hasOhlc = ohlc.open != null || ohlc.high != null || ohlc.low != null;
+
+    return (
+        <>
+            {/* ── Top row: price header (left) + Overall Bias card (right) ── */}
+            <div className="mw-detail-top">
+                <div className="mw-detail-header">
+                    <div className="mw-detail-name-row">
+                        <span className="mw-detail-name">{label}</span>
+                        {sublabel && <span className="mw-detail-sublabel">{sublabel}</span>}
+                    </div>
+
+                    <div className="mw-detail-price-row">
+                        <span className="mw-detail-ltp">{ltp != null ? fmt(ltp) : "—"}</span>
+                        {change != null && (
+                            <span className={`mw-detail-chg-pill ${chgMod}`}>
+                                {change > 0 ? "+" : ""}
+                                {Number(change).toFixed(2)}%
+                            </span>
+                        )}
+                    </div>
+
+                    {hasOhlc && (
+                        <div className="mw-detail-ohlc-row">
+                            {ohlc.open != null && <OhlcItem label="Open" value={fmt(ohlc.open)} />}
+                            {ohlc.high != null && (
+                                <OhlcItem label="High" value={fmt(ohlc.high)} cls="mw-detail-ohlc-value--high" />
+                            )}
+                            {ohlc.low != null && (
+                                <OhlcItem label="Low" value={fmt(ohlc.low)} cls="mw-detail-ohlc-value--low" />
+                            )}
+                            {ohlc.close != null && <OhlcItem label="Prev Close" value={fmt(ohlc.close)} />}
+                        </div>
+                    )}
+                </div>
+
+                {/* Overall Bias card aligned to the right of the price header */}
+                {token && <OverallSignalCard token={token} />}
             </div>
+
+            {token && (
+                /* ── TF Signal Bar: 4 individual TF cards ── */
+                <div className="mw-tf-bar">
+                    {INDEX_TFS.map(tf => (
+                        <TFCard key={tf.value} token={token} interval={tf.value} label={tf.label} />
+                    ))}
+                </div>
+            )}
         </>
     );
 }
 
-// ── Stock futures panel ───────────────────────────────────────────────────────
+// ── Mobile instrument strip — shown only on small screens where sidebar is hidden
+function MobileInstStrip({ watchlist, macroData, selectedInstrument, setSelectedInstrument }) {
+    function fmt2(n) {
+        if (n == null || isNaN(n)) return "—";
+        return Number(n).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    }
+
+    const indexItems = Object.entries(TAB_INDEX).map(([key, info]) => {
+        const inst = watchlist.find(i => i.tradingsymbol === info.match);
+        return { type: "index", key, label: info.label, token: inst?.instrumentToken ?? null };
+    });
+
+    const macroItems = MACRO_KEYS.map(m => {
+        const md = macroData?.[m.key];
+        const token = md?.instrumentToken ?? null;
+        const sub = md?.tradingsymbol ?? "";
+        return { type: "macro", key: m.key, label: m.label, token, sublabel: sub };
+    });
+
+    const stockItems = watchlist
+        .filter(i => !INDEX_NAMES.has(i.name) && !INDEX_SYMBOLS.has(i.tradingsymbol))
+        .map(i => ({
+            type: "stock",
+            token: i.instrumentToken,
+            label: i.tradingsymbol,
+            sublabel: `${i.exchange}${i.expiry ? ` · ${i.expiry}` : ""}`
+        }));
+
+    const allItems = [...indexItems, ...macroItems, ...stockItems];
+
+    return (
+        <div className="mw-mobile-strip">
+            {allItems.map(item => (
+                <MobileStripItem
+                    key={item.token ?? item.key}
+                    item={item}
+                    active={
+                        selectedInstrument?.type === item.type &&
+                        (item.type === "stock"
+                            ? selectedInstrument.token === item.token
+                            : selectedInstrument.key === item.key)
+                    }
+                    onClick={() => setSelectedInstrument(item)}
+                />
+            ))}
+            <button
+                className={`mw-mobile-manage-btn ${
+                    selectedInstrument?.type === "manage" ? "mw-mobile-manage-btn--active" : ""
+                }`}
+                onClick={() => setSelectedInstrument({ type: "manage" })}
+            >
+                Stocks ⚙
+            </button>
+        </div>
+    );
+}
+
+function MobileStripItem({ item, active, onClick }) {
+    const tick = useAppStore(s => (item.token ? s.ticks[item.token] : null));
+    const change = tick?.change ?? null;
+    const chgCls = change > 0 ? "mw-up" : change < 0 ? "mw-down" : "";
+
+    return (
+        <div className={`mw-mobile-strip-item ${active ? "mw-mobile-strip-item--active" : ""}`} onClick={onClick}>
+            <div className="mw-mobile-strip-label">{item.label}</div>
+            {change != null && (
+                <div className={`mw-mobile-strip-chg ${chgCls}`}>
+                    {change > 0 ? "+" : ""}
+                    {Number(change).toFixed(2)}%
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── InlineSearch — standalone symbol search box ───────────────────────────────
+function InlineSearch({ onAdd }) {
+    const [query, setQuery] = useState("");
+    const [exchange, setExchange] = useState("");
+    const [results, setResults] = useState([]);
+    const [searching, setSearching] = useState(false);
+    const [dropdownOpen, setDropdownOpen] = useState(false);
+    const wrapRef = useRef(null);
+    const debounceRef = useRef(null);
+
+    async function doSearch(q, ex) {
+        if (q.length < 2) {
+            setResults([]);
+            setDropdownOpen(false);
+            return;
+        }
+        setSearching(true);
+        try {
+            const r = await api.get("/instruments/search", { params: { q, exchange: ex } });
+            setResults(r.data);
+            setDropdownOpen(r.data.length > 0);
+        } catch {
+            setResults([]);
+        } finally {
+            setSearching(false);
+        }
+    }
+
+    function handleChange(e) {
+        const q = e.target.value;
+        setQuery(q);
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => doSearch(q, exchange), 300);
+    }
+
+    function handleSelect(instrument) {
+        onAdd(instrument);
+        setQuery("");
+        setResults([]);
+        setDropdownOpen(false);
+    }
+
+    useEffect(() => {
+        function handler(e) {
+            if (wrapRef.current && !wrapRef.current.contains(e.target)) setDropdownOpen(false);
+        }
+        document.addEventListener("mousedown", handler);
+        return () => document.removeEventListener("mousedown", handler);
+    }, []);
+
+    return (
+        <div className="mw-search-box" ref={wrapRef}>
+            <div className="mw-search-box-row">
+                <input
+                    className="mw-search-box-input"
+                    type="text"
+                    placeholder="Search symbol to add…"
+                    value={query}
+                    onChange={handleChange}
+                    onFocus={() => results.length > 0 && setDropdownOpen(true)}
+                />
+                <select
+                    className="mw-search-box-exchange"
+                    value={exchange}
+                    onChange={e => {
+                        setExchange(e.target.value);
+                        doSearch(query, e.target.value);
+                    }}
+                >
+                    <option value="">All</option>
+                    <option value="NSE">NSE</option>
+                    <option value="NFO">NFO</option>
+                    <option value="BSE">BSE</option>
+                    <option value="MCX">MCX</option>
+                    <option value="CDS">CDS</option>
+                </select>
+                {searching && <span className="mw-search-spinner" />}
+            </div>
+            {dropdownOpen && results.length > 0 && (
+                <div className="mw-dropdown">
+                    {results.map(r => (
+                        <div key={r.instrumentToken} className="mw-dropdown-item" onMouseDown={() => handleSelect(r)}>
+                            <div>
+                                <div className="mw-dropdown-name">{r.tradingsymbol}</div>
+                                <div className="mw-dropdown-meta">
+                                    {r.exchange}
+                                    {r.expiry ? ` · ${r.expiry}` : ""}
+                                    {r.name ? ` · ${r.name}` : ""}
+                                </div>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                {r.lotSize > 1 && <span className="mw-dropdown-lot">Lot {r.lotSize}</span>}
+                                <span className="mw-dropdown-type">{r.instrumentType}</span>
+                                <span className="mw-dropdown-add">+</span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── StockListRow ──────────────────────────────────────────────────────────────
+function StockListRow({ item, onRemove }) {
+    const tick = useAppStore(s => s.ticks[item.instrumentToken]);
+    const prevRef = useRef(null);
+    const priceRef = useRef(null);
+
+    useEffect(() => {
+        if (!tick || !priceRef.current) return;
+        const curr = tick.lastPrice;
+        if (prevRef.current == null) {
+            prevRef.current = curr;
+            return;
+        }
+        const dir = curr > prevRef.current ? "flash-up" : curr < prevRef.current ? "flash-down" : null;
+        prevRef.current = curr;
+        if (!dir) return;
+        priceRef.current.classList.remove("flash-up", "flash-down");
+        void priceRef.current.offsetWidth;
+        priceRef.current.classList.add(dir);
+    }, [tick?.lastPrice]);
+
+    const change = tick?.change ?? null;
+    const chgCls = change > 0 ? "mw-up" : change < 0 ? "mw-down" : "";
+
+    return (
+        <tr>
+            <td>
+                <div className="mw-sym-name">{item.tradingsymbol}</div>
+                <div className="mw-sym-meta">
+                    {item.exchange}
+                    {item.expiry ? ` · ${item.expiry}` : ""}
+                </div>
+            </td>
+            <td className="td-mono td-right">
+                <span ref={priceRef} className="mw-ltp-val">
+                    {tick ? fmt(tick.lastPrice) : "—"}
+                </span>
+            </td>
+            <td className={`td-right td-mono ${chgCls}`} style={{ fontSize: 12 }}>
+                {change != null ? `${change > 0 ? "+" : ""}${Number(change).toFixed(2)}%` : "—"}
+            </td>
+            <td>
+                {/* Ichimoku bias for 1m / 5m / 15m */}
+                <StockIchiBadges token={item.instrumentToken} />
+            </td>
+            <td className="td-center">
+                <button className="mw-remove-btn" onClick={() => onRemove(item.instrumentToken)} title="Remove">
+                    ×
+                </button>
+            </td>
+        </tr>
+    );
+}
+
+// ── StockFuturesPanel ─────────────────────────────────────────────────────────
 function StockFuturesPanel({
     watchlist,
     futLoading,
@@ -464,7 +711,7 @@ function StockFuturesPanel({
                 <input
                     className="mw-movers-input"
                     type="number"
-                    placeholder="Max % (e.g. 8)"
+                    placeholder="Max %"
                     value={maxPct}
                     onChange={e => setMaxPct(e.target.value)}
                     min="0"
@@ -472,12 +719,7 @@ function StockFuturesPanel({
                 <span className="td-muted" style={{ fontSize: 11 }}>
                     % from open (±both sides)
                 </span>
-                <button
-                    className="mw-movers-btn"
-                    disabled={moversLoading}
-                    onClick={handleSubscribeMovers}
-                    title={`Subscribe stocks ${minPct}%${maxPct ? `–${maxPct}%` : "+"} up from today's open`}
-                >
+                <button className="mw-movers-btn" disabled={moversLoading} onClick={handleSubscribeMovers}>
                     {moversLoading ? "…" : "↑ Subscribe Movers"}
                 </button>
             </div>
@@ -485,34 +727,15 @@ function StockFuturesPanel({
     );
 }
 
-// ── Pattern Scanner ───────────────────────────────────────────────────────────
-// Fetches the registered pattern list from the server, lets the user pick one
-// + choose timeframes, then POSTs to /api/scan and shows matching instruments.
-
-const SCAN_TFS = [
-    { value: "15minute", label: "15m" },
-    { value: "60minute", label: "1h"  },
-    { value: "4h",       label: "4h"  },
-    { value: "day",      label: "1d"  },
-];
-
-
-// onResults(matchedTokens: Set<number> | null) — called after every scan or clear.
-// null means no active filter; the parent shows all rows.
-//
-// instruments — optional explicit list [{ instrumentToken, tradingsymbol, exchange, name }].
-//   When supplied the scan is limited to those tokens (used for Index / Macro tabs whose
-//   instruments are not necessarily in the persistent server watchlist).
-//   When omitted the server scans the full watchlist.
+// ── PatternScanner — kept for future use ──────────────────────────────────────
 function PatternScanner({ onResults, instruments = null }) {
-    const [patterns,  setPatterns]  = useState([]);
+    const [patterns, setPatterns] = useState([]);
     const [patternId, setPatternId] = useState("");
-    const [interval,  setInterval]  = useState("15minute"); // single timeframe at a time
-    const [scanning,  setScanning]  = useState(false);
-    const [summary,   setSummary]   = useState(null); // { label, matched, scanned, total }
-    const [error,     setError]     = useState("");
+    const [interval, setInterval] = useState("15minute");
+    const [scanning, setScanning] = useState(false);
+    const [summary, setSummary] = useState(null);
+    const [error, setError] = useState("");
 
-    // Load pattern list once on mount
     useEffect(() => {
         api.get("/scan/patterns")
             .then(r => {
@@ -531,9 +754,13 @@ function PatternScanner({ onResults, instruments = null }) {
             if (instruments) body.instruments = instruments;
             const r = await api.post("/scan", body);
             const { matches, scannedCount, totalInstruments, patternLabel } = r.data;
-            // Pass the matched token set up to the parent so it can filter the table
             onResults(new Set(matches.map(m => m.token)));
-            setSummary({ label: patternLabel, matched: matches.length, scanned: scannedCount, total: totalInstruments });
+            setSummary({
+                label: patternLabel,
+                matched: matches.length,
+                scanned: scannedCount,
+                total: totalInstruments
+            });
         } catch (e) {
             setError(e.response?.data?.error || e.message);
         } finally {
@@ -548,43 +775,53 @@ function PatternScanner({ onResults, instruments = null }) {
     }
 
     const activePattern = patterns.find(p => p.id === patternId);
-    const isFiltered    = summary !== null;
-    const tfLabel       = SCAN_TFS.find(t => t.value === interval)?.label ?? interval;
+    const tfLabel = SCAN_TFS.find(t => t.value === interval)?.label ?? interval;
 
     return (
         <div style={{ padding: "10px 0 6px" }}>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-
-                {/* Pattern picker */}
                 <select
                     value={patternId}
-                    onChange={e => { setPatternId(e.target.value); handleClear(); }}
+                    onChange={e => {
+                        setPatternId(e.target.value);
+                        handleClear();
+                    }}
                     style={{
-                        background: "#1e293b", border: "1px solid #334155", borderRadius: 6,
-                        color: "#e2e8f0", fontSize: 13, padding: "6px 10px", cursor: "pointer",
-                        minWidth: 220,
+                        background: "#1e293b",
+                        border: "1px solid #334155",
+                        borderRadius: 6,
+                        color: "#e2e8f0",
+                        fontSize: 13,
+                        padding: "6px 10px",
+                        minWidth: 220
                     }}
                 >
                     {patterns.length === 0 && <option value="">Loading…</option>}
                     {patterns.map(p => (
-                        <option key={p.id} value={p.id}>{p.label}</option>
+                        <option key={p.id} value={p.id}>
+                            {p.label}
+                        </option>
                     ))}
                 </select>
-
-                {/* Timeframe selector — single selection only */}
                 <div style={{ display: "flex", gap: 4 }}>
                     {SCAN_TFS.map(tf => {
                         const active = interval === tf.value;
                         return (
                             <button
                                 key={tf.value}
-                                onClick={() => { setInterval(tf.value); handleClear(); }}
+                                onClick={() => {
+                                    setInterval(tf.value);
+                                    handleClear();
+                                }}
                                 style={{
-                                    padding: "5px 10px", borderRadius: 5, fontSize: 12,
-                                    fontWeight: 600, cursor: "pointer",
+                                    padding: "5px 10px",
+                                    borderRadius: 5,
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    cursor: "pointer",
                                     background: active ? "#1e40af" : "#1e293b",
                                     border: `1px solid ${active ? "#3b82f6" : "#334155"}`,
-                                    color: active ? "#93c5fd" : "#475569",
+                                    color: active ? "#93c5fd" : "#475569"
                                 }}
                             >
                                 {tf.label}
@@ -592,369 +829,140 @@ function PatternScanner({ onResults, instruments = null }) {
                         );
                     })}
                 </div>
-
-                {/* Scan button */}
                 <button
                     onClick={handleScan}
                     disabled={scanning || !patternId || !interval}
                     style={{
-                        padding: "6px 20px", borderRadius: 6, fontSize: 13, fontWeight: 700,
+                        padding: "6px 20px",
+                        borderRadius: 6,
+                        fontSize: 13,
+                        fontWeight: 700,
                         cursor: scanning || !patternId ? "not-allowed" : "pointer",
                         background: scanning ? "#1e293b" : "#2563eb",
                         border: `1px solid ${scanning ? "#334155" : "#3b82f6"}`,
-                        color: scanning ? "#475569" : "#fff",
+                        color: scanning ? "#475569" : "#fff"
                     }}
                 >
                     {scanning ? "Scanning…" : "⌖ Scan"}
                 </button>
-
-                {/* Clear filter */}
-                {isFiltered && (
+                {summary !== null && (
                     <button
                         onClick={handleClear}
                         style={{
-                            padding: "5px 12px", borderRadius: 6, fontSize: 12,
-                            background: "transparent", border: "1px solid #334155",
-                            color: "#64748b", cursor: "pointer",
+                            padding: "5px 12px",
+                            borderRadius: 6,
+                            fontSize: 12,
+                            background: "transparent",
+                            border: "1px solid #334155",
+                            color: "#64748b",
+                            cursor: "pointer"
                         }}
                     >
                         ✕ Clear filter
                     </button>
                 )}
             </div>
-
-            {/* One-line status: description when idle, result count when filtered */}
             {error ? (
                 <div style={{ marginTop: 5, fontSize: 11, color: "#ef4444" }}>{error}</div>
-            ) : isFiltered ? (
+            ) : summary !== null ? (
                 <div style={{ marginTop: 5, fontSize: 11, color: "#64748b" }}>
                     <span style={{ color: summary.matched > 0 ? "#22c55e" : "#94a3b8", fontWeight: 600 }}>
                         {summary.matched} match{summary.matched !== 1 ? "es" : ""}
-                    </span>
-                    {" "}on {tfLabel} · {summary.total} instruments scanned
-                    {summary.matched === 0 && (
-                        <span style={{ color: "#475569", fontStyle: "italic" }}> — no matches, showing all</span>
-                    )}
+                    </span>{" "}
+                    on {tfLabel} · {summary.total} instruments scanned
                 </div>
             ) : activePattern?.description ? (
-                <div style={{ marginTop: 5, fontSize: 11, color: "#475569" }}>
-                    {activePattern.description}
-                </div>
+                <div style={{ marginTop: 5, fontSize: 11, color: "#475569" }}>{activePattern.description}</div>
             ) : null}
         </div>
     );
 }
 
-// ── Macro-specific PatternScanner wrapper ─────────────────────────────────────
-// Derives the 5 macro instrument descriptors from the Zustand store so they can
-// be passed to PatternScanner as an explicit token list (macro instruments are
-// subscribed to the ticker but are not stored in the server watchlist).
-function MacroPatternScanner({ onResults }) {
-    const macroData = useAppStore(s => s.macroData);
-
-    const instruments = macroData ? [
-        macroData.vix    && { instrumentToken: macroData.vix.instrumentToken,    tradingsymbol: 'INDIAVIX',                    exchange: 'NSE', name: 'India VIX'  },
-        macroData.crude  && { instrumentToken: macroData.crude.instrumentToken,  tradingsymbol: macroData.crude.tradingsymbol,  exchange: 'MCX', name: 'Crude Oil'  },
-        macroData.gold   && { instrumentToken: macroData.gold.instrumentToken,   tradingsymbol: macroData.gold.tradingsymbol,   exchange: 'MCX', name: 'Gold'       },
-        macroData.silver && { instrumentToken: macroData.silver.instrumentToken, tradingsymbol: macroData.silver.tradingsymbol, exchange: 'MCX', name: 'Silver'     },
-        macroData.usdinr && { instrumentToken: macroData.usdinr.instrumentToken, tradingsymbol: macroData.usdinr.tradingsymbol, exchange: 'CDS', name: 'USD/INR'    },
-    ].filter(Boolean) : [];
-
-    return <PatternScanner onResults={onResults} instruments={instruments.length ? instruments : null} />;
-}
-
-// ── Inline symbol search (table footer row) ───────────────────────────────────
-function InlineSearch({ onAdd, colSpan }) {
-    const [query, setQuery] = useState("");
-    const [exchange, setExchange] = useState("");
-    const [results, setResults] = useState([]);
-    const [searching, setSearching] = useState(false);
-    const [dropdownOpen, setDropdownOpen] = useState(false);
-    const wrapRef = useRef(null);
-    const debounceRef = useRef(null);
-
-    async function doSearch(q, ex) {
-        if (q.length < 2) {
-            setResults([]);
-            setDropdownOpen(false);
-            return;
-        }
-        setSearching(true);
-        try {
-            const r = await api.get("/instruments/search", { params: { q, exchange: ex } });
-            setResults(r.data);
-            setDropdownOpen(r.data.length > 0);
-        } catch {
-            setResults([]);
-        } finally {
-            setSearching(false);
-        }
-    }
-
-    function handleChange(e) {
-        const q = e.target.value;
-        setQuery(q);
-        clearTimeout(debounceRef.current);
-        debounceRef.current = setTimeout(() => doSearch(q, exchange), 300);
-    }
-
-    function handleSelect(instrument) {
-        onAdd(instrument);
-        setQuery("");
-        setResults([]);
-        setDropdownOpen(false);
-    }
-
-    useEffect(() => {
-        function handler(e) {
-            if (wrapRef.current && !wrapRef.current.contains(e.target)) setDropdownOpen(false);
-        }
-        document.addEventListener("mousedown", handler);
-        return () => document.removeEventListener("mousedown", handler);
-    }, []);
+// ── ManageStocksPanel ─────────────────────────────────────────────────────────
+function ManageStocksPanel({ watchlist, onAdd, onRemove, futLoading, onSubscribe, onSubscribeMovers, onClearAll }) {
+    const [stockFilter, setStockFilter] = useState("");
+    const stockItems = watchlist.filter(i => !INDEX_NAMES.has(i.name) && !INDEX_SYMBOLS.has(i.tradingsymbol));
 
     return (
-        <tfoot>
-            <tr>
-                <td colSpan={colSpan} style={{ padding: "6px 8px" }}>
-                    <div className="mw-inline-search" ref={wrapRef}>
-                        {/* <div className="mw-inline-search-row">
-              <svg className="mw-search-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-              </svg>
-              <input
-                className="mw-inline-search-input"
-                type="text"
-                placeholder="Add symbol…"
-                value={query}
-                onChange={handleChange}
-                onFocus={() => results.length > 0 && setDropdownOpen(true)}
-              />
-              {searching && <span className="mw-search-spinner" />}
-              <select
-                className="mw-inline-exchange-select"
-                value={exchange}
-                onChange={(e) => { setExchange(e.target.value); doSearch(query, e.target.value); }}
-              >
-                <option value="">All</option>
-                <option value="NSE">NSE</option>
-                <option value="NFO">NFO</option>
-                <option value="BSE">BSE</option>
-                <option value="BFO">BFO</option>
-                <option value="MCX">MCX</option>
-              </select>
-            </div> */}
-                        {dropdownOpen && results.length > 0 && (
-                            <div className="mw-dropdown mw-dropdown--up">
-                                {results.map(r => (
-                                    <div
-                                        key={r.instrumentToken}
-                                        className="mw-dropdown-item"
-                                        onMouseDown={() => handleSelect(r)}
-                                    >
-                                        <div>
-                                            <div className="mw-dropdown-name">{r.tradingsymbol}</div>
-                                            <div className="mw-dropdown-meta">
-                                                {r.exchange}
-                                                {r.expiry ? ` · ${r.expiry}` : ""}
-                                                {r.name ? ` · ${r.name}` : ""}
-                                            </div>
+        <div>
+            <div style={{ marginBottom: 18 }}>
+                <span className="mw-detail-name">Manage Stocks</span>
+            </div>
+
+            <InlineSearch onAdd={onAdd} />
+
+            <StockFuturesPanel
+                watchlist={watchlist}
+                futLoading={futLoading}
+                onSubscribe={onSubscribe}
+                bulkLoading={false}
+                filter={stockFilter}
+                onFilterChange={setStockFilter}
+                onSubscribeMovers={onSubscribeMovers}
+                onClearAll={onClearAll}
+            />
+
+            {stockItems.length > 0 && (
+                <>
+                    <div className="section-title" style={{ marginTop: 16, marginBottom: 8 }}>
+                        Subscribed <span className="count-badge">{stockItems.length}</span>
+                    </div>
+                    <div className="kite-table-wrap">
+                        <table className="kite-table">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th className="th-right">LTP</th>
+                                    <th className="th-right">Chg%</th>
+                                    <th>
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                justifyContent: "space-between",
+                                                width: "100%",
+                                                gap: 10
+                                            }}
+                                        >
+                                            <span style={{ flex: 1, textAlign: "center" }}>1m</span>
+                                            <span style={{ flex: 1, textAlign: "center" }}>5m</span>
+                                            <span style={{ flex: 1, textAlign: "center" }}>15m</span>
                                         </div>
-                                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                            {r.lotSize > 1 && <span className="mw-dropdown-lot">Lot {r.lotSize}</span>}
-                                            <span className="mw-dropdown-type">{r.instrumentType}</span>
-                                            <span className="mw-dropdown-add">+</span>
-                                        </div>
-                                    </div>
+                                    </th>
+                                    <th />
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {stockItems.map(item => (
+                                    <StockListRow key={item.instrumentToken} item={item} onRemove={onRemove} />
                                 ))}
-                            </div>
-                        )}
+                            </tbody>
+                        </table>
                     </div>
-                </td>
-            </tr>
-        </tfoot>
+                </>
+            )}
+        </div>
     );
 }
 
-// ── Signal cell ───────────────────────────────────────────────────────────────
-// ── Watch row ─────────────────────────────────────────────────────────────────
-// mode='signal' → NIFTY/BANKNIFTY/SENSEX option tabs: Symbol | LTP | Chg% | Signal badge | Remove
-// mode='full'   → Stocks tab: Symbol | LTP | Chg% | 1m | 5m | 15m | Remove
-function WatchRow({ item, interval, onRemove, mode = "full" }) {
-    const tick = useAppStore(s => s.ticks[item.instrumentToken]);
-    const ichi = useAppStore(s => s.ichiSignals[`${item.instrumentToken}:${interval}`]);
-    const setIchiSignal = useAppStore(s => s.setIchiSignal);
-    const prevRef = useRef(null);
-    const priceRef = useRef(null);
-    const [loading, setLoading] = useState(false);
-
-    useEffect(() => {
-        if (!tick || !priceRef.current) return;
-        const curr = tick.lastPrice;
-        if (prevRef.current == null) {
-            prevRef.current = curr;
-            return;
-        }
-        const dir = curr > prevRef.current ? "flash-up" : curr < prevRef.current ? "flash-down" : null;
-        prevRef.current = curr;
-        if (!dir) return;
-        priceRef.current.classList.remove("flash-up", "flash-down");
-        void priceRef.current.offsetWidth;
-        priceRef.current.classList.add(dir);
-    }, [tick?.lastPrice]);
-
-    useEffect(() => {
-        if (useAppStore.getState().ichiSignals[`${item.instrumentToken}:${interval}`]) return;
-        let cancelled = false;
-        setLoading(true);
-        api.get(`/ichimoku/${item.instrumentToken}`, { params: { interval, bars: 100 } })
-            .then(r => {
-                if (!cancelled) setIchiSignal({ token: item.instrumentToken, interval, ...r.data });
-            })
-            .catch(() => {})
-            .finally(() => {
-                if (!cancelled) setLoading(false);
-            });
-        return () => {
-            cancelled = true;
-        };
-    }, [item.instrumentToken, interval, setIchiSignal]);
-
-    const change = tick?.change ?? null;
-    const changeClass = change > 0 ? "mw-up" : change < 0 ? "mw-down" : "";
-    const optMatch = item.tradingsymbol.match(/^([A-Z&-]+)[A-Z0-9]{5}(\d+)(CE|PE)$/);
-    const displayName = optMatch ? `${optMatch[1]} ${optMatch[2]}${optMatch[3]}` : item.tradingsymbol;
-    const expiryBadge = item.expiry
-        ? new Date(item.expiry + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })
-        : "";
-
-    // ── signal mode (index option tabs) ──────────────────────────────────────
-    if (mode === "signal") {
-        const rowCls = ichi?.putBuySignal ? "row-put" : ichi?.callBuySignal ? "row-call" : "";
-        return (
-            <tr className={rowCls}>
-                <td>
-                    <div className="mw-sym-name">{displayName}</div>
-                    <div className="mw-sym-meta" style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                        <span>{item.exchange}</span>
-                        {expiryBadge && <span className="mw-expiry-badge">{expiryBadge}</span>}
-                        {item.lotSize > 1 && <span>· Lot {item.lotSize}</span>}
-                    </div>
-                </td>
-                <td className="td-mono td-right">
-                    <span ref={priceRef} className="mw-ltp-val">
-                        {tick ? fmt(tick.lastPrice) : "—"}
-                    </span>
-                </td>
-                <td className={`td-right td-mono ${changeClass}`} style={{ fontSize: 12 }}>
-                    {change != null ? `${change > 0 ? "+" : ""}${Number(change).toFixed(2)}%` : "—"}
-                </td>
-                <td className="td-center">
-                    {loading ? (
-                        <span className="mw-sig-loading">·</span>
-                    ) : ichi?.putBuySignal ? (
-                        <span className="mw-sig-badge mw-sig-badge--put">PUT BUY</span>
-                    ) : ichi?.callBuySignal ? (
-                        <span className="mw-sig-badge mw-sig-badge--call">CALL BUY</span>
-                    ) : ichi ? (
-                        (() => {
-                            const factors = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
-                            const up = factors.filter(s => s === "bullish").length;
-                            const down = factors.filter(s => s === "bearish").length;
-                            const title = `Chikou: ${ichi.chikouSignal} · Kijun: ${ichi.kijunSignal} · Cloud: ${ichi.cloudSignal} · Tenkan: ${ichi.tenkanSignal}`;
-                            return (
-                                <span className="mw-sig-cond" title={title}>
-                                    <span className="idx-cond-up">{up}↑</span>{" "}
-                                    <span className="idx-cond-down">{down}↓</span>
-                                </span>
-                            );
-                        })()
-                    ) : (
-                        <span className="mw-sig-badge mw-sig-badge--none">—</span>
-                    )}
-                </td>
-                <td className="td-center">
-                    <button className="mw-remove-btn" onClick={() => onRemove(item.instrumentToken)} title="Remove">
-                        ×
-                    </button>
-                </td>
-            </tr>
-        );
-    }
-
-    // ── stock mode (stocks tab) — Symbol | LTP | Chg% | 15m | 1h | 4h | 1d | Remove ─
-    return (
-        <tr>
-            <td>
-                <div className="mw-sym-name">{displayName}</div>
-                <div className="mw-sym-meta" style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <span>{item.exchange}</span>
-                    {expiryBadge && <span className="mw-expiry-badge">{expiryBadge}</span>}
-                    {item.lotSize > 1 && <span>· Lot {item.lotSize}</span>}
-                </div>
-            </td>
-            <td className="td-mono td-right">
-                <span ref={priceRef} className="mw-ltp-val">
-                    {tick ? fmt(tick.lastPrice) : "—"}
-                </span>
-            </td>
-            <td className={`td-right td-mono ${changeClass}`} style={{ fontSize: 12 }}>
-                {change != null ? `${change > 0 ? "+" : ""}${Number(change).toFixed(2)}%` : "—"}
-            </td>
-            {STOCK_TFS.map(tf => (
-                <IndexSignalCell key={tf.value} token={item.instrumentToken} interval={tf.value} />
-            ))}
-            <td className="td-center">
-                <button className="mw-remove-btn" onClick={() => onRemove(item.instrumentToken)} title="Remove">
-                    ×
-                </button>
-            </td>
-        </tr>
-    );
-}
-
-// Returns the smallest INDEX_TFS timeframe that currently has a PUT or CALL buy signal
-// for the given index tab (reads directly from Zustand store — no React state needed)
-function getActiveIndexTF(tabId) {
-    const info = TAB_INDEX[tabId];
-    if (!info) return "15minute";
-    const { watchlist, ichiSignals } = useAppStore.getState();
-    const inst = watchlist.find(i => i.tradingsymbol === info.match);
-    if (!inst) return "15minute";
-    const token = inst.instrumentToken;
-    for (const tf of INDEX_TFS) {
-        const sig = ichiSignals[`${token}:${tf.value}`];
-        if (sig?.putBuySignal || sig?.callBuySignal) return tf.value;
-    }
-    return "15minute";
-}
-
-// Module-level state — survives component unmount/remount (tab switches)
-let _initDone = false;
-const _subscribedTabs = new Set();
-
-// ── Main ──────────────────────────────────────────────────────────────────────
+// ── Main MarketWatch component ────────────────────────────────────────────────
 export default function MarketWatch() {
-    const watchlist           = useAppStore(s => s.watchlist);
-    const setWatchlist        = useAppStore(s => s.setWatchlist);
-    const addToWatchlist      = useAppStore(s => s.addToWatchlist);
+    const watchlist = useAppStore(s => s.watchlist);
+    const setWatchlist = useAppStore(s => s.setWatchlist);
+    const addToWatchlist = useAppStore(s => s.addToWatchlist);
     const removeFromWatchlist = useAppStore(s => s.removeFromWatchlist);
-    const tickerConnected     = useAppStore(s => s.tickerConnected);
+    const tickerConnected = useAppStore(s => s.tickerConnected);
+    const macroData = useAppStore(s => s.macroData);
+    const setMacroData = useAppStore(s => s.setMacroData);
+    const selectedInstrument = useAppStore(s => s.selectedInstrument);
+    const setSelectedInstrument = useAppStore(s => s.setSelectedInstrument);
 
-    const [activeTab, setActiveTab] = useState("INDEX");
-    const [interval, setInterval] = useState("15minute");
-    const [status, setStatus] = useState(null);
-    const [futLoading, setFutLoading] = useState(new Set());
     const [pageLoading, setPageLoading] = useState(true);
     const [pageLoadMsg, setPageLoadMsg] = useState("Initialising…");
-    const [tabLoading, setTabLoading] = useState(false);
-    const [stockFilter, setStockFilter] = useState("");
+    const [futLoading, setFutLoading] = useState(new Set());
 
-    // Module-level set used directly — no ref needed
+    const _autoSelected = useRef(false);
 
-    // On mount: load watchlist + subscribe all 3 index underlyings in parallel.
-    // Retries every 5 s if the instrument cache isn't ready yet (503) so the
-    // page self-heals after the owner authenticates without requiring a reload.
+    // ── Init: load watchlist and subscribe index underlyings ──────────────────
     useEffect(() => {
         let retryTimer = null;
 
@@ -968,14 +976,10 @@ export default function MarketWatch() {
             try {
                 const [wl] = await Promise.all([
                     api.get("/instruments/watchlist"),
-                    api
-                        .get("/instruments/status")
-                        .then(r => setStatus(r.data))
-                        .catch(() => {})
+                    api.get("/instruments/status").catch(() => {})
                 ]);
                 setWatchlist(wl.data);
 
-                // Subscribe all 3 underlyings — if cache not ready yet, throws 503
                 const results = await Promise.allSettled(
                     Object.entries(TAB_INDEX).map(async ([, info]) => {
                         const r = await api.get("/instruments/search", {
@@ -993,31 +997,45 @@ export default function MarketWatch() {
                 const anyFailed = results.some(r => r.status === "rejected");
                 const anyMissing = results.some(r => r.status === "fulfilled" && !r.value);
                 if (anyFailed || anyMissing) {
-                    // Cache not ready — reset flag and retry in 5 s
                     setPageLoadMsg("Waiting for instrument cache…");
-                    retryTimer = setTimeout(() => {
-                        init();
-                    }, 5000);
+                    retryTimer = setTimeout(init, 5000);
                     return;
                 }
 
                 _initDone = true;
             } catch {
-                // Network error — retry
-                retryTimer = setTimeout(() => {
-                    init();
-                }, 5000);
+                retryTimer = setTimeout(init, 5000);
                 return;
             } finally {
                 setPageLoading(false);
             }
         }
+
         init();
         return () => {
             if (retryTimer) clearTimeout(retryTimer);
         };
     }, [setWatchlist]);
 
+    // ── Load macro data once (SSE macro_update keeps it fresh) ────────────────
+    useEffect(() => {
+        api.get("/macro/analysis")
+            .then(r => setMacroData(r.data))
+            .catch(() => {});
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Auto-select Nifty 50 after first successful init ──────────────────────
+    useEffect(() => {
+        if (!pageLoading && !_autoSelected.current && !selectedInstrument) {
+            const inst = watchlist.find(i => i.tradingsymbol === "NIFTY 50");
+            if (inst) {
+                _autoSelected.current = true;
+                setSelectedInstrument({ type: "index", key: "NIFTY", token: inst.instrumentToken, label: "Nifty 50" });
+            }
+        }
+    }, [pageLoading, watchlist, selectedInstrument, setSelectedInstrument]);
+
+    // ── Handlers ──────────────────────────────────────────────────────────────
     async function handleAdd(instrument) {
         try {
             const r = await api.post("/instruments/subscribe", instrument);
@@ -1036,6 +1054,9 @@ export default function MarketWatch() {
             console.error("Unsubscribe failed:", err.message);
         }
         removeFromWatchlist(instrumentToken);
+        if (selectedInstrument?.type === "stock" && selectedInstrument.token === instrumentToken) {
+            setSelectedInstrument(null);
+        }
     }
 
     async function unsubscribeAllFutures() {
@@ -1074,64 +1095,43 @@ export default function MarketWatch() {
         }
     }
 
-    // Hard reset — clears all module-level flags, empties the store, reloads page
     function handleHardReset() {
         _initDone = false;
-        _subscribedTabs.clear();
-        useAppStore.getState().setIchiSignal && useAppStore.setState({ ichiSignals: {} });
+        _autoSelected.current = false;
+        useAppStore.setState({ ichiSignals: {} });
         window.location.reload();
     }
 
-    // Tab click: switch tab
-    async function handleTabClick(tabId) {
-        setActiveTab(tabId);
-        if (tabId !== "STOCKS") setStockFilter("");
+    // ── Resolve token/label/sublabel for the detail panel ────────────────────
+    let detailToken = null;
+    let detailLabel = "";
+    let detailSublabel = "";
 
-        // Auto-select the interval that the index is signalling on
-        if (TAB_INDEX[tabId]) setInterval(getActiveIndexTF(tabId));
+    if (selectedInstrument && selectedInstrument.type !== "manage") {
+        detailToken = selectedInstrument.token;
+        detailLabel = selectedInstrument.label;
+        detailSublabel = selectedInstrument.sublabel ?? "";
 
-        // ATM series subscribe disabled — options resolved automatically via Ichimoku signal
-        // if (ATM_OFFSETS[tabId] && !_subscribedTabs.has(tabId)) {
-        //     setTabLoading(true);
-        //     try {
-        //         const r = await api.post("/instruments/subscribe-atm", { index: tabId, offsets: ATM_OFFSETS[tabId] });
-        //         setWatchlist(r.data.watchlist);
-        //         _subscribedTabs.add(tabId);
-        //     } finally {
-        //         setTabLoading(false);
-        //     }
-        // }
+        // Macro tokens are resolved from macroData (loads asynchronously)
+        if (selectedInstrument.type === "macro" && macroData) {
+            const md = macroData[selectedInstrument.key];
+            detailToken = md?.instrumentToken ?? null;
+            detailSublabel = md?.tradingsymbol ?? selectedInstrument.sublabel ?? "";
+        }
     }
 
-    const allTabItems = activeTab === "INDEX" ? [] : getTabItems(watchlist, activeTab);
-    const tabItems = (() => {
-        let items = allTabItems;
-        // Text filter (stocks tab search box)
-        if (activeTab === "STOCKS" && stockFilter) {
-            items = items.filter(i => i.name.includes(stockFilter) || i.tradingsymbol.includes(stockFilter));
-        }
-        return items;
-    })();
-    const tabCounts = Object.fromEntries(
-        TABS.filter(t => t.id !== "INDEX").map(t => [t.id, getTabItems(watchlist, t.id).length])
-    );
-
-    // Page-level init loader
+    // ── Render ────────────────────────────────────────────────────────────────
     if (pageLoading) {
         return (
             <div className="page">
-                <IndexPriceBar />
                 <PageLoader message={pageLoadMsg} />
             </div>
         );
     }
 
     return (
-        <div className="page">
-            {/* Top index price bar */}
-            <IndexPriceBar />
-
-            {/* Page header */}
+        <div className="page" style={{ paddingTop: 16 }}>
+            {/* ── Page header ── */}
             <div className="page-header" style={{ marginBottom: 16 }}>
                 <h2 className="page-title">Market Watch</h2>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1149,115 +1149,33 @@ export default function MarketWatch() {
                 </div>
             </div>
 
-            {/* Tabs + interval */}
-            <div className="mw-tab-bar">
-                <div className="mw-tabs">
-                    {TABS.map(t => (
-                        <button
-                            key={t.id}
-                            className={`mw-tab ${activeTab === t.id ? "mw-tab--active" : ""}`}
-                            onClick={() => handleTabClick(t.id)}
-                            disabled={tabLoading}
-                        >
-                            {t.label}
-                            {tabCounts[t.id] > 0 && <span className="mw-tab-count">{tabCounts[t.id]}</span>}
-                            {tabLoading && activeTab === t.id && <span className="mw-tab-spinner" />}
-                        </button>
-                    ))}
-                </div>
-            </div>
+            {/* ── Mobile instrument strip (hidden on desktop via CSS) ── */}
+            <MobileInstStrip
+                watchlist={watchlist}
+                macroData={macroData}
+                selectedInstrument={selectedInstrument}
+                setSelectedInstrument={setSelectedInstrument}
+            />
 
-            {/* Always mounted — CSS controls visibility so state/SSE data never resets on tab switch */}
-
-            <div style={{ display: activeTab === "INDEX" ? "block" : "none" }}>
-                <IndexTab watchlist={watchlist} />
-            </div>
-
-            <div style={{ display: activeTab === "MACRO" ? "block" : "none" }}>
-                <MacroPanel />
-            </div>
-
-            {TAB_INDEX[activeTab] && <IndexStatusBar tabId={activeTab} watchlist={watchlist} />}
-
-            <div style={{ display: activeTab === "STOCKS" ? "block" : "none" }}>
-                {/* PatternScanner removed from Stocks tab for now — commented out
-                <PatternScanner onResults={setScanFilter} />
-                */}
-                <StockFuturesPanel
+            {/* ── Detail content ── */}
+            {selectedInstrument?.type === "manage" ? (
+                <ManageStocksPanel
                     watchlist={watchlist}
+                    onAdd={handleAdd}
+                    onRemove={handleRemove}
                     futLoading={futLoading}
                     onSubscribe={subscribeStockFuture}
-                    bulkLoading={false}
-                    filter={stockFilter}
-                    onFilterChange={setStockFilter}
                     onSubscribeMovers={subscribeMovers}
                     onClearAll={unsubscribeAllFutures}
                 />
-            </div>
-
-            {/* Table — not shown for INDEX or MACRO tabs */}
-            {activeTab !== "INDEX" && activeTab !== "MACRO" &&
-                (() => {
-                    const isIndexTab  = !!TAB_INDEX[activeTab];
-                    const isStocksTab = activeTab === "STOCKS";
-                    // Symbol + LTP + Chg% + (4 TFs or 1 signal col) + Remove
-                    const colSpan = isIndexTab ? 5 : isStocksTab ? 8 : 8;
-                    const rowMode = isIndexTab ? "signal" : "full";
-
-                    return (
-                        <div className="kite-table-wrap">
-                            <table className="kite-table">
-                                <thead>
-                                    <tr>
-                                        <th style={{ width: "28%" }}>Symbol</th>
-                                        <th className="th-right" style={{ width: "13%" }}>LTP</th>
-                                        <th className="th-right" style={{ width: "9%" }}>Chg%</th>
-                                        {isIndexTab ? (
-                                            <th className="td-center" style={{ width: "22%" }}>Signal</th>
-                                        ) : isStocksTab ? (
-                                            STOCK_TFS.map(tf => (
-                                                <th key={tf.value} className="td-center" style={{ width: "10%" }}>
-                                                    {tf.label}
-                                                </th>
-                                            ))
-                                        ) : (
-                                            <>
-                                                <th className="th-right" style={{ width: "8%" }}>Chikou</th>
-                                                <th className="th-right" style={{ width: "11%" }}>Kijun</th>
-                                                <th className="th-right" style={{ width: "7%" }}>Cloud</th>
-                                                <th className="th-right" style={{ width: "11%" }}>Tenkan</th>
-                                            </>
-                                        )}
-                                        <th style={{ width: "5%" }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {tabItems.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={colSpan} style={{
-                                                textAlign: "center", padding: "20px",
-                                                color: "var(--txt3)", fontSize: 13,
-                                            }}>
-                                                No instruments — use the search below to add
-                                            </td>
-                                        </tr>
-                                    ) : (
-                                        tabItems.map(item => (
-                                            <WatchRow
-                                                key={item.instrumentToken}
-                                                item={item}
-                                                interval={interval}
-                                                onRemove={handleRemove}
-                                                mode={rowMode}
-                                            />
-                                        ))
-                                    )}
-                                </tbody>
-                                <InlineSearch onAdd={handleAdd} colSpan={colSpan} />
-                            </table>
-                        </div>
-                    );
-                })()}
+            ) : selectedInstrument ? (
+                <InstrumentDetail token={detailToken} label={detailLabel} sublabel={detailSublabel} />
+            ) : (
+                <div className="mw-detail-empty">
+                    <span style={{ fontSize: 28 }}>📊</span>
+                    <span>Select an instrument from the sidebar</span>
+                </div>
+            )}
         </div>
     );
 }
