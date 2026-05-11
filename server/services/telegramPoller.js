@@ -67,7 +67,12 @@ async function handleUpdate(update) {
   if (!text) return;
 
   const chatId = String(message.chat?.id || '');
-  // Chat ID must be explicitly set via POST /api/settings/telegram — no auto-registration
+
+  // Auto-register the first chat that messages the bot
+  if (chatId && !store.getTelegramChatId()) {
+    store.setTelegramChatId(chatId);
+    console.log(`[Telegram] Auto-registered chat ID: ${chatId}`);
+  }
 
   const parsed = signalParser.parse(text);
 

@@ -3,10 +3,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const { addClient, broadcast } = require('./sseHub');
-const { apiKeyMiddleware } = require('./middleware/auth');
 
 const kiteRouter = require('./routes/kite');
 const kiteAuthRouter = require('./routes/kiteAuth');
@@ -26,42 +23,15 @@ const store = require('./store');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// L2 — Security headers
-app.use(helmet());
-
-// L3 — Rate limiting: 200 req/min per IP on API routes
-const apiLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests, please try again later.' },
-});
-app.use('/api', apiLimiter);
-
-// H2 — CORS allowlist (never reflect arbitrary Origin)
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173').split(',').map((o) => o.trim());
-app.use(cors({
-  origin: (origin, cb) => {
-    // Allow server-to-server requests (no Origin header) and listed origins
-    if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    cb(new Error(`CORS: origin ${origin} not allowed`));
-  },
-  credentials: true,
-}));
-
+app.use(cors());
 app.use(morgan('dev'));
 app.use(express.json());
 
-// H1 — API key guard on all /api/* routes (public routes excluded inside middleware)
-app.use('/api', apiKeyMiddleware);
-
 // SSE stream endpoint — clients connect once and receive all events
 app.get('/api/stream', (req, res) => {
-  // H2 — use validated origin from CORS allowlist, never reflect blindly
-  const requestOrigin = req.headers.origin;
-  const allowedOrigin = ALLOWED_ORIGINS.includes(requestOrigin) ? requestOrigin : ALLOWED_ORIGINS[0];
-  res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+  // Explicit CORS for SSE — required for cross-origin streaming (Vercel → Railway)
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -105,11 +75,6 @@ app.use('/api/ichimoku', ichimokuRouter);
 app.use('/api/macro',   macroRouter);
 
 app.listen(PORT, async () => {
-  // Warn loudly if DASHBOARD_API_KEY is not set — all routes will return 401
-  if (!process.env.DASHBOARD_API_KEY) {
-    console.warn('[Security] ⚠️  DASHBOARD_API_KEY is not set — all API routes will return 401. Set it in your .env / Railway secrets.');
-  }
-
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
 
   try {
