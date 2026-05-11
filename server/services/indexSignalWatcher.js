@@ -118,7 +118,7 @@ async function onCandleClose(token, interval) {
 
   try {
     const candles = candleStore.getCandlesSync(token, interval);
-    if (!candles || candles.length < 52) return;
+    if (!candles || candles.length < 26) return;
 
     const signals = getSignals(candles, interval);
     if (!signals) return;
@@ -218,13 +218,28 @@ function _formatMessage(indexName, signalType, atmOption, entry, sl, target, int
  * getCandlesSync returns null until the async seed completes — calling
  * getCandles() here ensures data is ready before the first candle close.
  */
+// Additional intervals needed for index tab display (not used for trade signals)
+const DISPLAY_INTERVALS = ['60minute', 'day'];
+const INDEX_TOKENS = [...new Set(INDEX_WATCHES.map((w) => w.token))]; // [256265, 260105]
+
 function start() {
+  // Seed trade-signal intervals
   for (const { token, interval } of INDEX_WATCHES) {
     candleStore.getCandles(token, interval).catch((e) => {
       console.warn(`[IndexSignalWatcher] Seed failed ${token}:${interval} —`, e.message);
     });
   }
-  console.log('[IndexSignalWatcher] Ready — watching NIFTY/BANKNIFTY on 1m / 5m / 15m');
+
+  // Seed 1h and 1d so the index tab 4h/1d columns have data on first load
+  for (const token of INDEX_TOKENS) {
+    for (const interval of DISPLAY_INTERVALS) {
+      candleStore.getCandles(token, interval).catch((e) => {
+        console.warn(`[IndexSignalWatcher] Seed failed ${token}:${interval} —`, e.message);
+      });
+    }
+  }
+
+  console.log('[IndexSignalWatcher] Ready — watching NIFTY/BANKNIFTY on 1m / 5m / 15m (display: 1h / 4h / 1d)');
 }
 
 function stop() {

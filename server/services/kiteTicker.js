@@ -3,8 +3,9 @@ const { getConfig } = require('../store');
 const { broadcast } = require('../sseHub');
 const candleStore = require('./candleStore');
 const { getSignals } = require('./ichimoku');
-const indexSignalWatcher = require('./indexSignalWatcher');
-const macroWatcher       = require('./macroWatcher');
+const indexSignalWatcher    = require('./indexSignalWatcher');
+const macroWatcher          = require('./macroWatcher');
+const patternAlertWatcher   = require('./patternAlertWatcher');
 
 let _ticker = null;
 let _connected = false;
@@ -52,7 +53,7 @@ function connect() {
   _ticker.on('connect', () => {
     _connected = true;
     _reconnectDelay = 1000;
-    console.log('[KiteTicker] Connected');
+    console.log(`[KiteTicker] Connected — _subscribedTokens has ${_subscribedTokens.size} tokens at this moment`);
     broadcast('ticker_status', { connected: true });
 
     // Re-subscribe previously tracked tokens after reconnect
@@ -60,12 +61,20 @@ function connect() {
       const tokens = Array.from(_subscribedTokens);
       _ticker.subscribe(tokens);
       _ticker.setMode(_ticker.modeFull, tokens);
-      console.log(`[KiteTicker] Re-subscribed ${tokens.length} tokens`);
+      console.log(`[KiteTicker] On-connect re-subscribed tokens: ${tokens.join(', ')}`);
+    } else {
+      console.warn('[KiteTicker] On-connect: no tokens to subscribe yet (race condition?)');
     }
   });
 
+  // Log the first tick we see per token so we can verify which streams are actually live
+  const _firstTickSeen = new Set();
   _ticker.on('ticks', (ticks) => {
     for (const tick of ticks) {
+      if (!_firstTickSeen.has(tick.instrument_token)) {
+        _firstTickSeen.add(tick.instrument_token);
+        console.log(`[KiteTicker] FIRST tick — token=${tick.instrument_token} price=${tick.last_price}`);
+      }
       const payload = {
         instrumentToken: tick.instrument_token,
         lastPrice: tick.last_price,
@@ -82,6 +91,9 @@ function connect() {
       };
       broadcast('tick', payload);
 
+      // Update live macro prices on every tick (debounced inside macroWatcher)
+      macroWatcher.onTick(tick.instrument_token, tick.last_price);
+
       // Feed live price into candle ring buffer.
       // When a candle closes, compute Ichimoku signals immediately and push to clients —
       // no HTTP round-trip needed; everything is already in memory.
@@ -91,7 +103,7 @@ function connect() {
       candleStore.onTick(tick.instrument_token, tick.last_price, tradeTimeMs, (token, interval) => {
         try {
           const candles = candleStore.getCandlesSync(token, interval);
-          if (candles && candles.length >= 52) {
+          if (candles && candles.length >= 26) {
             const signals = getSignals(candles);
             if (signals) broadcast('ichimoku_update', { token, interval, ...signals });
           }
@@ -101,6 +113,8 @@ function connect() {
         indexSignalWatcher.onCandleClose(token, interval).catch(() => {});
         // Recompute macro analysis and push to clients on every candle close
         macroWatcher.onCandleClose(token, interval).catch(() => {});
+        // Run pattern alerts — fires Telegram if a kumo pattern matches
+        patternAlertWatcher.onCandleClose(token, interval).catch(() => {});
       });
     }
   });
@@ -163,7 +177,9 @@ function subscribe(tokens) {
   if (_connected && _ticker) {
     _ticker.subscribe(nums);
     _ticker.setMode(_ticker.modeFull, nums);
-    console.log(`[KiteTicker] Subscribed tokens: ${nums.join(', ')}`);
+    console.log(`[KiteTicker] Live subscribe (connected): ${nums.join(', ')}`);
+  } else {
+    console.log(`[KiteTicker] Deferred subscribe (not connected yet): ${nums.join(', ')}`);
   }
 }
 

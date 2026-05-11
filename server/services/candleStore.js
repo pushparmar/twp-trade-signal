@@ -90,15 +90,20 @@ function getCandlesSync(instrumentToken, interval) {
  * Return candles for a token+interval, seeding from historical API on first call.
  * Concurrent calls for the same key share a single seed promise.
  *
+ * @param {number} instrumentToken
+ * @param {string} interval - Kite interval string e.g. '15minute', 'day'
+ * @param {number} [bars]   - Override seed count (defaults to MAX_CANDLES)
+ *
  * Returns: historical candles (ring) + current open candle appended.
  */
-async function getCandles(instrumentToken, interval) {
-  const token = Number(instrumentToken);
-  const key   = `${token}:${interval}`;
+async function getCandles(instrumentToken, interval, bars) {
+  const token   = Number(instrumentToken);
+  const key     = `${token}:${interval}`;
+  const nCandles = bars && bars > 0 ? Math.min(bars, MAX_CANDLES * 2) : MAX_CANDLES;
 
   if (!_store.has(key)) {
     if (!_seeding.has(key)) {
-      const p = fetchLastNCandles(token, interval, MAX_CANDLES)
+      const p = fetchLastNCandles(token, interval, nCandles)
         .then((candles) => {
           _store.set(key, { candles: [...candles], currentSlot: null, currentCandle: null });
           if (!_tokenIndex.has(token)) _tokenIndex.set(token, new Set());

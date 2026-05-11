@@ -32,14 +32,17 @@ function IchiDots({ ichi }) {
   );
 }
 
-function TfCell({ tf, showZone }) {
+function TfCell({ tf, showZone, livePrice }) {
   if (!tf) return <td style={{ color: '#334155', textAlign: 'center' }}>—</td>;
-  const sigColor = SIGNAL_COLOR[tf.signal] || '#94a3b8';
+  const sigColor   = SIGNAL_COLOR[tf.signal] || '#94a3b8';
   const arrowColor = SIGNAL_COLOR[tf.signal] || '#94a3b8';
+  // Show live tick price when available, fall back to candle close
+  const displayPrice = livePrice ?? tf.current;
   return (
     <td style={{ textAlign: 'center', padding: '6px 4px' }}>
       <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#cbd5e1', marginBottom: 2 }}>
-        <span style={{ color: arrowColor }}>{SIGNAL_ICON[tf.signal]}</span> {tf.current}
+        <span style={{ color: arrowColor }}>{SIGNAL_ICON[tf.signal]}</span>{' '}
+        <span style={{ color: livePrice != null ? '#facc15' : '#cbd5e1' }}>{displayPrice}</span>
       </div>
       {showZone && tf.zone && (
         <div style={{ fontSize: 10, color: VIX_ZONE_COLOR[tf.zone] || '#94a3b8', marginBottom: 2 }}>
@@ -70,19 +73,17 @@ function BiasCell({ direction, confidence }) {
   );
 }
 
-function InstrumentRow({ label, sublabel, current, direction, confidence, timeframes, showZone }) {
+function InstrumentRow({ label, sublabel, livePrice, direction, confidence, timeframes, showZone }) {
   const byKey = (key) => timeframes?.find((t) => t.key === key);
   return (
     <tr>
       <td style={{ padding: '8px 4px 8px 12px', whiteSpace: 'nowrap' }}>
         <div style={{ fontWeight: 700, color: '#e2e8f0', fontSize: 13 }}>{label}</div>
         {sublabel && <div style={{ fontSize: 10, color: '#475569', marginTop: 1 }}>{sublabel}</div>}
-        {current != null && (
-          <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{current}</div>
-        )}
       </td>
       {TF_KEYS.map((key) => (
-        <TfCell key={key} tf={byKey(key)} showZone={showZone} />
+        // livePrice is the same for every timeframe — it's the current market price from the ticker
+        <TfCell key={key} tf={byKey(key)} showZone={showZone} livePrice={livePrice} />
       ))}
       <BiasCell direction={direction} confidence={confidence} />
     </tr>
@@ -93,9 +94,12 @@ export default function MacroPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
 
-  // Live data from SSE — updated on every candle close
-  const macroData   = useAppStore((s) => s.macroData);
+  // Ichimoku signals — updated on every candle close
+  const macroData    = useAppStore((s) => s.macroData);
   const setMacroData = useAppStore((s) => s.setMacroData);
+
+  // Live tick prices — same store that IndexTab uses; updated on every tick SSE event
+  const ticks = useAppStore((s) => s.ticks);
 
   // Initial load via REST — SSE takes over after first candle close
   const load = useCallback(async () => {
@@ -111,19 +115,23 @@ export default function MacroPanel() {
   }, [setMacroData]);
 
   useEffect(() => {
-    // Only fetch via REST if store is empty (first mount)
-    if (!macroData) {
-      load();
-    } else {
-      setLoading(false);
-    }
+    // Always fetch fresh on mount so instrumentToken is up to date.
+    // SSE (macro_update) takes over for subsequent candle-close updates.
+    load();
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <div style={{ padding: 32, color: '#64748b', textAlign: 'center' }}>Loading…</div>;
   if (error)   return <div style={{ padding: 32, color: '#ef4444', textAlign: 'center' }}>{error}</div>;
   if (!macroData) return null;
 
-  const { vix, crude, usdinr } = macroData;
+  const { vix, crude, gold, silver, usdinr } = macroData;
+
+  // Read live price from ticks store — falls back to last analysis price.
+  const vixLive    = ticks[vix?.instrumentToken]?.lastPrice    ?? vix?.currentVix;
+  const crudeLive  = ticks[crude?.instrumentToken]?.lastPrice  ?? crude?.currentPrice;
+  const goldLive   = ticks[gold?.instrumentToken]?.lastPrice   ?? gold?.currentPrice;
+  const silverLive = ticks[silver?.instrumentToken]?.lastPrice ?? silver?.currentPrice;
+  const usdinrLive = ticks[usdinr?.instrumentToken]?.lastPrice ?? usdinr?.currentPrice;
 
   return (
     <div style={{ padding: '0 4px' }}>
@@ -141,7 +149,7 @@ export default function MacroPanel() {
           <tbody>
             <InstrumentRow
               label="India VIX"
-              current={vix?.currentVix}
+              livePrice={vixLive}
               direction={vix?.direction}
               confidence={vix?.confidence ?? 0}
               timeframes={vix?.timeframes}
@@ -150,16 +158,34 @@ export default function MacroPanel() {
             <InstrumentRow
               label="Crude Oil"
               sublabel={crude?.tradingsymbol ?? ''}
-              current={crude?.currentPrice}
+              livePrice={crudeLive}
               direction={crude?.direction}
               confidence={crude?.confidence ?? 0}
               timeframes={crude?.timeframes}
               showZone={false}
             />
             <InstrumentRow
+              label="Gold"
+              sublabel={gold?.tradingsymbol ?? ''}
+              livePrice={goldLive}
+              direction={gold?.direction}
+              confidence={gold?.confidence ?? 0}
+              timeframes={gold?.timeframes}
+              showZone={false}
+            />
+            <InstrumentRow
+              label="Silver"
+              sublabel={silver?.tradingsymbol ?? ''}
+              livePrice={silverLive}
+              direction={silver?.direction}
+              confidence={silver?.confidence ?? 0}
+              timeframes={silver?.timeframes}
+              showZone={false}
+            />
+            <InstrumentRow
               label="USD / INR"
               sublabel={usdinr?.tradingsymbol ?? ''}
-              current={usdinr?.currentPrice}
+              livePrice={usdinrLive}
               direction={usdinr?.direction}
               confidence={usdinr?.confidence ?? 0}
               timeframes={usdinr?.timeframes}
@@ -171,7 +197,7 @@ export default function MacroPanel() {
 
       <div style={{ padding: '10px 4px 0', fontSize: 11, color: '#475569', lineHeight: 1.8 }}>
         Signals show instrument own direction. &nbsp;
-        VIX↑ = fear rising &nbsp;·&nbsp; Crude↑ = oil rising &nbsp;·&nbsp; USDINR↑ = rupee weakening<br />
+        VIX↑ = fear rising &nbsp;·&nbsp; Crude/Gold/Silver↑ = rising &nbsp;·&nbsp; USDINR↑ = rupee weakening<br />
         <span style={{ color: VIX_ZONE_COLOR.calm }}>■</span> VIX &lt;16 Calm &nbsp;
         <span style={{ color: VIX_ZONE_COLOR.normal }}>■</span> 16–20 Normal &nbsp;
         <span style={{ color: VIX_ZONE_COLOR.elevated }}>■</span> 20–25 Elevated &nbsp;

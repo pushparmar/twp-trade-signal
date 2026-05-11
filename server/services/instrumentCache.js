@@ -79,6 +79,51 @@ function search(query, exchange = '') {
 }
 
 /**
+ * Find the front-month futures contract for a given instrument name + exchange.
+ *
+ * Strategy (in order):
+ *   1. Exact match on the `name` field  (e.g. name === "CRUDEOIL")
+ *   2. Tradingsymbol starts with name + digit  (e.g. "CRUDEOIL25MAY")
+ *      — the digit guard avoids GOLDM when searching for GOLD.
+ *
+ * No result cap — scans the full instrument list.
+ */
+function getFrontMonthFuture(name, exchange) {
+  const n = name.toUpperCase();
+
+  // 1. Exact name field match
+  let futures = _instruments.filter(
+    (i) => i.name.toUpperCase() === n
+        && i.exchange === exchange
+        && i.instrumentType === 'FUT'
+        && i.expiry,
+  );
+
+  // 2. Tradingsymbol prefix + digit fallback
+  //    Matches "CRUDEOIL25MAY" but not "CRUDEOILM25MAY";
+  //    matches "GOLD25APR" but not "GOLDM25APR".
+  if (!futures.length) {
+    const re = new RegExp(`^${n}\\d`, 'i');
+    futures = _instruments.filter(
+      (i) => re.test(i.tradingsymbol)
+          && i.exchange === exchange
+          && i.instrumentType === 'FUT'
+          && i.expiry,
+    );
+  }
+
+  if (!futures.length) {
+    console.warn(`[InstrumentCache] getFrontMonthFuture: no FUT found for "${name}" on ${exchange}`);
+    return null;
+  }
+
+  futures.sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
+  const result = futures[0];
+  console.log(`[InstrumentCache] getFrontMonthFuture: ${name}/${exchange} → ${result.tradingsymbol} (token ${result.instrumentToken})`);
+  return result;
+}
+
+/**
  * Exact lookup by exchange + tradingsymbol.
  * Returns the instrument object or null.
  */
@@ -150,4 +195,4 @@ function getCount() {
   return _instruments.length;
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getOptionsByStrike, getFutureNames, isLoaded, getLastLoaded, getCount };
+module.exports = { load, search, getBySymbol, getByToken, getFrontMonthFuture, getOptionsByStrike, getFutureNames, isLoaded, getLastLoaded, getCount };

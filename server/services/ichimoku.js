@@ -270,8 +270,267 @@ function getSignals(candles, interval = '15minute') {
   };
 }
 
+/**
+ * Kumo Breakout + Twist confluence — perfect 5/5 setup detector.
+ *
+ * All five conditions must agree in the same direction AND both the breakout
+ * and the twist must have occurred within the last `lookback` candles.
+ *
+ * The five checks:
+ *   1. kumoBreakout  — price crossed out of the cloud within the last `lookback` bars
+ *                      and has not re-entered since.
+ *   2. cloudColor    — Senkou A > Senkou B at the current bar (bullish = green cloud).
+ *   3. kumoTwist     — Senkou A crossed Senkou B within the last `lookback` bars.
+ *   4. chikou        — current close vs close 26 bars ago (momentum direction).
+ *   5. kijun         — current close vs Kijun base line (equilibrium).
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=10]  — window for both breakout and twist detection
+ */
+function getKumoBreakoutTwist(candles, { lookback = 10 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  // ── 1. Kumo Breakout — crossover must be within `lookback` bars ──────────
+  // Price must currently be outside the cloud AND the cross itself must be recent.
+  let kumoBreakout = 'neutral';
+  if (last.aboveCloud || last.belowCloud) {
+    const wantBullish = last.aboveCloud;
+    for (let offset = 0; offset < lookback; offset++) {
+      const idx  = n - 1 - offset;
+      const idxP = idx - 1;
+      if (idxP < 0) break;
+      const cur  = results[idx];
+      const prev = results[idxP];
+      if (wantBullish && cur.aboveCloud && !prev.aboveCloud) {
+        kumoBreakout = 'bullish';
+        break;
+      }
+      if (!wantBullish && cur.belowCloud && !prev.belowCloud) {
+        kumoBreakout = 'bearish';
+        break;
+      }
+    }
+    // If the cross is older than `lookback`, kumoBreakout stays 'neutral' — stale.
+  }
+
+  // ── 2. Cloud color at current bar ────────────────────────────────────────
+  const cloudColor = last.senkouA == null || last.senkouB == null ? 'neutral'
+    : last.senkouA > last.senkouB ? 'bullish'
+    : last.senkouA < last.senkouB ? 'bearish'
+    : 'neutral';
+
+  // ── 3. Kumo Twist — Senkou A/B crossover within `lookback` bars ──────────
+  let kumoTwist    = 'neutral';
+  let twistBarsAgo = null;
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx  = n - 1 - offset;
+    const idxP = idx - 1;
+    if (idxP < 0) break;
+    const cur  = results[idx];
+    const prev = results[idxP];
+    if (cur.senkouA == null || cur.senkouB == null) continue;
+    if (prev.senkouA == null || prev.senkouB == null) continue;
+    const prevBull = prev.senkouA > prev.senkouB;
+    const curBull  = cur.senkouA  > cur.senkouB;
+    if (!prevBull && curBull)  { kumoTwist = 'bullish'; twistBarsAgo = offset; break; }
+    if (prevBull  && !curBull) { kumoTwist = 'bearish'; twistBarsAgo = offset; break; }
+  }
+
+  // ── 4. Chikou — current close vs close 26 bars ago ───────────────────────
+  const price26ago = n >= 27 ? candles[n - 1 - 26].close : null;
+  const chikou = price26ago == null ? 'neutral'
+    : last.close > price26ago ? 'bullish'
+    : last.close < price26ago ? 'bearish'
+    : 'neutral';
+
+  // ── 5. Price vs Kijun ────────────────────────────────────────────────────
+  const kijun = last.kijun == null ? 'neutral'
+    : last.close > last.kijun ? 'bullish'
+    : last.close < last.kijun ? 'bearish'
+    : 'neutral';
+
+  // ── Score ─────────────────────────────────────────────────────────────────
+  const checks    = { kumoBreakout, cloudColor, kumoTwist, chikou, kijun };
+  const votes     = Object.values(checks);
+  const bullScore = votes.filter((v) => v === 'bullish').length;
+  const bearScore = votes.filter((v) => v === 'bearish').length;
+  const score     = Math.max(bullScore, bearScore);
+
+  // Signal only on clean 5/5
+  const signal = bullScore === 5 ? 'bullish'
+    : bearScore === 5            ? 'bearish'
+    : null;
+
+  return {
+    signal,
+    score,
+    checks,
+    twistBarsAgo,
+    close:       last.close,
+    kijunValue:  last.kijun,
+    cloudTop:    last.cloudTop,
+    cloudBottom: last.cloudBottom,
+    senkouA:     last.senkouA,
+    senkouB:     last.senkouB,
+    price26ago,
+  };
+}
+
+/**
+ * Kumo Breakout — detects the moment price crossed out of the cloud.
+ *
+ * A breakout is valid only when the crossover itself happened within the last
+ * `lookback` candles AND price is currently still on the breakout side.
+ * If price broke out 3 bars ago and has already re-entered the cloud, the
+ * signal is stale and returns null.
+ *
+ * Bullish breakout: bar[i-1] was NOT above the cloud → bar[i] IS above the cloud.
+ * Bearish breakout: bar[i-1] was NOT below the cloud → bar[i] IS below the cloud.
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=10]  — how many bars back to search for the crossover
+ *
+ * @returns {{
+ *   signal:       'bullish' | 'bearish' | null,
+ *   barsAgo:      number | null,   // candles since the breakout bar (0 = current bar)
+ *   close:        number,
+ *   cloudTop:     number | null,
+ *   cloudBottom:  number | null,
+ *   senkouA:      number | null,
+ *   senkouB:      number | null,
+ * } | null}
+ */
+function getKumoBreakout(candles, { lookback = 10 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  // Price must currently be outside the cloud — if it drifted back in, signal is dead.
+  if (!last.aboveCloud && !last.belowCloud) {
+    return { signal: null, barsAgo: null, close: last.close, cloudTop: last.cloudTop, cloudBottom: last.cloudBottom, senkouA: last.senkouA, senkouB: last.senkouB };
+  }
+
+  const lookingForBullish = last.aboveCloud;
+
+  // Scan backwards from the current bar to find when the cross happened.
+  // offset=0 means the CURRENT bar itself is the breakout bar (price just crossed).
+  for (let offset = 0; offset < lookback; offset++) {
+    const idx  = n - 1 - offset; // candidate breakout bar
+    const idxP = idx - 1;        // bar just before it
+    if (idxP < 0) break;
+
+    const cur  = results[idx];
+    const prev = results[idxP];
+
+    if (lookingForBullish) {
+      // Breakout bar: was NOT above cloud, then became above cloud
+      if (cur.aboveCloud && !prev.aboveCloud) {
+        return {
+          signal:      'bullish',
+          barsAgo:     offset,
+          close:       last.close,
+          cloudTop:    last.cloudTop,
+          cloudBottom: last.cloudBottom,
+          senkouA:     last.senkouA,
+          senkouB:     last.senkouB,
+        };
+      }
+      // If price was already above cloud before this bar, the cross is even older — keep searching
+    } else {
+      // Bearish — was NOT below cloud, then became below cloud
+      if (cur.belowCloud && !prev.belowCloud) {
+        return {
+          signal:      'bearish',
+          barsAgo:     offset,
+          close:       last.close,
+          cloudTop:    last.cloudTop,
+          cloudBottom: last.cloudBottom,
+          senkouA:     last.senkouA,
+          senkouB:     last.senkouB,
+        };
+      }
+    }
+  }
+
+  // Price is outside the cloud but the crossover happened more than `lookback` bars ago — stale.
+  return { signal: null, barsAgo: null, close: last.close, cloudTop: last.cloudTop, cloudBottom: last.cloudBottom, senkouA: last.senkouA, senkouB: last.senkouB };
+}
+
+/**
+ * Kumo Twist — detects a recent Senkou A / Senkou B crossover (cloud color flip).
+ *
+ * A twist is a forward-looking signal: the cloud is changing bias.
+ * This function only reports the twist if it occurred within the last `lookback` candles.
+ * It does NOT require price to be above/below the cloud — the twist alone is the signal.
+ *
+ * Bullish twist: Senkou A crossed ABOVE Senkou B → cloud turned green.
+ * Bearish twist: Senkou A crossed BELOW Senkou B → cloud turned red.
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=10]  — how many bars back to search for a twist
+ *
+ * @returns {{
+ *   signal:       'bullish' | 'bearish' | null,
+ *   barsAgo:      number | null,
+ *   close:        number,
+ *   senkouA:      number | null,
+ *   senkouB:      number | null,
+ *   cloudColor:   'bullish' | 'bearish' | null,   // current cloud color (post-twist)
+ * } | null}
+ */
+function getKumoTwist(candles, { lookback = 10 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  // Current cloud color (independent of whether a recent twist exists)
+  const cloudColor = last.senkouA == null || last.senkouB == null ? null
+    : last.senkouA > last.senkouB ? 'bullish'
+    : last.senkouA < last.senkouB ? 'bearish'
+    : null;
+
+  // Scan backwards: look for the bar where senkouA crossed senkouB.
+  // offset=1 means the PREVIOUS bar was the twist bar (most recent closed candle was the cross).
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx  = n - 1 - offset; // candidate twist bar
+    const idxP = idx - 1;        // bar just before it
+    if (idxP < 0) break;
+
+    const cur  = results[idx];
+    const prev = results[idxP];
+    if (cur.senkouA == null || cur.senkouB == null) continue;
+    if (prev.senkouA == null || prev.senkouB == null) continue;
+
+    const prevBullish = prev.senkouA > prev.senkouB;
+    const curBullish  = cur.senkouA  > cur.senkouB;
+
+    if (!prevBullish && curBullish) {
+      // Senkou A crossed above Senkou B — bullish twist
+      return { signal: 'bullish', barsAgo: offset, close: last.close, senkouA: last.senkouA, senkouB: last.senkouB, cloudColor };
+    }
+    if (prevBullish && !curBullish) {
+      // Senkou A crossed below Senkou B — bearish twist
+      return { signal: 'bearish', barsAgo: offset, close: last.close, senkouA: last.senkouA, senkouB: last.senkouB, cloudColor };
+    }
+  }
+
+  // No twist found within the lookback window
+  return { signal: null, barsAgo: null, close: last.close, senkouA: last.senkouA, senkouB: last.senkouB, cloudColor };
+}
+
 function round(n) {
   return Math.round(n * 100) / 100;
 }
 
-module.exports = { calculate, snapshot, getSignals };
+module.exports = { calculate, snapshot, getSignals, getKumoBreakoutTwist, getKumoBreakout, getKumoTwist };

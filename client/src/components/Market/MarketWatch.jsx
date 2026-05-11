@@ -25,17 +25,18 @@ const INTERVALS = [
 
 // Timeframes shown on the INDEX tab
 const INDEX_TFS = [
-    { value: "minute", label: "1m" },
-    { value: "3minute", label: "3m" },
-    { value: "5minute", label: "5m" },
-    { value: "15minute", label: "15m" }
+    { value: "15minute", label: "15m" },
+    { value: "60minute", label: "1h" },
+    { value: "4h",       label: "4h" },
+    { value: "day",      label: "1d" }
 ];
 
-// Timeframes shown on the Stocks tab
+// Timeframes shown on the Stocks tab — matches macro/index panel set
 const STOCK_TFS = [
-    { value: "minute", label: "1m" },
-    { value: "5minute", label: "5m" },
-    { value: "15minute", label: "15m" }
+    { value: "15minute", label: "15m" },
+    { value: "60minute", label: "1h" },
+    { value: "4h",       label: "4h" },
+    { value: "day",      label: "1d" },
 ];
 
 const TABS = [
@@ -484,6 +485,184 @@ function StockFuturesPanel({
     );
 }
 
+// ── Pattern Scanner ───────────────────────────────────────────────────────────
+// Fetches the registered pattern list from the server, lets the user pick one
+// + choose timeframes, then POSTs to /api/scan and shows matching instruments.
+
+const SCAN_TFS = [
+    { value: "15minute", label: "15m" },
+    { value: "60minute", label: "1h"  },
+    { value: "4h",       label: "4h"  },
+    { value: "day",      label: "1d"  },
+];
+
+
+// onResults(matchedTokens: Set<number> | null) — called after every scan or clear.
+// null means no active filter; the parent shows all rows.
+//
+// instruments — optional explicit list [{ instrumentToken, tradingsymbol, exchange, name }].
+//   When supplied the scan is limited to those tokens (used for Index / Macro tabs whose
+//   instruments are not necessarily in the persistent server watchlist).
+//   When omitted the server scans the full watchlist.
+function PatternScanner({ onResults, instruments = null }) {
+    const [patterns,  setPatterns]  = useState([]);
+    const [patternId, setPatternId] = useState("");
+    const [interval,  setInterval]  = useState("15minute"); // single timeframe at a time
+    const [scanning,  setScanning]  = useState(false);
+    const [summary,   setSummary]   = useState(null); // { label, matched, scanned, total }
+    const [error,     setError]     = useState("");
+
+    // Load pattern list once on mount
+    useEffect(() => {
+        api.get("/scan/patterns")
+            .then(r => {
+                setPatterns(r.data);
+                if (r.data.length > 0) setPatternId(r.data[0].id);
+            })
+            .catch(() => setError("Could not load patterns"));
+    }, []);
+
+    async function handleScan() {
+        if (!patternId || !interval) return;
+        setScanning(true);
+        setError("");
+        try {
+            const body = { patternId, intervals: [interval] };
+            if (instruments) body.instruments = instruments;
+            const r = await api.post("/scan", body);
+            const { matches, scannedCount, totalInstruments, patternLabel } = r.data;
+            // Pass the matched token set up to the parent so it can filter the table
+            onResults(new Set(matches.map(m => m.token)));
+            setSummary({ label: patternLabel, matched: matches.length, scanned: scannedCount, total: totalInstruments });
+        } catch (e) {
+            setError(e.response?.data?.error || e.message);
+        } finally {
+            setScanning(false);
+        }
+    }
+
+    function handleClear() {
+        onResults(null);
+        setSummary(null);
+        setError("");
+    }
+
+    const activePattern = patterns.find(p => p.id === patternId);
+    const isFiltered    = summary !== null;
+    const tfLabel       = SCAN_TFS.find(t => t.value === interval)?.label ?? interval;
+
+    return (
+        <div style={{ padding: "10px 0 6px" }}>
+            <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+
+                {/* Pattern picker */}
+                <select
+                    value={patternId}
+                    onChange={e => { setPatternId(e.target.value); handleClear(); }}
+                    style={{
+                        background: "#1e293b", border: "1px solid #334155", borderRadius: 6,
+                        color: "#e2e8f0", fontSize: 13, padding: "6px 10px", cursor: "pointer",
+                        minWidth: 220,
+                    }}
+                >
+                    {patterns.length === 0 && <option value="">Loading…</option>}
+                    {patterns.map(p => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                    ))}
+                </select>
+
+                {/* Timeframe selector — single selection only */}
+                <div style={{ display: "flex", gap: 4 }}>
+                    {SCAN_TFS.map(tf => {
+                        const active = interval === tf.value;
+                        return (
+                            <button
+                                key={tf.value}
+                                onClick={() => { setInterval(tf.value); handleClear(); }}
+                                style={{
+                                    padding: "5px 10px", borderRadius: 5, fontSize: 12,
+                                    fontWeight: 600, cursor: "pointer",
+                                    background: active ? "#1e40af" : "#1e293b",
+                                    border: `1px solid ${active ? "#3b82f6" : "#334155"}`,
+                                    color: active ? "#93c5fd" : "#475569",
+                                }}
+                            >
+                                {tf.label}
+                            </button>
+                        );
+                    })}
+                </div>
+
+                {/* Scan button */}
+                <button
+                    onClick={handleScan}
+                    disabled={scanning || !patternId || !interval}
+                    style={{
+                        padding: "6px 20px", borderRadius: 6, fontSize: 13, fontWeight: 700,
+                        cursor: scanning || !patternId ? "not-allowed" : "pointer",
+                        background: scanning ? "#1e293b" : "#2563eb",
+                        border: `1px solid ${scanning ? "#334155" : "#3b82f6"}`,
+                        color: scanning ? "#475569" : "#fff",
+                    }}
+                >
+                    {scanning ? "Scanning…" : "⌖ Scan"}
+                </button>
+
+                {/* Clear filter */}
+                {isFiltered && (
+                    <button
+                        onClick={handleClear}
+                        style={{
+                            padding: "5px 12px", borderRadius: 6, fontSize: 12,
+                            background: "transparent", border: "1px solid #334155",
+                            color: "#64748b", cursor: "pointer",
+                        }}
+                    >
+                        ✕ Clear filter
+                    </button>
+                )}
+            </div>
+
+            {/* One-line status: description when idle, result count when filtered */}
+            {error ? (
+                <div style={{ marginTop: 5, fontSize: 11, color: "#ef4444" }}>{error}</div>
+            ) : isFiltered ? (
+                <div style={{ marginTop: 5, fontSize: 11, color: "#64748b" }}>
+                    <span style={{ color: summary.matched > 0 ? "#22c55e" : "#94a3b8", fontWeight: 600 }}>
+                        {summary.matched} match{summary.matched !== 1 ? "es" : ""}
+                    </span>
+                    {" "}on {tfLabel} · {summary.total} instruments scanned
+                    {summary.matched === 0 && (
+                        <span style={{ color: "#475569", fontStyle: "italic" }}> — no matches, showing all</span>
+                    )}
+                </div>
+            ) : activePattern?.description ? (
+                <div style={{ marginTop: 5, fontSize: 11, color: "#475569" }}>
+                    {activePattern.description}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
+// ── Macro-specific PatternScanner wrapper ─────────────────────────────────────
+// Derives the 5 macro instrument descriptors from the Zustand store so they can
+// be passed to PatternScanner as an explicit token list (macro instruments are
+// subscribed to the ticker but are not stored in the server watchlist).
+function MacroPatternScanner({ onResults }) {
+    const macroData = useAppStore(s => s.macroData);
+
+    const instruments = macroData ? [
+        macroData.vix    && { instrumentToken: macroData.vix.instrumentToken,    tradingsymbol: 'INDIAVIX',                    exchange: 'NSE', name: 'India VIX'  },
+        macroData.crude  && { instrumentToken: macroData.crude.instrumentToken,  tradingsymbol: macroData.crude.tradingsymbol,  exchange: 'MCX', name: 'Crude Oil'  },
+        macroData.gold   && { instrumentToken: macroData.gold.instrumentToken,   tradingsymbol: macroData.gold.tradingsymbol,   exchange: 'MCX', name: 'Gold'       },
+        macroData.silver && { instrumentToken: macroData.silver.instrumentToken, tradingsymbol: macroData.silver.tradingsymbol, exchange: 'MCX', name: 'Silver'     },
+        macroData.usdinr && { instrumentToken: macroData.usdinr.instrumentToken, tradingsymbol: macroData.usdinr.tradingsymbol, exchange: 'CDS', name: 'USD/INR'    },
+    ].filter(Boolean) : [];
+
+    return <PatternScanner onResults={onResults} instruments={instruments.length ? instruments : null} />;
+}
+
 // ── Inline symbol search (table footer row) ───────────────────────────────────
 function InlineSearch({ onAdd, colSpan }) {
     const [query, setQuery] = useState("");
@@ -703,7 +882,7 @@ function WatchRow({ item, interval, onRemove, mode = "full" }) {
         );
     }
 
-    // ── stock mode (stocks tab) — Symbol | LTP | Chg% | 1m | 5m | 15m | Remove ─
+    // ── stock mode (stocks tab) — Symbol | LTP | Chg% | 15m | 1h | 4h | 1d | Remove ─
     return (
         <tr>
             <td>
@@ -756,11 +935,11 @@ const _subscribedTabs = new Set();
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function MarketWatch() {
-    const watchlist = useAppStore(s => s.watchlist);
-    const setWatchlist = useAppStore(s => s.setWatchlist);
-    const addToWatchlist = useAppStore(s => s.addToWatchlist);
+    const watchlist           = useAppStore(s => s.watchlist);
+    const setWatchlist        = useAppStore(s => s.setWatchlist);
+    const addToWatchlist      = useAppStore(s => s.addToWatchlist);
     const removeFromWatchlist = useAppStore(s => s.removeFromWatchlist);
-    const tickerConnected = useAppStore(s => s.tickerConnected);
+    const tickerConnected     = useAppStore(s => s.tickerConnected);
 
     const [activeTab, setActiveTab] = useState("INDEX");
     const [interval, setInterval] = useState("15minute");
@@ -903,7 +1082,7 @@ export default function MarketWatch() {
         window.location.reload();
     }
 
-    // Tab click: switch tab, reset stock filter, subscribe ATM only if not already done
+    // Tab click: switch tab
     async function handleTabClick(tabId) {
         setActiveTab(tabId);
         if (tabId !== "STOCKS") setStockFilter("");
@@ -925,10 +1104,14 @@ export default function MarketWatch() {
     }
 
     const allTabItems = activeTab === "INDEX" ? [] : getTabItems(watchlist, activeTab);
-    const tabItems =
-        activeTab === "STOCKS" && stockFilter
-            ? allTabItems.filter(i => i.name.includes(stockFilter) || i.tradingsymbol.includes(stockFilter))
-            : allTabItems;
+    const tabItems = (() => {
+        let items = allTabItems;
+        // Text filter (stocks tab search box)
+        if (activeTab === "STOCKS" && stockFilter) {
+            items = items.filter(i => i.name.includes(stockFilter) || i.tradingsymbol.includes(stockFilter));
+        }
+        return items;
+    })();
     const tabCounts = Object.fromEntries(
         TABS.filter(t => t.id !== "INDEX").map(t => [t.id, getTabItems(watchlist, t.id).length])
     );
@@ -997,6 +1180,9 @@ export default function MarketWatch() {
             {TAB_INDEX[activeTab] && <IndexStatusBar tabId={activeTab} watchlist={watchlist} />}
 
             <div style={{ display: activeTab === "STOCKS" ? "block" : "none" }}>
+                {/* PatternScanner removed from Stocks tab for now — commented out
+                <PatternScanner onResults={setScanFilter} />
+                */}
                 <StockFuturesPanel
                     watchlist={watchlist}
                     futLoading={futLoading}
@@ -1012,46 +1198,34 @@ export default function MarketWatch() {
             {/* Table — not shown for INDEX or MACRO tabs */}
             {activeTab !== "INDEX" && activeTab !== "MACRO" &&
                 (() => {
-                    const isIndexTab = !!TAB_INDEX[activeTab];
+                    const isIndexTab  = !!TAB_INDEX[activeTab];
                     const isStocksTab = activeTab === "STOCKS";
-                    const colSpan = isIndexTab ? 5 : isStocksTab ? 7 : 8;
+                    // Symbol + LTP + Chg% + (4 TFs or 1 signal col) + Remove
+                    const colSpan = isIndexTab ? 5 : isStocksTab ? 8 : 8;
                     const rowMode = isIndexTab ? "signal" : "full";
+
                     return (
                         <div className="kite-table-wrap">
                             <table className="kite-table">
                                 <thead>
                                     <tr>
                                         <th style={{ width: "28%" }}>Symbol</th>
-                                        <th className="th-right" style={{ width: "13%" }}>
-                                            LTP
-                                        </th>
-                                        <th className="th-right" style={{ width: "9%" }}>
-                                            Chg%
-                                        </th>
+                                        <th className="th-right" style={{ width: "13%" }}>LTP</th>
+                                        <th className="th-right" style={{ width: "9%" }}>Chg%</th>
                                         {isIndexTab ? (
-                                            <th className="td-center" style={{ width: "22%" }}>
-                                                Signal
-                                            </th>
+                                            <th className="td-center" style={{ width: "22%" }}>Signal</th>
                                         ) : isStocksTab ? (
                                             STOCK_TFS.map(tf => (
-                                                <th key={tf.value} className="td-center" style={{ width: "13%" }}>
+                                                <th key={tf.value} className="td-center" style={{ width: "10%" }}>
                                                     {tf.label}
                                                 </th>
                                             ))
                                         ) : (
                                             <>
-                                                <th className="th-right" style={{ width: "8%" }}>
-                                                    Chikou
-                                                </th>
-                                                <th className="th-right" style={{ width: "11%" }}>
-                                                    Kijun
-                                                </th>
-                                                <th className="th-right" style={{ width: "7%" }}>
-                                                    Cloud
-                                                </th>
-                                                <th className="th-right" style={{ width: "11%" }}>
-                                                    Tenkan
-                                                </th>
+                                                <th className="th-right" style={{ width: "8%" }}>Chikou</th>
+                                                <th className="th-right" style={{ width: "11%" }}>Kijun</th>
+                                                <th className="th-right" style={{ width: "7%" }}>Cloud</th>
+                                                <th className="th-right" style={{ width: "11%" }}>Tenkan</th>
                                             </>
                                         )}
                                         <th style={{ width: "5%" }}></th>
@@ -1060,15 +1234,10 @@ export default function MarketWatch() {
                                 <tbody>
                                     {tabItems.length === 0 ? (
                                         <tr>
-                                            <td
-                                                colSpan={colSpan}
-                                                style={{
-                                                    textAlign: "center",
-                                                    padding: "20px",
-                                                    color: "var(--txt3)",
-                                                    fontSize: 13
-                                                }}
-                                            >
+                                            <td colSpan={colSpan} style={{
+                                                textAlign: "center", padding: "20px",
+                                                color: "var(--txt3)", fontSize: 13,
+                                            }}>
                                                 No instruments — use the search below to add
                                             </td>
                                         </tr>

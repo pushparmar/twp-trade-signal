@@ -1,12 +1,12 @@
 /**
- * Macro analysis — VIX, Crude Oil, USDINR.
+ * Macro analysis — VIX, Crude Oil, Gold, Silver, USDINR.
  * Uses candleStore (live ticks) for real-time data.
  * Shared by both the REST route and macroWatcher (SSE push).
  */
 
-const candleStore     = require('./candleStore');
-const instrumentCache = require('./instrumentCache');
-const { getSignals }  = require('./ichimoku');
+const candleStore      = require('./candleStore');
+const instrumentCache  = require('./instrumentCache');
+const { getSignals }   = require('./ichimoku');
 
 const VIX_TOKEN = 264969; // NSE:INDIA VIX
 
@@ -60,7 +60,7 @@ function _vixZone(v) {
 }
 
 function _ichiSignal(candles) {
-  if (candles.length < 52) return { signal: 'neutral', ichi: null };
+  if (candles.length < 26) return { signal: 'neutral', ichi: null };
   const raw = getSignals(candles);
   if (!raw) return { signal: 'neutral', ichi: null };
 
@@ -85,12 +85,10 @@ function _direction(timeframes) {
   };
 }
 
-function getFrontMonthFutures(query, exchange) {
+function getFrontMonthFutures(name, exchange) {
   if (!instrumentCache.isLoaded()) return null;
-  const futures = instrumentCache.search(query, exchange).filter((i) => i.instrumentType === 'FUT');
-  if (!futures.length) return null;
-  futures.sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
-  return futures[0];
+  // Use exact-name lookup — avoids GOLDM/GOLDGUINEA when searching for GOLD
+  return instrumentCache.getFrontMonthFuture(name, exchange);
 }
 
 async function _analyzeVix() {
@@ -128,6 +126,7 @@ async function _analyzeVix() {
 
   return {
     ...(_direction(tfs)),
+    instrumentToken: VIX_TOKEN,
     currentVix: (a1d || a1h || a15m)?.current ?? null,
     timeframes:  tfs,
   };
@@ -171,10 +170,103 @@ async function _analyzeCrude() {
 
   return {
     ...(_direction(tfs)),
-    currentPrice:  (a1d || a1h || a15m)?.current ?? null,
-    tradingsymbol: inst.tradingsymbol,
-    expiry:        inst.expiry,
-    timeframes:    tfs,
+    instrumentToken: inst.instrumentToken,
+    currentPrice:    (a1d || a1h || a15m)?.current ?? null,
+    tradingsymbol:   inst.tradingsymbol,
+    expiry:          inst.expiry,
+    timeframes:      tfs,
+  };
+}
+
+async function _analyzeGold() {
+  const inst = getFrontMonthFutures('GOLD', 'MCX');
+  if (!inst) return { error: 'Instrument cache not loaded or GOLD not found on MCX', timeframes: [] };
+
+  const tfs = [];
+
+  const c15m = await candleStore.getCandles(inst.instrumentToken, '15minute');
+  const a15m = _analyze(c15m, '15m');
+  if (a15m) {
+    const { signal, ichi } = _ichiSignal(c15m);
+    tfs.push({ key: '15m', ...a15m, signal, ichi });
+  }
+
+  const c1h = await candleStore.getCandles(inst.instrumentToken, '60minute');
+  const a1h = _analyze(c1h, '1h');
+  if (a1h) {
+    const { signal, ichi } = _ichiSignal(c1h);
+    tfs.push({ key: '1h', ...a1h, signal, ichi });
+  }
+
+  if (c1h && c1h.length >= 8) {
+    const c4h = _to4H(c1h);
+    const a4h = _analyze(c4h, '4h');
+    if (a4h) {
+      const { signal, ichi } = _ichiSignal(c4h);
+      tfs.push({ key: '4h', ...a4h, signal, ichi });
+    }
+  }
+
+  const c1d = await candleStore.getCandles(inst.instrumentToken, 'day');
+  const a1d = _analyze(c1d, '1d');
+  if (a1d) {
+    const { signal, ichi } = _ichiSignal(c1d);
+    tfs.push({ key: '1d', ...a1d, signal, ichi });
+  }
+
+  return {
+    ...(_direction(tfs)),
+    instrumentToken: inst.instrumentToken,
+    currentPrice:    (a1d || a1h || a15m)?.current ?? null,
+    tradingsymbol:   inst.tradingsymbol,
+    expiry:          inst.expiry,
+    timeframes:      tfs,
+  };
+}
+
+async function _analyzeSilver() {
+  const inst = getFrontMonthFutures('SILVER', 'MCX');
+  if (!inst) return { error: 'Instrument cache not loaded or SILVER not found on MCX', timeframes: [] };
+
+  const tfs = [];
+
+  const c15m = await candleStore.getCandles(inst.instrumentToken, '15minute');
+  const a15m = _analyze(c15m, '15m');
+  if (a15m) {
+    const { signal, ichi } = _ichiSignal(c15m);
+    tfs.push({ key: '15m', ...a15m, signal, ichi });
+  }
+
+  const c1h = await candleStore.getCandles(inst.instrumentToken, '60minute');
+  const a1h = _analyze(c1h, '1h');
+  if (a1h) {
+    const { signal, ichi } = _ichiSignal(c1h);
+    tfs.push({ key: '1h', ...a1h, signal, ichi });
+  }
+
+  if (c1h && c1h.length >= 8) {
+    const c4h = _to4H(c1h);
+    const a4h = _analyze(c4h, '4h');
+    if (a4h) {
+      const { signal, ichi } = _ichiSignal(c4h);
+      tfs.push({ key: '4h', ...a4h, signal, ichi });
+    }
+  }
+
+  const c1d = await candleStore.getCandles(inst.instrumentToken, 'day');
+  const a1d = _analyze(c1d, '1d');
+  if (a1d) {
+    const { signal, ichi } = _ichiSignal(c1d);
+    tfs.push({ key: '1d', ...a1d, signal, ichi });
+  }
+
+  return {
+    ...(_direction(tfs)),
+    instrumentToken: inst.instrumentToken,
+    currentPrice:    (a1d || a1h || a15m)?.current ?? null,
+    tradingsymbol:   inst.tradingsymbol,
+    expiry:          inst.expiry,
+    timeframes:      tfs,
   };
 }
 
@@ -216,16 +308,33 @@ async function _analyzeUsdinr() {
 
   return {
     ...(_direction(tfs)),
-    currentPrice:  (a1d || a1h || a15m)?.current ?? null,
-    tradingsymbol: inst.tradingsymbol,
-    expiry:        inst.expiry,
-    timeframes:    tfs,
+    instrumentToken: inst.instrumentToken,
+    currentPrice:    (a1d || a1h || a15m)?.current ?? null,
+    tradingsymbol:   inst.tradingsymbol,
+    expiry:          inst.expiry,
+    timeframes:      tfs,
   };
 }
 
 async function analyze() {
-  const [vix, crude, usdinr] = await Promise.all([_analyzeVix(), _analyzeCrude(), _analyzeUsdinr()]);
-  return { vix, crude, usdinr };
+  // allSettled — one instrument's historical-API failure (e.g. user has no MCX
+  // segment access) shouldn't kill the entire macro response.
+  const results = await Promise.allSettled([
+    _analyzeVix(), _analyzeCrude(), _analyzeGold(), _analyzeSilver(), _analyzeUsdinr(),
+  ]);
+  const [vixR, crudeR, goldR, silverR, usdinrR] = results;
+  const unwrap = (r, label) => {
+    if (r.status === 'fulfilled') return r.value;
+    console.warn(`[MacroAnalysis] ${label} failed:`, r.reason?.message || r.reason);
+    return { error: r.reason?.message || String(r.reason), timeframes: [] };
+  };
+  return {
+    vix:    unwrap(vixR,    'VIX'),
+    crude:  unwrap(crudeR,  'Crude'),
+    gold:   unwrap(goldR,   'Gold'),
+    silver: unwrap(silverR, 'Silver'),
+    usdinr: unwrap(usdinrR, 'USDINR'),
+  };
 }
 
 module.exports = { analyze, VIX_TOKEN, getFrontMonthFutures };

@@ -14,11 +14,13 @@ const instrumentsRouter = require('./routes/instruments');
 const historicalRouter = require('./routes/historical');
 const ichimokuRouter = require('./routes/ichimoku');
 const macroRouter    = require('./routes/macro');
+const scanRouter     = require('./routes/scan');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
-const indexSignalWatcher = require('./services/indexSignalWatcher');
-const macroWatcher       = require('./services/macroWatcher');
+const indexSignalWatcher    = require('./services/indexSignalWatcher');
+const macroWatcher          = require('./services/macroWatcher');
+const patternAlertWatcher   = require('./services/patternAlertWatcher');
 const store = require('./store');
 
 const app = express();
@@ -74,6 +76,7 @@ app.use('/api/instruments', instrumentsRouter);
 app.use('/api/historical', historicalRouter);
 app.use('/api/ichimoku', ichimokuRouter);
 app.use('/api/macro',   macroRouter);
+app.use('/api/scan',    scanRouter);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
@@ -115,6 +118,12 @@ app.listen(PORT, async () => {
       macroWatcher.start();
     } catch (err) {
       console.warn('[MacroWatcher] Could not start:', err.message);
+    }
+
+    try {
+      patternAlertWatcher.start();
+    } catch (err) {
+      console.warn('[PatternAlert] Could not start:', err.message);
     }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
