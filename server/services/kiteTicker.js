@@ -4,6 +4,7 @@ const { broadcast } = require('../sseHub');
 const candleStore = require('./candleStore');
 const { getSignals } = require('./ichimoku');
 const indexSignalWatcher = require('./indexSignalWatcher');
+const macroWatcher       = require('./macroWatcher');
 
 let _ticker = null;
 let _connected = false;
@@ -98,6 +99,8 @@ function connect() {
 
         // Check index signals immediately on candle close — no polling delay
         indexSignalWatcher.onCandleClose(token, interval).catch(() => {});
+        // Recompute macro analysis and push to clients on every candle close
+        macroWatcher.onCandleClose(token, interval).catch(() => {});
       });
     }
   });

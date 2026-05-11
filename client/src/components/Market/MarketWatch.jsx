@@ -984,17 +984,19 @@ export default function MarketWatch() {
                 </div>
             </div>
 
-            {/* INDEX tab — multi-timeframe signal table */}
-            {activeTab === "INDEX" && <IndexTab watchlist={watchlist} />}
+            {/* Always mounted — CSS controls visibility so state/SSE data never resets on tab switch */}
 
-            {/* Macro tab — VIX + Crude contra view */}
-            {activeTab === "MACRO" && <MacroPanel />}
+            <div style={{ display: activeTab === "INDEX" ? "block" : "none" }}>
+                <IndexTab watchlist={watchlist} />
+            </div>
 
-            {/* Ichimoku status bar — NIFTY/BANKNIFTY/SENSEX option tabs only */}
+            <div style={{ display: activeTab === "MACRO" ? "block" : "none" }}>
+                <MacroPanel />
+            </div>
+
             {TAB_INDEX[activeTab] && <IndexStatusBar tabId={activeTab} watchlist={watchlist} />}
 
-            {/* Full futures list — Stocks tab only */}
-            {activeTab === "STOCKS" && (
+            <div style={{ display: activeTab === "STOCKS" ? "block" : "none" }}>
                 <StockFuturesPanel
                     watchlist={watchlist}
                     futLoading={futLoading}
@@ -1005,10 +1007,10 @@ export default function MarketWatch() {
                     onSubscribeMovers={subscribeMovers}
                     onClearAll={unsubscribeAllFutures}
                 />
-            )}
+            </div>
 
-            {/* Table — not shown for INDEX tab */}
-            {activeTab !== "INDEX" &&
+            {/* Table — not shown for INDEX or MACRO tabs */}
+            {activeTab !== "INDEX" && activeTab !== "MACRO" &&
                 (() => {
                     const isIndexTab = !!TAB_INDEX[activeTab];
                     const isStocksTab = activeTab === "STOCKS";

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../api';
+import useAppStore from '../../store/appStore';
 
 const SIGNAL_COLOR = { bullish: '#22c55e', bearish: '#ef4444', neutral: '#94a3b8' };
 const SIGNAL_ICON  = { bullish: '↑', bearish: '↓', neutral: '→' };
@@ -13,8 +14,7 @@ const VIX_ZONE_LABEL = {
   elevated: 'Elevated', fear: 'Fear', extreme: 'Extreme',
 };
 
-const TF_KEYS   = ['15m', '1h', '4h', '1d'];
-const TF_LABELS = { '15m': '15m', '1h': '1h', '4h': '4h', '1d': '1d' };
+const TF_KEYS = ['15m', '1h', '4h', '1d'];
 
 const ICHI_LABELS = { cloud: '☁', kijun: 'K', chikou: 'C', tenkan: 'T' };
 
@@ -22,15 +22,12 @@ function IchiDots({ ichi }) {
   if (!ichi) return null;
   return (
     <div style={{ display: 'flex', justifyContent: 'center', gap: 4, marginTop: 3 }}>
-      {Object.entries(ICHI_LABELS).map(([key, label]) => {
-        const sig = ichi[key];
-        const color = SIGNAL_COLOR[sig] || '#334155';
-        return (
-          <span key={key} title={`${key}: ${sig}`} style={{ fontSize: 10, color, fontWeight: 600 }}>
-            {label}
-          </span>
-        );
-      })}
+      {Object.entries(ICHI_LABELS).map(([key, label]) => (
+        <span key={key} title={`${key}: ${ichi[key]}`}
+          style={{ fontSize: 10, color: SIGNAL_COLOR[ichi[key]] || '#334155', fontWeight: 600 }}>
+          {label}
+        </span>
+      ))}
     </div>
   );
 }
@@ -38,11 +35,11 @@ function IchiDots({ ichi }) {
 function TfCell({ tf, showZone }) {
   if (!tf) return <td style={{ color: '#334155', textAlign: 'center' }}>—</td>;
   const sigColor = SIGNAL_COLOR[tf.signal] || '#94a3b8';
-  const chgColor = SIGNAL_COLOR[tf.signal] || '#94a3b8';
+  const arrowColor = SIGNAL_COLOR[tf.signal] || '#94a3b8';
   return (
     <td style={{ textAlign: 'center', padding: '6px 4px' }}>
       <div style={{ fontFamily: 'monospace', fontSize: 12, color: '#cbd5e1', marginBottom: 2 }}>
-        <span style={{ color: chgColor }}>{SIGNAL_ICON[tf.signal]}</span> {tf.current}
+        <span style={{ color: arrowColor }}>{SIGNAL_ICON[tf.signal]}</span> {tf.current}
       </div>
       {showZone && tf.zone && (
         <div style={{ fontSize: 10, color: VIX_ZONE_COLOR[tf.zone] || '#94a3b8', marginBottom: 2 }}>
@@ -64,8 +61,7 @@ function BiasCell({ direction, confidence }) {
       <div style={{
         display: 'inline-block', padding: '3px 10px', borderRadius: 99,
         background: color + '22', border: `1px solid ${color}`,
-        color, fontWeight: 700, fontSize: 11, letterSpacing: 0.5,
-        whiteSpace: 'nowrap',
+        color, fontWeight: 700, fontSize: 11, letterSpacing: 0.5, whiteSpace: 'nowrap',
       }}>
         {direction?.toUpperCase() ?? '—'}
       </div>
@@ -94,33 +90,40 @@ function InstrumentRow({ label, sublabel, current, direction, confidence, timefr
 }
 
 export default function MacroPanel() {
-  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState('');
 
+  // Live data from SSE — updated on every candle close
+  const macroData   = useAppStore((s) => s.macroData);
+  const setMacroData = useAppStore((s) => s.setMacroData);
+
+  // Initial load via REST — SSE takes over after first candle close
   const load = useCallback(async () => {
     try {
       const r = await api.get('/macro/analysis');
-      setData(r.data);
+      setMacroData(r.data);
       setError('');
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setMacroData]);
 
   useEffect(() => {
-    load();
-    const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
-  }, [load]);
+    // Only fetch via REST if store is empty (first mount)
+    if (!macroData) {
+      load();
+    } else {
+      setLoading(false);
+    }
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) return <div style={{ padding: 32, color: '#64748b', textAlign: 'center' }}>Loading…</div>;
   if (error)   return <div style={{ padding: 32, color: '#ef4444', textAlign: 'center' }}>{error}</div>;
-  if (!data)   return null;
+  if (!macroData) return null;
 
-  const { vix, crude, usdinr } = data;
+  const { vix, crude, usdinr } = macroData;
 
   return (
     <div style={{ padding: '0 4px' }}>
@@ -130,7 +133,7 @@ export default function MacroPanel() {
             <tr>
               <th className="idx-th-name" style={{ paddingLeft: 12 }}>Instrument</th>
               {TF_KEYS.map((k) => (
-                <th key={k} className="idx-th-tf" style={{ textAlign: 'center' }}>{TF_LABELS[k]}</th>
+                <th key={k} className="idx-th-tf" style={{ textAlign: 'center' }}>{k}</th>
               ))}
               <th className="idx-th-tf" style={{ textAlign: 'center' }}>Bias</th>
             </tr>
@@ -167,10 +170,8 @@ export default function MacroPanel() {
       </div>
 
       <div style={{ padding: '10px 4px 0', fontSize: 11, color: '#475569', lineHeight: 1.8 }}>
-        <span style={{ color: '#94a3b8' }}>Signals show instrument own direction. &nbsp;</span>
-        VIX bullish = fear rising → equity risk &nbsp;·&nbsp;
-        Crude bullish = oil rising → margin pressure &nbsp;·&nbsp;
-        USDINR bullish = rupee weakening<br />
+        Signals show instrument own direction. &nbsp;
+        VIX↑ = fear rising &nbsp;·&nbsp; Crude↑ = oil rising &nbsp;·&nbsp; USDINR↑ = rupee weakening<br />
         <span style={{ color: VIX_ZONE_COLOR.calm }}>■</span> VIX &lt;16 Calm &nbsp;
         <span style={{ color: VIX_ZONE_COLOR.normal }}>■</span> 16–20 Normal &nbsp;
         <span style={{ color: VIX_ZONE_COLOR.elevated }}>■</span> 20–25 Elevated &nbsp;

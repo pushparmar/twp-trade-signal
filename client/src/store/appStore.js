@@ -18,6 +18,7 @@ const useAppStore = create((set) => ({
   ticks: {},           // { [instrumentToken]: { lastPrice, ohlc, volume, change, prevPrice } }
   tickerConnected: false,
   ichiSignals: {},  // { [`${token}:${interval}`]: ichimokuSignals } — pushed by server on candle close
+  macroData: null,  // { vix, crude, usdinr } — pushed by server on every macro candle close
 
   setPollingStatus: (pollingStatus) => set({ pollingStatus }),
   setKiteConnected: (kiteConnected) => set({ kiteConnected }),
@@ -92,6 +93,7 @@ const useAppStore = create((set) => ({
     set((state) => ({
       ichiSignals: { ...state.ichiSignals, [`${token}:${interval}`]: signals },
     })),
+  setMacroData: (macroData) => set({ macroData }),
 }));
 
 export default useAppStore;

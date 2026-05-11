@@ -18,6 +18,7 @@ const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
 const indexSignalWatcher = require('./services/indexSignalWatcher');
+const macroWatcher       = require('./services/macroWatcher');
 const store = require('./store');
 
 const app = express();
@@ -108,6 +109,12 @@ app.listen(PORT, async () => {
       indexSignalWatcher.start();
     } catch (err) {
       console.warn('[IndexSignalWatcher] Could not start:', err.message);
+    }
+
+    try {
+      macroWatcher.start();
+    } catch (err) {
+      console.warn('[MacroWatcher] Could not start:', err.message);
     }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
