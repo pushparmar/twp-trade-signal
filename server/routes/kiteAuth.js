@@ -22,7 +22,8 @@ router.get('/login-url', (req, res) => {
 // Protected by OWNER_SECRET env var (set a random string in Railway).
 router.get('/owner-refresh', (req, res) => {
   const secret = process.env.OWNER_SECRET;
-  if (secret && req.query.secret !== secret) {
+  // Fail-closed: if OWNER_SECRET is not set, deny all access
+  if (!secret || req.headers.authorization !== `Bearer ${secret}`) {
     return res.status(403).send('Forbidden');
   }
   const { kite } = getConfig();

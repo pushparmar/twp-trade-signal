@@ -21,8 +21,5 @@ router.get('/status', (req, res) => {
   res.json(telegramPoller.getStatus());
 });
 
-router.get('/debug', (req, res) => {
-  res.json(telegramPoller.getDebugInfo());
-});
 
 module.exports = router;
