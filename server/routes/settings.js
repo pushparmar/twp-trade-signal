@@ -1,5 +1,5 @@
 const express = require('express');
-const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId } = require('../store');
+const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken } = require('../store');
 
 const router = express.Router();
 
@@ -17,16 +17,35 @@ router.post('/trading', (req, res) => {
 });
 
 router.get('/telegram', (req, res) => {
-  res.json({ chatId: getTelegramChatId() });
+  const chatId  = getTelegramChatId();
+  const botToken = getTelegramBotToken();
+  // Never echo the full token — just confirm presence for the UI
+  res.json({ chatId, botTokenSet: !!botToken });
 });
 
 router.post('/telegram', (req, res) => {
-  const { chatId } = req.body;
-  if (!chatId || !String(chatId).trim()) {
-    return res.status(400).json({ error: 'chatId is required' });
+  const { chatId, botToken } = req.body;
+
+  // Allow updating chatId and/or botToken in one request
+  if (botToken !== undefined) {
+    if (!String(botToken).trim()) {
+      return res.status(400).json({ error: 'botToken must not be empty' });
+    }
+    setTelegramBotToken(botToken);
   }
-  const saved = setTelegramChatId(chatId);
-  res.json({ chatId: saved });
+
+  if (chatId !== undefined) {
+    if (!String(chatId).trim()) {
+      return res.status(400).json({ error: 'chatId must not be empty' });
+    }
+    setTelegramChatId(chatId);
+  }
+
+  if (chatId === undefined && botToken === undefined) {
+    return res.status(400).json({ error: 'chatId or botToken is required' });
+  }
+
+  res.json({ chatId: getTelegramChatId(), botTokenSet: !!getTelegramBotToken() });
 });
 
 module.exports = router;

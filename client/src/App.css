@@ -2886,3 +2886,147 @@ body {
 [data-theme="light"] .scan-row--bullish { border-left-color: var(--green); }
 [data-theme="light"] .scan-row--bearish { border-left-color: var(--red); }
 [data-theme="light"] .scan-th { background: var(--surface); }
+
+/* ── Screener toolbar ──────────────────────────────────────────────────────── */
+.screener-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.screener-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+
+.screener-toolbar__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* Pattern dropdown */
+.screener-pattern-select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  color: var(--txt);
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 200px;
+  max-width: 320px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .15s;
+}
+.screener-pattern-select:focus  { border-color: var(--blue); }
+.screener-pattern-select:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Run button */
+.screener-run-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 7px;
+  border: none;
+  background: var(--blue);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity .15s, background .15s;
+}
+.screener-run-btn:hover:not(:disabled) { opacity: .88; }
+.screener-run-btn:disabled             { opacity: .5; cursor: not-allowed; }
+.screener-run-btn--running             { background: var(--txt3); }
+
+/* Spinner inside run button */
+.screener-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(255,255,255,.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: screener-spin .7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes screener-spin { to { transform: rotate(360deg); } }
+
+/* Universe hint (instrument count) */
+.screener-universe-hint {
+  font-size: 12px;
+  color: var(--txt3);
+  white-space: nowrap;
+}
+
+/* Status line (result summary / error) */
+.screener-status {
+  font-size: 12px;
+  color: var(--txt3);
+  white-space: nowrap;
+}
+.screener-status--ok  { color: var(--green); }
+.screener-status--err { color: var(--red); }
+
+/* Pattern description (full-width row below toolbar row) */
+.screener-pattern-desc {
+  width: 100%;
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--txt3);
+  line-height: 1.5;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
+/* Push the dedup toggle to the right end of the filter bar */
+.scan-filter-group--right { margin-left: auto; }
+
+/* Dedup toggle — same shape as other filter buttons but with a distinct active style */
+.scan-dedup-btn { white-space: nowrap; }
+.scan-dedup-btn.scan-filter-btn--active {
+  background: rgba(168,85,247,.15);
+  border-color: #a855f7;
+  color: #a855f7;
+}
+
+/* Source tag on symbol cell ("scan" badge) */
+.scan-source-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--blue-dim);
+  color: var(--blue);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+/* Second count badge variant (screener results) */
+.scan-count-badge--scan {
+  background: var(--surface);
+  color: var(--txt3);
+  border: 1px solid var(--border2);
+}
+
+/* Light-theme overrides for toolbar */
+[data-theme="light"] .screener-pattern-select { background: #fff; }
+[data-theme="light"] .screener-run-btn        { background: var(--blue); }

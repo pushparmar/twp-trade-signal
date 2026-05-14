@@ -36,6 +36,9 @@ function writeConfig(config) {
 }
 
 function getConfig() {
+  // Read persisted config so the bot token saved via the UI (config.json) works
+  // even when TELEGRAM_BOT_TOKEN env var is not set (typical local/dev usage).
+  const persisted = readConfig();
   return {
     kite: {
       apiKey: process.env.KITE_API_KEY || '',
@@ -43,7 +46,7 @@ function getConfig() {
       accessToken: _runtimeAccessToken,
     },
     telegram: {
-      botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+      botToken: process.env.TELEGRAM_BOT_TOKEN || persisted.telegram?.botToken || '',
     },
   };
 }
@@ -66,6 +69,19 @@ function setTradingDefaults(updates) {
   config.tradingDefaults = { ...getTradingDefaults(), ...updates };
   writeConfig(config);
   return config.tradingDefaults;
+}
+
+// ── Telegram bot token (persisted) ───────────────────
+function getTelegramBotToken() {
+  const config = readConfig();
+  return process.env.TELEGRAM_BOT_TOKEN || config.telegram?.botToken || '';
+}
+
+function setTelegramBotToken(token) {
+  const config = readConfig();
+  config.telegram = { ...(config.telegram || {}), botToken: String(token).trim() };
+  writeConfig(config);
+  return config.telegram.botToken;
 }
 
 // ── Telegram alert target chat ID (persisted) ────────
@@ -165,6 +181,7 @@ function removeFromWatchlist(instrumentToken) {
 module.exports = {
   getConfig, setAccessToken,
   getTradingDefaults, setTradingDefaults,
+  getTelegramBotToken, setTelegramBotToken,
   getTelegramChatId, setTelegramChatId,
   getTestMode, setTestMode,
   addPaperTrade, closePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,

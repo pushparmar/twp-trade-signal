@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import useAppStore from '../../store/appStore';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ function fmt(n) {
 function relativeTime(ts) {
   if (!ts) return '—';
   const diffSec = Math.floor((Date.now() - ts) / 1000);
-  if (diffSec < 60)  return `${diffSec}s ago`;
+  if (diffSec < 60)   return `${diffSec}s ago`;
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   return `${Math.floor(diffSec / 86400)}d ago`;
@@ -21,7 +21,7 @@ function relativeTime(ts) {
 
 function ScoreDots({ score, signal }) {
   if (score == null) return <span className="scan-score-na">—</span>;
-  const total = 5;
+  const total  = 5;
   const filled = Math.max(0, Math.min(total, Math.round(score)));
   const colorClass = signal === 'bullish' ? 'scan-dot--bull' : 'scan-dot--bear';
   return (
@@ -65,6 +65,9 @@ function ScanRow({ alert, onSelect }) {
     <tr className={`scan-row scan-row--${alert.signal}`} onClick={() => onSelect(alert)}>
       <td className="scan-cell scan-cell--symbol">
         <span className="scan-symbol">{alert.label}</span>
+        {alert.source === 'screener' && (
+          <span className="scan-source-tag">scan</span>
+        )}
       </td>
       <td className="scan-cell scan-cell--ltp">
         <span className="scan-ltp">{ltp != null ? fmt(ltp) : '—'}</span>
@@ -98,9 +101,48 @@ function ScanRow({ alert, onSelect }) {
   );
 }
 
+// ── Alert ranking ─────────────────────────────────────────────────────────────
+// Used when "Best per symbol" is on — pick the single strongest alert per token.
+//
+// Rank is a composite number (higher = stronger):
+//   score     0–5  × 1000   (primary — explicit quality score)
+//   strength  0–3  × 100    (strong=3 neutral=2 weak=1 none=0)
+//   timeframe 1–4  × 10     (day=4 > 4h=3 > 1h=2 > 15m=1 — longer TF = more significant)
+//
+// Ties (same stock fires same pattern on same TF) are broken by recency (ts desc).
+
+const STRENGTH_RANK = { strong: 3, neutral: 2, weak: 1 };
+const TF_RANK       = { day: 4, '4h': 3, '60minute': 2, '15minute': 1 };
+
+function alertRank(a) {
+  const score    = (a.score    ?? 0) * 1000;
+  const strength = (STRENGTH_RANK[a.strength] ?? 0) * 100;
+  const tf       = (TF_RANK[a.interval]       ?? 0) * 10;
+  return score + strength + tf;
+}
+
+/**
+ * Reduce an alert list to at most one alert per (token, signal) pair,
+ * keeping the highest-ranked one. Bullish and bearish alerts for the same
+ * token are kept separately (a stock can have a bullish signal on 1d but a
+ * bearish on 15m — both are meaningful).
+ */
+function bestPerSymbol(alerts) {
+  const best = new Map(); // key: "token:signal"
+  for (const a of alerts) {
+    const key  = `${a.token}:${a.signal}`;
+    const prev = best.get(key);
+    if (!prev || alertRank(a) > alertRank(prev) ||
+        (alertRank(a) === alertRank(prev) && (a.ts ?? 0) > (prev.ts ?? 0))) {
+      best.set(key, a);
+    }
+  }
+  return Array.from(best.values());
+}
+
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
-function FilterBar({ signal, onSignal, interval, onInterval }) {
+function FilterBar({ signal, onSignal, interval, onInterval, dedup, onDedup }) {
   const SIGNALS   = ['all', 'bullish', 'bearish'];
   const INTERVALS = ['all', '15minute', '60minute', '4h', 'day'];
   const TF_LABEL  = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
@@ -132,6 +174,170 @@ function FilterBar({ signal, onSignal, interval, onInterval }) {
           </button>
         ))}
       </div>
+
+      {/* Best-per-symbol dedup toggle */}
+      <div className="scan-filter-group scan-filter-group--right">
+        <button
+          className={`scan-filter-btn scan-dedup-btn ${dedup ? 'scan-filter-btn--active' : ''}`}
+          onClick={() => onDedup(!dedup)}
+          title="Show only the strongest alert per symbol (highest score → strength → timeframe)"
+        >
+          {dedup ? '✦ Best per symbol' : '✦ Best per symbol'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Screener toolbar ──────────────────────────────────────────────────────────
+
+const TF_LABEL = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+
+function ScreenerToolbar({ onResults }) {
+  const [patterns,    setPatterns]    = useState([]);
+  const [patternId,   setPatternId]   = useState('');
+  const [universe,    setUniverse]    = useState(null);   // { macros, watchlist, futures, all }
+  const [running,     setRunning]     = useState(false);
+  const [status,      setStatus]      = useState('');     // progress / result message
+  const [statusKind,  setStatusKind]  = useState('');     // '' | 'ok' | 'err'
+  const [phase,       setPhase]       = useState('');     // current TF being scanned
+
+  // Load pattern list + universe counts on mount
+  useEffect(() => {
+    fetch('/api/scan/patterns')
+      .then((r) => r.json())
+      .then((list) => {
+        setPatterns(list);
+        if (list.length) setPatternId(list[0].id);
+      })
+      .catch(() => {});
+
+    fetch('/api/scan/universe')
+      .then((r) => r.json())
+      .then(setUniverse)
+      .catch(() => {});
+  }, []);
+
+  const selectedPattern = patterns.find((p) => p.id === patternId);
+
+  const runScan = useCallback(async () => {
+    if (!patternId || running) return;
+
+    setRunning(true);
+    setStatus('Starting scan…');
+    setStatusKind('');
+    setPhase('');
+    onResults(null); // clear previous screener results
+
+    const intervals = ['15minute', '60minute', '4h', 'day'];
+
+    // Show phase progress labels while waiting (cosmetic — the real phases run server-side)
+    let phaseIdx = 0;
+    const phaseTimer = setInterval(() => {
+      if (phaseIdx < intervals.length) {
+        setPhase(TF_LABEL[intervals[phaseIdx]] || intervals[phaseIdx]);
+        phaseIdx++;
+      }
+    }, 3500); // advances every ~3.5 s, matching interTfDelayMs=3000 + scan time
+
+    try {
+      const res = await fetch('/api/scan', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ patternId, scope: 'all', interTfDelayMs: 3000, batchSize: 8 }),
+      });
+
+      clearInterval(phaseTimer);
+      setPhase('');
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setStatus(err.error || `Scan failed (${res.status})`);
+        setStatusKind('err');
+        return;
+      }
+
+      const data = await res.json();
+      const { matches = [], scannedCount, totalInstruments, patternLabel } = data;
+
+      onResults(matches);
+
+      const bull = matches.filter((m) => m.signal === 'bullish').length;
+      const bear = matches.filter((m) => m.signal === 'bearish').length;
+
+      if (matches.length === 0) {
+        setStatus(`No matches — scanned ${scannedCount} pairs across ${totalInstruments} instruments`);
+        setStatusKind('');
+      } else {
+        setStatus(`${matches.length} match${matches.length !== 1 ? 'es' : ''} (🟢 ${bull}  🔴 ${bear})  —  ${scannedCount} pairs scanned`);
+        setStatusKind('ok');
+      }
+    } catch (err) {
+      clearInterval(phaseTimer);
+      setPhase('');
+      setStatus(`Network error: ${err.message}`);
+      setStatusKind('err');
+    } finally {
+      setRunning(false);
+    }
+  }, [patternId, running, onResults]);
+
+  const universeHint = universe
+    ? `~${universe.all} instruments  (${universe.futures} futures + macros)`
+    : '';
+
+  return (
+    <div className="screener-toolbar">
+      {/* Left: pattern picker + run button */}
+      <div className="screener-toolbar__left">
+        <select
+          className="screener-pattern-select"
+          value={patternId}
+          onChange={(e) => setPatternId(e.target.value)}
+          disabled={running}
+        >
+          {patterns.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </select>
+
+        <button
+          className={`screener-run-btn ${running ? 'screener-run-btn--running' : ''}`}
+          onClick={runScan}
+          disabled={running || !patternId}
+        >
+          {running ? (
+            <>
+              <span className="screener-spinner" />
+              {phase ? `Scanning ${phase}…` : 'Starting…'}
+            </>
+          ) : (
+            <>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              Run Screener
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Right: universe hint + status */}
+      <div className="screener-toolbar__right">
+        {universeHint && !running && !status && (
+          <span className="screener-universe-hint">{universeHint}</span>
+        )}
+        {(running || status) && (
+          <span className={`screener-status ${statusKind === 'ok' ? 'screener-status--ok' : statusKind === 'err' ? 'screener-status--err' : ''}`}>
+            {status || (phase ? `Scanning ${phase}…` : 'Starting…')}
+          </span>
+        )}
+      </div>
+
+      {/* Pattern description tooltip row */}
+      {selectedPattern?.description && (
+        <div className="screener-pattern-desc">{selectedPattern.description}</div>
+      )}
     </div>
   );
 }
@@ -139,19 +345,70 @@ function FilterBar({ signal, onSignal, interval, onInterval }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ScanAlertsPage() {
-  const scanAlerts          = useAppStore((s) => s.scanAlerts);
+  const scanAlerts            = useAppStore((s) => s.scanAlerts);
+  const addScanAlert          = useAppStore((s) => s.addScanAlert);
   const setSelectedInstrument = useAppStore((s) => s.setSelectedInstrument);
 
   const [signalFilter,   setSignalFilter]   = useState('all');
   const [intervalFilter, setIntervalFilter] = useState('all');
+  // Dedup: ON by default — show the single strongest alert per symbol
+  const [dedup, setDedup] = useState(true);
+
+  // Screener results: array of match objects returned by POST /api/scan
+  // Null means no screener run yet (don't show the "X results" banner).
+  const [screenerResults, setScreenerResults] = useState(null);
+
+  // When screener finishes, push every match into the shared scanAlerts store
+  // so they appear in the live table immediately (tagged source:'screener').
+  const handleScreenerResults = useCallback((matches) => {
+    setScreenerResults(matches); // null = cleared, [] = no matches, [...] = results
+    if (!matches) return;
+    const now = Date.now();
+    for (const m of matches) {
+      addScanAlert({
+        token:         m.token,
+        label:         m.tradingsymbol || m.name || `Token ${m.token}`,
+        interval:      m.interval,
+        tfLabel:       TF_LABEL[m.interval] || m.interval,
+        patternId:     m.patternId  ?? 'screener',
+        patternLabel:  m.patternLabel ?? '—',
+        signal:        m.signal,
+        score:         m.score         ?? null,
+        close:         m.close         ?? null,
+        strength:      m.strength      ?? null,
+        cloudPosition: m.cloudPosition ?? null,
+        barsAgo:       m.barsAgo       ?? null,
+        consecutiveBars: m.consecutiveBars ?? null,
+        cloudThickness:  m.cloudThickness  ?? null,
+        ts:            now,
+        source:        'screener',
+      });
+    }
+  }, [addScanAlert]);
 
   const filtered = useMemo(() => {
-    return scanAlerts.filter((a) => {
+    // 1. Apply signal + interval filters
+    let list = scanAlerts.filter((a) => {
       if (signalFilter   !== 'all' && a.signal   !== signalFilter)   return false;
       if (intervalFilter !== 'all' && a.interval !== intervalFilter) return false;
       return true;
     });
-  }, [scanAlerts, signalFilter, intervalFilter]);
+
+    // 2. When dedup is ON, reduce to the single best alert per (token, signal).
+    //    This removes duplicate rows when the same stock fires on multiple
+    //    timeframes or multiple patterns — only the strongest one is shown.
+    if (dedup) list = bestPerSymbol(list);
+
+    // 3. Sort: bullish first, then by rank descending, then recency
+    list.sort((a, b) => {
+      if (a.signal !== b.signal) return a.signal === 'bullish' ? -1 : 1;
+      const rd = alertRank(b) - alertRank(a);
+      if (rd !== 0) return rd;
+      return (b.ts ?? 0) - (a.ts ?? 0);
+    });
+
+    return list;
+  }, [scanAlerts, signalFilter, intervalFilter, dedup]);
 
   function handleSelect(alert) {
     setSelectedInstrument({
@@ -162,25 +419,38 @@ export default function ScanAlertsPage() {
     });
   }
 
+  const liveCount      = scanAlerts.filter((a) => a.source !== 'screener').length;
+  const screenerCount  = scanAlerts.filter((a) => a.source === 'screener').length;
+
   return (
     <div className="page scanner-page">
+      {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="page-header">
         <div>
           <h2 className="page-title">Scanner</h2>
           <p className="page-sub">
-            Real-time Ichimoku pattern alerts for subscribed instruments
-            {scanAlerts.length > 0 && (
-              <span className="scan-count-badge">{scanAlerts.length} alert{scanAlerts.length !== 1 ? 's' : ''}</span>
+            Real-time Ichimoku pattern alerts
+            {liveCount > 0 && (
+              <span className="scan-count-badge">{liveCount} live</span>
+            )}
+            {screenerCount > 0 && (
+              <span className="scan-count-badge scan-count-badge--scan">{screenerCount} screener</span>
             )}
           </p>
         </div>
       </div>
 
+      {/* ── Screener toolbar ────────────────────────────────────────────── */}
+      <ScreenerToolbar onResults={handleScreenerResults} />
+
+      {/* ── Filters ─────────────────────────────────────────────────────── */}
       <FilterBar
-        signal={signalFilter}   onSignal={setSignalFilter}
+        signal={signalFilter}     onSignal={setSignalFilter}
         interval={intervalFilter} onInterval={setIntervalFilter}
+        dedup={dedup}             onDedup={setDedup}
       />
 
+      {/* ── Results table ───────────────────────────────────────────────── */}
       {filtered.length === 0 ? (
         <div className="scan-empty">
           <div className="scan-empty-icon">
@@ -193,7 +463,7 @@ export default function ScanAlertsPage() {
           </div>
           <p className="scan-empty-text">
             {scanAlerts.length === 0
-              ? 'No pattern alerts yet. Alerts appear here when an Ichimoku pattern fires on any subscribed instrument.'
+              ? 'No alerts yet. Click "Run Screener" to scan all F&O stocks now, or wait for live candle-close alerts during market hours.'
               : 'No alerts match the current filters.'}
           </p>
         </div>
@@ -216,7 +486,7 @@ export default function ScanAlertsPage() {
             <tbody>
               {filtered.map((alert) => (
                 <ScanRow
-                  key={`${alert.token}:${alert.interval}:${alert.patternId}`}
+                  key={`${alert.token}:${alert.interval}:${alert.patternId}:${alert.source ?? 'live'}`}
                   alert={alert}
                   onSelect={handleSelect}
                 />

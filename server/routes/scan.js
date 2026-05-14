@@ -181,6 +181,28 @@ router.post('/fire-test-alert', (req, res) => {
   res.json({ ok: true, alert });
 });
 
+// ── POST /api/scan/test-telegram ──────────────────────────────────────────────
+// Sends a real Telegram message using the stored bot token + chat ID.
+// Use this to verify Telegram credentials end-to-end without waiting for a
+// candle close. Returns { ok, chatId, error? }.
+router.post('/test-telegram', async (req, res) => {
+  const telegramNotifier = require('../services/telegramNotifier');
+  const chatId = store.getTelegramChatId();
+  if (!chatId) {
+    return res.status(400).json({ ok: false, error: 'No chat ID configured — open Settings and save your Telegram chat ID' });
+  }
+  try {
+    await telegramNotifier.sendMessage(chatId,
+      '✅ <b>Telegram test</b>\n\nAlerts are working correctly. Bot token and chat ID are valid.'
+    );
+    console.log('[ScanTest] Telegram test message sent to', chatId);
+    res.json({ ok: true, chatId });
+  } catch (err) {
+    console.error('[ScanTest] Telegram test failed:', err.message);
+    res.status(500).json({ ok: false, error: err.message, chatId });
+  }
+});
+
 // ── POST /api/scan/trigger-close ──────────────────────────────────────────────
 // Manually invokes liveScanner.onCandleClose for a specific token+interval.
 // Uses whatever candles are currently in candleStore (must be seeded first).
@@ -311,22 +333,32 @@ router.post('/', async (req, res) => {
 
             phaseMatched++;
             matches.push({
-              token:         item.instrumentToken,
-              tradingsymbol: item.tradingsymbol,
-              exchange:      item.exchange,
-              name:          item.name  || '',
+              token:           item.instrumentToken,
+              tradingsymbol:   item.tradingsymbol,
+              exchange:        item.exchange,
+              name:            item.name  || '',
               interval,
-              signal:        result.signal,
-              score:         result.score,
-              checks:        result.checks,
-              twistBarsAgo:  result.twistBarsAgo  ?? null,
-              close:         result.close         ?? null,
-              kijunValue:    result.kijunValue     ?? null,
-              cloudTop:      result.cloudTop       ?? null,
-              cloudBottom:   result.cloudBottom    ?? null,
-              senkouA:       result.senkouA        ?? null,
-              senkouB:       result.senkouB        ?? null,
-              price26ago:    result.price26ago     ?? null,
+              // Pattern identity — included so the client can display and key on them
+              patternId,
+              patternLabel:    pattern.label,
+              signal:          result.signal,
+              score:           result.score           ?? null,
+              checks:          result.checks          ?? null,
+              // Strength / context fields (new-pattern results)
+              strength:        result.strength        ?? null,
+              cloudPosition:   result.cloudPosition   ?? null,
+              barsAgo:         result.barsAgo         ?? null,
+              consecutiveBars: result.consecutiveBars ?? null,
+              cloudThickness:  result.cloudThickness  ?? null,
+              // Price / cloud values
+              close:           result.close           ?? null,
+              kijunValue:      result.kijunValue      ?? null,
+              cloudTop:        result.cloudTop        ?? null,
+              cloudBottom:     result.cloudBottom     ?? null,
+              senkouA:         result.senkouA         ?? null,
+              senkouB:         result.senkouB         ?? null,
+              price26ago:      result.price26ago      ?? null,
+              twistBarsAgo:    result.twistBarsAgo    ?? null,
             });
           } catch (err) {
             // Silence per-instrument errors — one bad token shouldn't abort the scan
