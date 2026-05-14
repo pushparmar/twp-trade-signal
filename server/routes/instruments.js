@@ -8,6 +8,34 @@ const store = require('../store');
 
 const BATCH_SIZE = 500; // Kite quote API limit per request
 
+// Intervals that liveScanner runs on — must stay in sync with liveScanner.WATCHED_INTERVALS.
+// (60minute also seeds the 4h synthesis buffer.)
+const SCANNER_INTERVALS = ['15minute', '60minute', 'day'];
+
+/**
+ * Seed candleStore for one token across all scanner intervals.
+ *
+ * WHY THIS EXISTS:
+ *   liveScanner.onCandleClose requires `candles.length >= 52` to compute Ichimoku.
+ *   Without seeding, a freshly-subscribed stock's candle buffer is empty and
+ *   live ticks only build it 1 candle at a time — meaning pattern alerts for
+ *   that stock would not fire until ~52 trading-day-bars or ~13 hours of 15m
+ *   bars have accumulated.
+ *
+ *   Seeding pre-fills the buffer from Kite historical so the very next candle
+ *   close triggers pattern detection.
+ *
+ * Non-blocking: each fetch runs in the background. Errors are logged but never
+ * thrown — one slow Kite call should not delay the /subscribe HTTP response.
+ */
+function _seedScannerBuffers(token, label) {
+  for (const interval of SCANNER_INTERVALS) {
+    candleStore.getCandles(token, interval).catch((err) => {
+      console.warn(`[Subscribe] Seed failed ${label || token}:${interval} —`, err.message);
+    });
+  }
+}
+
 const router = express.Router();
 
 // Search instruments by symbol/name substring
@@ -47,6 +75,8 @@ router.post('/subscribe', (req, res) => {
   kiteTicker.subscribe([item.instrumentToken]);
   // Register with live scanner so candle closes for this token trigger pattern checks
   liveScanner.addWatch(item.instrumentToken, item.tradingsymbol || item.name || `Token ${item.instrumentToken}`);
+  // Seed candle buffers so pattern detection works on the next candle close (not in 13+ hours)
+  _seedScannerBuffers(item.instrumentToken, item.tradingsymbol);
   res.json({ ok: true, watchlist });
 });
 
@@ -131,7 +161,11 @@ router.post('/subscribe-atm', async (req, res) => {
     );
     if (existing.length) {
       const oldTokens = existing.map((i) => i.instrumentToken);
-      oldTokens.forEach((t) => { store.removeFromWatchlist(t); candleStore.remove(t); });
+      oldTokens.forEach((t) => {
+        store.removeFromWatchlist(t);
+        candleStore.remove(t);
+        liveScanner.removeWatch(t);
+      });
       kiteTicker.unsubscribe(oldTokens);
     }
 
@@ -148,6 +182,8 @@ router.post('/subscribe-atm', async (req, res) => {
         strike:          inst.strike,
       });
       tokens.push(inst.instrumentToken);
+      liveScanner.addWatch(inst.instrumentToken, inst.tradingsymbol);
+      _seedScannerBuffers(inst.instrumentToken, inst.tradingsymbol);
     }
 
     if (tokens.length) kiteTicker.subscribe(tokens);
@@ -206,6 +242,8 @@ router.post('/subscribe-future', (req, res) => {
     strike:          inst.strike,
   });
   kiteTicker.subscribe([inst.instrumentToken]);
+  liveScanner.addWatch(inst.instrumentToken, inst.tradingsymbol);
+  _seedScannerBuffers(inst.instrumentToken, inst.tradingsymbol);
   res.json({ ok: true, instrument: inst, watchlist });
 });
 
@@ -236,6 +274,8 @@ router.post('/subscribe-all-futures', (req, res) => {
       strike:          inst.strike,
     });
     tokens.push(inst.instrumentToken);
+    liveScanner.addWatch(inst.instrumentToken, inst.tradingsymbol);
+    _seedScannerBuffers(inst.instrumentToken, inst.tradingsymbol);
   }
 
   if (tokens.length) kiteTicker.subscribe(tokens);
@@ -311,6 +351,8 @@ router.post('/subscribe-movers', async (req, res) => {
       strike:          inst.strike,
     });
     tokens.push(inst.instrumentToken);
+    liveScanner.addWatch(inst.instrumentToken, inst.tradingsymbol);
+    _seedScannerBuffers(inst.instrumentToken, inst.tradingsymbol);
   }
 
   if (tokens.length) kiteTicker.subscribe(tokens);
@@ -331,7 +373,11 @@ router.post('/unsubscribe-all-futures', (req, res) => {
   if (!futures.length) return res.json({ ok: true, removed: 0, watchlist });
 
   const tokens = futures.map((i) => i.instrumentToken);
-  tokens.forEach((t) => { store.removeFromWatchlist(t); candleStore.remove(t); });
+  tokens.forEach((t) => {
+    store.removeFromWatchlist(t);
+    candleStore.remove(t);
+    liveScanner.removeWatch(t);
+  });
   kiteTicker.unsubscribe(tokens);
   res.json({ ok: true, removed: tokens.length, watchlist: store.getWatchlist() });
 });

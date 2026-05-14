@@ -2,11 +2,15 @@
  * Reacts to candle-close events from KiteTicker (via candleStore.onTick).
  * Watches NIFTY and BANKNIFTY across 1m / 5m / 15m intervals.
  *
- * Deduplication per token+interval:
- *   false → true  : send Telegram
- *   stays true    : skip (already notified)
- *   goes false    : reset — next true will fire again
- *   midnight IST  : full reset so a fresh day can re-trigger
+ * Deduplication per token+interval+direction:
+ *   Each (token, interval, direction) fires at most ONCE per IST trading day.
+ *   Resets at midnight IST so a fresh session can re-trigger.
+ *
+ *   NOTE: the old implementation reset the flag when the signal cleared
+ *   ("goes false → reset — next true fires again"). On 1m/5m bars where
+ *   the Ichimoku signal oscillates frequently, this caused 10+ Telegram
+ *   messages per day for the same setup. Fixed to match patternAlertWatcher:
+ *   once fired for the day, the same direction stays blocked until midnight.
  *
  * Signal → ATM option → option LTP → entry/SL/target in option premium terms
  *   Entry  = option LTP at signal time
@@ -38,9 +42,9 @@ const _watchMap = new Map(
   INDEX_WATCHES.map((w) => [`${w.token}:${w.interval}`, w])
 );
 
-// Dedup state per "token:interval"
-// { putBuySignal: bool, callBuySignal: bool, date: string }
-const _state = new Map();
+// Dedup: "token:interval:direction" → { fired: bool, date: string (IST) }
+// One entry per (token, interval, direction) per IST trading day.
+const _dedup = new Map();
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -48,16 +52,16 @@ function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-function _getState(key) {
+/**
+ * Returns true on first claim (alert should fire); false if already fired today.
+ * Resets automatically when the IST date changes (midnight IST).
+ */
+function _claimFire(key) {
   const today = _istDateStr();
-  const existing = _state.get(key);
-  // Reset on new day
-  if (!existing || existing.date !== today) {
-    const fresh = { putBuySignal: false, callBuySignal: false, date: today };
-    _state.set(key, fresh);
-    return fresh;
-  }
-  return existing;
+  const entry = _dedup.get(key);
+  if (entry && entry.date === today && entry.fired) return false;
+  _dedup.set(key, { fired: true, date: today });
+  return true;
 }
 
 /**
@@ -126,23 +130,19 @@ async function onCandleClose(token, interval) {
     const signals = getSignals(candles, interval);
     if (!signals) return;
 
-    const st = _getState(key);
-
-    if (signals.putBuySignal && !st.putBuySignal) {
-      st.putBuySignal  = true;
-      st.callBuySignal = false;
-      await _notify(cfg.name, 'PUT_BUY', signals, candles, interval);
+    // Each direction fires at most once per IST day — no reset on signal clear.
+    // (Resetting on clear caused repeated Telegram alerts on 1m/5m oscillations.)
+    if (signals.putBuySignal) {
+      if (_claimFire(`${key}:PUT_BUY`)) {
+        await _notify(cfg.name, 'PUT_BUY', signals, candles, interval);
+      }
     }
 
-    if (signals.callBuySignal && !st.callBuySignal) {
-      st.callBuySignal = true;
-      st.putBuySignal  = false;
-      await _notify(cfg.name, 'CALL_BUY', signals, candles, interval);
+    if (signals.callBuySignal) {
+      if (_claimFire(`${key}:CALL_BUY`)) {
+        await _notify(cfg.name, 'CALL_BUY', signals, candles, interval);
+      }
     }
-
-    // Reset when signal clears so the next crossing can fire again
-    if (!signals.putBuySignal)  st.putBuySignal  = false;
-    if (!signals.callBuySignal) st.callBuySignal = false;
 
   } catch (err) {
     console.warn(`[IndexSignalWatcher] Error on ${key}:`, err.message);
@@ -261,7 +261,7 @@ function start() {
 }
 
 function stop() {
-  _state.clear();
+  _dedup.clear();
 }
 
 module.exports = { start, stop, onCandleClose };

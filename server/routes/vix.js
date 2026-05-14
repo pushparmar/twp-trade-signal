@@ -1,23 +1,13 @@
 const express = require('express');
 const candleStore = require('../services/candleStore');
+const { to4H } = require('../services/ichimoku');
 
 const router = express.Router();
 const VIX_TOKEN = 264969; // NSE:INDIA VIX
 
-// Aggregate 60minute candles into 4-hour bars
+// Session-aware 4h synthesis — imported from ichimoku.js.
 function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:   slice[0].date,
-      open:   slice[0].open,
-      high:   Math.max(...slice.map((c) => c.high)),
-      low:    Math.min(...slice.map((c) => c.low)),
-      close:  slice[slice.length - 1].close,
-    });
-  }
-  return out;
+  return to4H(candles1h);
 }
 
 function _sma(closes, period) {

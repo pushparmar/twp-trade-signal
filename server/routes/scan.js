@@ -37,25 +37,13 @@ const patternRegistry  = require('../services/patternRegistry');
 const liveScanner      = require('../services/liveScanner');
 const { broadcast }    = require('../sseHub');
 const store            = require('../store');
+const { to4H }         = require('../services/ichimoku');
 
 const router = express.Router();
 
-// Synthesise 4h candles by collapsing four consecutive 1h candles.
-// Mirrors the same helper in routes/ichimoku.js and services/macroAnalysis.js.
-function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:  slice[0].date,
-      open:  slice[0].open,
-      high:  Math.max(...slice.map((c) => c.high)),
-      low:   Math.min(...slice.map((c) => c.low)),
-      close: slice[slice.length - 1].close,
-    });
-  }
-  return out;
-}
+// Session-aware 4h synthesis — imported from ichimoku.js.
+// The old local version grouped from buffer index 0 and produced cross-session candles.
+const _to4H = to4H;
 
 // Fetch candles for any interval, handling the synthetic 4h case.
 async function _getCandles(token, interval) {

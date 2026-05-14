@@ -119,7 +119,9 @@ function connect() {
         // Run pattern alerts — fires Telegram if a kumo pattern matches
         patternAlertWatcher.onCandleClose(token, interval).catch(() => {});
         // Scan user watchlist stocks for patterns — broadcasts scan_alert SSE
-        liveScanner.onCandleClose(token, interval);
+        // and sends Telegram. Async; ignore rejections so Telegram outages don't
+        // leak into the tick handler.
+        liveScanner.onCandleClose(token, interval).catch(() => {});
       });
     }
   });

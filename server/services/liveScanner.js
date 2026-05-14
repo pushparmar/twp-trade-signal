@@ -1,9 +1,11 @@
 /**
  * LiveScanner — real-time Ichimoku pattern scanner for user watchlist stocks.
  *
- * Unlike patternAlertWatcher (which sends Telegram for index/macro instruments),
- * liveScanner covers the user's manually-added watchlist stocks and broadcasts
- * `scan_alert` SSE events when a pattern fires — no Telegram messages.
+ * For each candle close on a subscribed instrument, runs every registered
+ * pattern. On a first-of-day match:
+ *   1. Broadcasts a `scan_alert` SSE so the Scanner UI tab updates instantly.
+ *   2. Sends a Telegram message via telegramNotifier (uses the same per-day
+ *      dedup, so we never duplicate the SSE entry with the Telegram alert).
  *
  * Public API:
  *   addWatch(token, label)       — call when a stock is subscribed
@@ -12,10 +14,13 @@
  *   seedFromWatchlist()          — called once at boot to pick up persisted watchlist
  */
 
-const candleStore     = require('./candleStore');
-const patternRegistry = require('./patternRegistry');
-const { broadcast }   = require('../sseHub');
-const store           = require('../store');
+const candleStore      = require('./candleStore');
+const patternRegistry  = require('./patternRegistry');
+const { broadcast }    = require('../sseHub');
+const store            = require('../store');
+const { to4H }         = require('./ichimoku');
+const telegramNotifier = require('./telegramNotifier');
+const patternAlertMessage = require('./patternAlertMessage');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -58,32 +63,31 @@ function _claimFire(key) {
   return true;
 }
 
-/** Synthesise 4h candles from consecutive 1h candles (same as macroAnalysis / patternAlertWatcher). */
+// Session-aware 4h synthesis — imported from ichimoku.js.
 function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:  slice[0].date,
-      open:  slice[0].open,
-      high:  Math.max(...slice.map((c) => c.high)),
-      low:   Math.min(...slice.map((c) => c.low)),
-      close: slice[slice.length - 1].close,
-    });
-  }
-  return out;
+  return to4H(candles1h);
 }
 
 // ── Core scanner ─────────────────────────────────────────────────────────────
 
 /**
- * Run every registered pattern against candles for (token, interval) and
- * broadcast a `scan_alert` SSE event for each new match.
+ * Run every registered pattern against candles for (token, interval), then
+ * for each new (first-of-day) match:
+ *   - Broadcast a `scan_alert` SSE for the Scanner UI tab.
+ *   - Send a Telegram message via telegramNotifier.
+ *
+ * Both side-effects share the same `_claimFire` dedup, so SSE and Telegram
+ * always fire together (or not at all). A failing Telegram send does NOT
+ * block or roll back the SSE broadcast.
  */
-function _runAndBroadcast(token, interval, candles) {
+async function _runAndBroadcast(token, interval, candles) {
   const label    = _watchMap.get(Number(token));
   const tfLabel  = TF_LABEL[interval] || interval;
   if (!label) return;
+
+  // Look up Telegram chat once per invocation. If not configured, skip
+  // Telegram side entirely but keep SSE broadcasts working.
+  const chatId = store.getTelegramChatId();
 
   for (const { id: patternId, label: patternLabel } of patternRegistry.list()) {
     const pattern = patternRegistry.get(patternId);
@@ -107,25 +111,36 @@ function _runAndBroadcast(token, interval, candles) {
     const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
     if (!_claimFire(dedupKey)) continue; // already broadcast today
 
+    // ── SSE: always fires (Scanner UI tab) ─────────────────────────────────
     broadcast('scan_alert', {
-      token:         Number(token),
+      token:            Number(token),
       label,
       interval,
       tfLabel,
       patternId,
       patternLabel,
-      signal:        result.signal,
-      score:         result.score         ?? null,
-      close:         result.close         ?? null,
+      signal:           result.signal,
+      score:            result.score            ?? null,
+      close:            result.close            ?? null,
       strength:         result.strength         ?? null,
       cloudPosition:    result.cloudPosition    ?? null,
       barsAgo:          result.barsAgo          ?? null,
       consecutiveBars:  result.consecutiveBars  ?? null,
       cloudThickness:   result.cloudThickness   ?? null,
-      ts:            Date.now(),
+      ts:               Date.now(),
     });
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
+
+    // ── Telegram: best-effort — chatId may be unset; send errors logged only ──
+    if (chatId) {
+      const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind: 'stock' });
+      try {
+        await telegramNotifier.sendMessage(chatId, text);
+      } catch (err) {
+        console.warn(`[LiveScanner] Telegram send failed for ${label} (${tfLabel}):`, err.message);
+      }
+    }
   }
 }
 
@@ -134,8 +149,12 @@ function _runAndBroadcast(token, interval, candles) {
 /**
  * Called by kiteTicker on every candle close.
  * Returns immediately for intervals / tokens we don't watch.
+ *
+ * Async because Telegram send is awaited inside _runAndBroadcast. kiteTicker
+ * fires this without awaiting (fire-and-forget) — errors are caught here so
+ * a Telegram outage never bubbles up into the tick handler.
  */
-function onCandleClose(token, interval) {
+async function onCandleClose(token, interval) {
   if (!WATCHED_INTERVALS.has(interval)) return;
   if (!_watchMap.has(Number(token)))    return;
 
@@ -143,7 +162,7 @@ function onCandleClose(token, interval) {
     // ── Native interval (15m / 1h / 1d) ───────────────────────────────────
     const candles = candleStore.getCandlesSync(token, interval);
     if (candles && candles.length >= 52) {
-      _runAndBroadcast(token, interval, candles);
+      await _runAndBroadcast(token, interval, candles);
     }
 
     // ── Synthetic 4h: triggered on every 1h close ─────────────────────────
@@ -152,7 +171,7 @@ function onCandleClose(token, interval) {
       if (c1h && c1h.length >= 8) {
         const c4h = _to4H(c1h);
         if (c4h.length >= 52) {
-          _runAndBroadcast(token, '4h', c4h);
+          await _runAndBroadcast(token, '4h', c4h);
         }
       }
     }

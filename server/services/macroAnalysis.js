@@ -6,24 +6,12 @@
 
 const candleStore      = require('./candleStore');
 const instrumentCache  = require('./instrumentCache');
-const { getSignals }   = require('./ichimoku');
+const { getSignals, to4H } = require('./ichimoku');
 
 const VIX_TOKEN = 264969; // NSE:INDIA VIX
 
-function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:  slice[0].date,
-      open:  slice[0].open,
-      high:  Math.max(...slice.map((c) => c.high)),
-      low:   Math.min(...slice.map((c) => c.low)),
-      close: slice[slice.length - 1].close,
-    });
-  }
-  return out;
-}
+// Session-aware 4h synthesis — see ichimoku.js to4H for full explanation.
+const _to4H = to4H;
 
 function _sma(closes, period) {
   if (closes.length < period) return null;

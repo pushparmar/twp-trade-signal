@@ -78,6 +78,28 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
         const txt = cssVar("--txt", "#dde3f0");
         const grid = cssVar("--border", "#1e2340");
 
+        // ── IST-aware time formatting ────────────────────────────────────────
+        // Kite returns timestamps in Unix seconds (UTC). For an Indian-market
+        // chart we want labels in IST (UTC+05:30), not the user's local zone.
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const _toIST = (unixSec) => new Date(unixSec * 1000 + IST_OFFSET_MS);
+        const _pad   = (n) => String(n).padStart(2, '0');
+
+        const tickMarkFormatter = (time, tickMarkType /* , locale */) => {
+            const d = _toIST(time);
+            // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
+            if (tickMarkType === 0) return String(d.getUTCFullYear());
+            if (tickMarkType === 1) return d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+            if (tickMarkType === 2) return `${_pad(d.getUTCDate())} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })}`;
+            return `${_pad(d.getUTCHours())}:${_pad(d.getUTCMinutes())}`;
+        };
+
+        // Crosshair tooltip / status line time format (full IST timestamp)
+        const timeFormatter = (time) => {
+            const d = _toIST(time);
+            return `${_pad(d.getUTCDate())} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })} ${_pad(d.getUTCHours())}:${_pad(d.getUTCMinutes())} IST`;
+        };
+
         const chart = createChart(containerRef.current, {
             layout: {
                 background: { color: bg },
@@ -97,6 +119,16 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
                 timeVisible: true,
                 secondsVisible: false,
                 rightOffset: 5,
+                // Indian-session-aware label formatting (projection bars already
+                // skip non-trading periods on the server, so labels always land
+                // on a valid 9:15-15:30 IST slot).
+                tickMarkFormatter,
+                // Compact bar spacing — keeps consecutive trading-day bars
+                // visually adjacent rather than spaced by overnight-hour gaps.
+                barSpacing: 6,
+            },
+            localization: {
+                timeFormatter,
             },
             width:  containerRef.current.clientWidth,
             height: 420,

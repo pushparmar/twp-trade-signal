@@ -4,6 +4,9 @@
  * Runs every registered pattern on each 15m / 1h / 4h / 1d candle close
  * for index and macro instruments. Fires a Telegram message on first match.
  *
+ * Note: liveScanner.js does the same for user watchlist stocks — both watchers
+ * now share patternAlertMessage.build() so the Telegram wording stays in sync.
+ *
  * Deduplication:
  *   Each (token, interval, patternId, signal) is allowed to fire at most ONCE
  *   per trading day. It resets at midnight IST, so the same setup can alert
@@ -18,6 +21,9 @@ const candleStore      = require('./candleStore');
 const patternRegistry  = require('./patternRegistry');
 const telegramNotifier = require('./telegramNotifier');
 const store            = require('../store');
+const { broadcast }    = require('../sseHub');
+const { to4H }         = require('./ichimoku');
+const patternAlertMessage = require('./patternAlertMessage');
 
 // Lazy-required to keep the same circular-dep pattern used in macroWatcher.
 const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
@@ -63,21 +69,8 @@ function _claimFire(key) {
   return true;
 }
 
-// Synthesise 4h candles from consecutive 1h candles (same as macroAnalysis.js)
-function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:  slice[0].date,
-      open:  slice[0].open,
-      high:  Math.max(...slice.map((c) => c.high)),
-      low:   Math.min(...slice.map((c) => c.low)),
-      close: slice[slice.length - 1].close,
-    });
-  }
-  return out;
-}
+// Session-aware 4h synthesis — imported from ichimoku.js.
+const _to4H = to4H;
 
 // ── Alert builder ────────────────────────────────────────────────────────────
 
@@ -111,48 +104,13 @@ async function _runAndAlert(token, interval, candles) {
     const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
     if (!_claimFire(dedupKey)) continue; // already sent today
 
-    // ── Build Telegram message ───────────────────────────────────────────
-    const emoji   = result.signal === 'bullish' ? '🟢' : '🔴';
-    const sigText = result.signal.toUpperCase();
-
-    const lines = [
-      `${emoji} <b>${patternLabel}</b>`,
-      ``,
-      `📊 <b>${label}</b>  ·  ${tfLabel}`,
-      `Signal : <b>${sigText}</b>`,
-    ];
-
-    if (result.strength != null) {
-      // Strength qualifier: Strong / Neutral / Weak — based on cloud position
-      const STRENGTH_EMOJI = { strong: '💪', neutral: '➡️', weak: '⚠️' };
-      lines.push(`Strength : ${STRENGTH_EMOJI[result.strength] || ''} <b>${result.strength.charAt(0).toUpperCase() + result.strength.slice(1)}</b>`);
-    }
-    if (result.cloudPosition != null) lines.push(`Cloud pos: ${result.cloudPosition}`);
-    if (result.score != null)         lines.push(`Score    : ${result.score}/5`);
-    if (result.close != null)         lines.push(`Price    : ${result.close}`);
-    if (result.barsAgo != null)           lines.push(`${result.crossType ? result.crossType + ' ' : ''}Cross : ${result.barsAgo} bar${result.barsAgo !== 1 ? 's' : ''} ago`);
-    if (result.twistBarsAgo != null)      lines.push(`Twist    : ${result.twistBarsAgo} bar${result.twistBarsAgo !== 1 ? 's' : ''} ago`);
-    if (result.consecutiveBars != null)   lines.push(`Above/Below cloud : ${result.consecutiveBars} bar${result.consecutiveBars !== 1 ? 's' : ''}`);
-    if (result.cloudThickness != null)    lines.push(`Cloud thickness : ${result.cloudThickness}`);
-
-    // Individual check summary — tick/cross per check
-    if (result.checks) {
-      const CHECK_SHORT = {
-        kumoBreakout: 'Breakout',
-        cloudColor:   'Cloud',
-        kumoTwist:    'Twist',
-        chikou:       'Chikou',
-        kijun:        'Kijun',
-      };
-      const checkParts = Object.entries(result.checks).map(([k, v]) => {
-        const name = CHECK_SHORT[k] || k;
-        return `${v === result.signal ? '✅' : '❌'} ${name}`;
-      });
-      lines.push(``, checkParts.join('  '));
-    }
+    // Use the shared message builder so the wording stays in sync with liveScanner.
+    // 'index' for NIFTY/BANKNIFTY, 'macro' for VIX/Crude/Gold/Silver/USDINR.
+    const kind = (Number(token) === 256265 || Number(token) === 260105) ? 'index' : 'macro';
+    const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind });
 
     try {
-      await telegramNotifier.sendMessage(chatId, lines.join('\n'));
+      await telegramNotifier.sendMessage(chatId, text);
       console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
     } catch (err) {
       console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);

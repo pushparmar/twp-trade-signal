@@ -1,6 +1,6 @@
 const express = require('express');
 const candleStore = require('../services/candleStore');
-const { getSignals, calculate } = require('../services/ichimoku');
+const { getSignals, calculate, to4H } = require('../services/ichimoku');
 const atmResolver = require('../services/atmResolver');
 const instrumentCache = require('../services/instrumentCache');
 
@@ -33,6 +33,71 @@ function _l52(candles, idx) {
   return l === Infinity ? null : l;
 }
 
+// ── Market-hours-aware time advance (Indian session) ────────────────────────
+//
+// NSE/BSE session: 09:15-15:30 IST (Mon-Fri).
+// MCX:             09:00-23:30 IST (Mon-Fri).
+//
+// Cloud projection bars extend 26 bars beyond the last real candle. With a
+// naive `lastTime + k * iSecs` formula, those timestamps spill into overnight
+// hours and weekends — producing phantom cloud bars on Saturday and Sunday for
+// the day chart, and overnight bars (e.g. 20:00 IST) for intraday charts. The
+// chart then renders those phantom timestamps as wide empty gaps.
+//
+// The helper below increments a Unix-seconds timestamp by `intervalSecs` while
+// skipping non-trading periods, so the projection lands on the *next* valid
+// session bar timestamp.
+//
+// Default trading window for indices/equities. MCX would use 09:00-23:30 but
+// the projection visual is approximate anyway — using NSE bounds is acceptable
+// for the chart x-axis and is conservatively narrower (fewer phantom bars).
+const IST_OFFSET_MIN = 5 * 60 + 30;
+const SESSION_START_MIN = 9 * 60 + 15; // 09:15 IST in minutes from midnight
+const SESSION_END_MIN   = 15 * 60 + 30; // 15:30 IST
+
+function _istParts(unixSec) {
+  const istMs = unixSec * 1000 + IST_OFFSET_MIN * 60 * 1000;
+  const d     = new Date(istMs);
+  return {
+    weekday: d.getUTCDay(),                       // 0=Sun, 6=Sat (in IST)
+    minutes: d.getUTCHours() * 60 + d.getUTCMinutes(),
+    ymd:     [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()],
+  };
+}
+
+function _nextTradingTimestamp(prevTs, intervalSecs) {
+  // For day bars: advance one calendar day, skip Sat/Sun.
+  if (intervalSecs >= 6 * 60 * 60) {
+    let next = prevTs + 24 * 60 * 60;
+    let p = _istParts(next);
+    while (p.weekday === 0 || p.weekday === 6) {
+      next += 24 * 60 * 60;
+      p = _istParts(next);
+    }
+    return next;
+  }
+
+  // Intraday: advance by intervalSecs; if we cross out of the session window
+  // or land on a weekend, jump to the next session's 09:15.
+  let next = prevTs + intervalSecs;
+  let p    = _istParts(next);
+
+  // If outside session minutes OR on weekend, jump to next trading day 09:15.
+  let safety = 0;
+  while (p.weekday === 0 || p.weekday === 6 || p.minutes < SESSION_START_MIN || p.minutes >= SESSION_END_MIN) {
+    // Jump to start of next day at 09:15 IST and re-check weekend
+    const istMs = next * 1000 + IST_OFFSET_MIN * 60 * 1000;
+    const d     = new Date(istMs);
+    d.setUTCHours(0, 0, 0, 0);
+    d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCMinutes(SESSION_START_MIN);
+    next = Math.floor((d.getTime() - IST_OFFSET_MIN * 60 * 1000) / 1000);
+    p = _istParts(next);
+    if (++safety > 10) break; // guard against weird intervals (e.g. intervalSecs > 1 day handled above)
+  }
+  return next;
+}
+
 /**
  * Append 26 future cloud projection bars to the data array.
  *
@@ -42,15 +107,18 @@ function _l52(candles, idx) {
  *   senkouB_proj[k] = ( 52H[n-27+k]    + 52L[n-27+k]   )  / 2
  *
  * These bars have no OHLC — only the cloud values are set.
+ *
+ * Timestamps are market-hours-aware via _nextTradingTimestamp so the chart's
+ * x-axis stays inside trading sessions — no phantom Saturday/overnight bars.
  */
 function _appendProjection(data, candles, results, interval) {
   const n       = candles.length;
   const iSecs   = INTERVAL_SECS[interval] || 900;
-  const lastTime = data.length > 0 ? data[data.length - 1].time : 0;
-  const round2   = (v) => Math.round(v * 100) / 100;
+  const round2  = (v) => Math.round(v * 100) / 100;
+  let lastTime  = data.length > 0 ? data[data.length - 1].time : 0;
 
   for (let k = 1; k <= 26; k++) {
-    const srcIdx = n - 27 + k;   // n-26 when k=1, n-1 when k=26
+    const srcIdx = n - 27 + k;
     if (srcIdx < 0 || srcIdx >= n) continue;
 
     const src = results[srcIdx];
@@ -66,8 +134,11 @@ function _appendProjection(data, candles, results, interval) {
       if (h != null && l != null) projB = round2((h + l) / 2);
     }
 
+    // Advance to next valid trading-session timestamp (skips overnight/weekends)
+    lastTime = _nextTradingTimestamp(lastTime, iSecs);
+
     data.push({
-      time:    lastTime + k * iSecs,
+      time:    lastTime,
       open:    null,
       high:    null,
       low:     null,
@@ -81,21 +152,9 @@ function _appendProjection(data, candles, results, interval) {
   }
 }
 
-// Synthesize 4h candles by merging four consecutive 1h candles
-function _to4H(candles1h) {
-  const out = [];
-  for (let i = 0; i + 3 < candles1h.length; i += 4) {
-    const slice = candles1h.slice(i, i + 4);
-    out.push({
-      date:  slice[0].date,
-      open:  slice[0].open,
-      high:  Math.max(...slice.map((c) => c.high)),
-      low:   Math.min(...slice.map((c) => c.low)),
-      close: slice[slice.length - 1].close,
-    });
-  }
-  return out;
-}
+// 4h synthesis: use the session-aware to4H exported from ichimoku.js.
+// The old local _to4H grouped from buffer index 0, producing cross-session candles.
+const _to4H = to4H;
 
 // Map instrument token → index name for ATM resolution
 const TOKEN_TO_INDEX = {

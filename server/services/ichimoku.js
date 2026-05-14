@@ -809,16 +809,23 @@ function getPerfectOrder(candles) {
     : bearScore === 5             ? 'bearish'
     : null;
 
+  // Cloud position and strength: perfect-order bullish requires aboveCloud,
+  // bearish requires belowCloud — both map to 'strong' by Ichimoku doctrine.
+  const cloudPosition = last.aboveCloud ? 'above' : last.belowCloud ? 'below' : 'in';
+  const strength      = signal ? 'strong' : null; // 5/5 always qualifies as strong
+
   return {
     signal,
     score,
     checks,
-    crossType:   'Perfect Order',
-    close:       last.close,
-    tenkan:      last.tenkan,
-    kijun:       last.kijun,
-    senkouA:     last.senkouA,
-    senkouB:     last.senkouB,
+    crossType:     'Perfect Order',
+    cloudPosition,
+    strength,
+    close:         last.close,
+    tenkan:        last.tenkan,
+    kijun:         last.kijun,
+    senkouA:       last.senkouA,
+    senkouB:       last.senkouB,
     price26ago,
   };
 }
@@ -909,6 +916,55 @@ function getKumoBounce(candles, { lookback = 5, tolerance = 0.005 } = {}) {
     close: last.close,
     cloudLevel: isBullish ? last.cloudTop : last.cloudBottom,
   };
+}
+
+// ── Shared 4h synthesis ───────────────────────────────────────────────────────
+
+/**
+ * Synthesise 4h candles from an array of 1h candles.
+ *
+ * WHY THIS EXISTS HERE (and not inline in callers):
+ *   The naive approach of grouping from buffer index 0 produces cross-session
+ *   "4h candles" that span overnight or weekends — e.g. the last 2 bars of
+ *   Tuesday grouped with the first 2 bars of Wednesday. The OHLC values are
+ *   wrong and Ichimoku calculations on those candles produce garbage signals.
+ *
+ * FIX: group by trading session date first.
+ *   Only complete groups of exactly 4 consecutive 1h bars within the SAME
+ *   calendar day are combined. A partial end-of-day group (< 4 bars) is skipped.
+ *
+ * Indian market produces ~6 complete 1h bars per session (9:15-15:15).
+ * That gives exactly ONE complete 4h candle per day (bars 0-3) and leaves
+ * the last 2 bars out. A 1200-bar 1h buffer (~192 days) therefore yields
+ * ~192 4h candles — well above the 52 required by Ichimoku.
+ *
+ * @param {Array<{date: string, open: number, high: number, low: number, close: number}>} candles1h
+ * @returns {Array<{date, open, high, low, close}>}
+ */
+function to4H(candles1h) {
+  // Group bars by their date prefix (YYYY-MM-DD) — Kite returns ISO 8601 strings
+  const byDay = new Map();
+  for (const c of candles1h) {
+    const day = String(c.date).slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, []);
+    byDay.get(day).push(c);
+  }
+
+  const out = [];
+  for (const dayCandles of byDay.values()) {
+    // Only process complete groups of 4 — partial end-of-session groups are dropped
+    for (let i = 0; i + 3 < dayCandles.length; i += 4) {
+      const slice = dayCandles.slice(i, i + 4);
+      out.push({
+        date:  slice[0].date,
+        open:  slice[0].open,
+        high:  Math.max(...slice.map((c) => c.high)),
+        low:   Math.min(...slice.map((c) => c.low)),
+        close: slice[slice.length - 1].close,
+      });
+    }
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1030,4 +1086,5 @@ module.exports = {
   getPerfectOrder,
   getKumoBounce,
   getCloudSupport,
+  to4H,
 };
