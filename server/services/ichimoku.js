@@ -530,8 +530,504 @@ function getKumoTwist(candles, { lookback = 10 } = {}) {
   return { signal: null, barsAgo: null, close: last.close, senkouA: last.senkouA, senkouB: last.senkouB, cloudColor };
 }
 
+// ── Shared helpers for cross-signal functions ─────────────────────────────────
+
+/** Returns 'above' | 'in' | 'below' based on the result bar's cloud position. */
+function _cloudPos(r) {
+  if (!r) return 'in';
+  if (r.aboveCloud) return 'above';
+  if (r.belowCloud) return 'below';
+  return 'in';
+}
+
+/**
+ * Standard Ichimoku signal strength based on where the signal occurred
+ * relative to the cloud.
+ *   Bullish: strong above cloud, neutral in cloud, weak below cloud.
+ *   Bearish: strong below cloud, neutral in cloud, weak above cloud.
+ */
+function _crossStrength(signal, cloudPosition) {
+  if (signal === 'bullish') {
+    return cloudPosition === 'above' ? 'strong'
+      : cloudPosition === 'in'      ? 'neutral'
+      : 'weak';
+  }
+  if (signal === 'bearish') {
+    return cloudPosition === 'below' ? 'strong'
+      : cloudPosition === 'in'      ? 'neutral'
+      : 'weak';
+  }
+  return null;
+}
+
+// ── TK Cross ──────────────────────────────────────────────────────────────────
+
+/**
+ * Tenkan-Kijun Cross — Tenkan (9-period) crossing Kijun (26-period).
+ * The most widely traded Ichimoku signal.
+ *
+ * Strength follows classic Ichimoku doctrine:
+ *   Above cloud → Strong  |  In cloud → Neutral  |  Below cloud → Weak
+ *   (reversed for bearish: below cloud = strong)
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=5]  — bars back to search for the cross
+ *
+ * @returns {{
+ *   signal:        'bullish' | 'bearish' | null,
+ *   barsAgo:       number | null,
+ *   crossType:     string,
+ *   strength:      'strong' | 'neutral' | 'weak' | null,
+ *   cloudPosition: 'above' | 'in' | 'below',
+ *   close:         number,
+ *   tenkan:        number | null,
+ *   kijun:         number | null,
+ * }}
+ */
+function getTKCross(candles, { lookback = 5 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx = n - 1 - offset;
+    if (idx < 0) break;
+
+    const r = results[idx];
+    if (r.tkCross === null) continue;
+
+    const crossCloudPos = _cloudPos(r);
+    return {
+      signal:        r.tkCross,
+      barsAgo:       offset,
+      crossType:     'TK Cross',
+      strength:      _crossStrength(r.tkCross, crossCloudPos),
+      cloudPosition: _cloudPos(last), // current position (for context)
+      close:         last.close,
+      tenkan:        last.tenkan,
+      kijun:         last.kijun,
+    };
+  }
+
+  return {
+    signal: null, barsAgo: null, crossType: 'TK Cross',
+    strength: null, cloudPosition: _cloudPos(last),
+    close: last.close, tenkan: last.tenkan, kijun: last.kijun,
+  };
+}
+
+// ── Kijun Cross ───────────────────────────────────────────────────────────────
+
+/**
+ * Kijun Cross — price (close) crosses the Kijun (base line).
+ * Stronger signal than TK Cross when it occurs above/below the cloud.
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=5]
+ */
+function getKijunCross(candles, { lookback = 5 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx  = n - 1 - offset;
+    const idxP = idx - 1;
+    if (idxP < 0) break;
+
+    const r    = results[idx];
+    const prev = results[idxP];
+    if (r.kijun == null || prev.kijun == null) continue;
+
+    const wasAbove = prev.close > prev.kijun;
+    const isAbove  = r.close    > r.kijun;
+
+    if (!wasAbove && isAbove) {
+      const crossCloudPos = _cloudPos(r);
+      return {
+        signal:        'bullish',
+        barsAgo:       offset,
+        crossType:     'Kijun Cross',
+        strength:      _crossStrength('bullish', crossCloudPos),
+        cloudPosition: _cloudPos(last),
+        close:         last.close,
+        kijun:         last.kijun,
+      };
+    }
+    if (wasAbove && !isAbove) {
+      const crossCloudPos = _cloudPos(r);
+      return {
+        signal:        'bearish',
+        barsAgo:       offset,
+        crossType:     'Kijun Cross',
+        strength:      _crossStrength('bearish', crossCloudPos),
+        cloudPosition: _cloudPos(last),
+        close:         last.close,
+        kijun:         last.kijun,
+      };
+    }
+  }
+
+  return {
+    signal: null, barsAgo: null, crossType: 'Kijun Cross',
+    strength: null, cloudPosition: _cloudPos(last),
+    close: last.close, kijun: last.kijun,
+  };
+}
+
+// ── Chikou Cross ──────────────────────────────────────────────────────────────
+
+/**
+ * Chikou Cross — the lagging span (current close plotted 26 bars back) crossing
+ * the historical price from 26 bars ago.
+ *
+ * This is the final confirmation signal in Ichimoku analysis — considered the
+ * most reliable because it factors in the full 26-bar momentum shift.
+ *
+ * A bullish Chikou cross: close[i] > close[i-26]  AND  close[i-1] ≤ close[i-1-26]
+ * A bearish Chikou cross: close[i] < close[i-26]  AND  close[i-1] ≥ close[i-1-26]
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=5]
+ */
+function getChikouCross(candles, { lookback = 5 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  const currentChikou     = last.close;
+  const currentHistorical = n >= 27 ? candles[n - 1 - 26].close : null;
+
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx  = n - 1 - offset; // candidate cross bar
+    const idxP = idx - 1;        // bar before cross
+
+    // Need 26 bars before the candidate bar to compare historical prices
+    if (idxP < 26) break;
+
+    const chikouCur  = candles[idx].close;
+    const histCur    = candles[idx - 26].close;
+    const chikouPrev = candles[idxP].close;
+    const histPrev   = candles[idxP - 26].close;
+
+    const wasAbove = chikouPrev > histPrev;
+    const isAbove  = chikouCur  > histCur;
+
+    if (!wasAbove && isAbove) {
+      const crossCloudPos = _cloudPos(results[idx]);
+      return {
+        signal:          'bullish',
+        barsAgo:         offset,
+        crossType:       'Chikou Cross',
+        strength:        _crossStrength('bullish', crossCloudPos),
+        cloudPosition:   _cloudPos(last),
+        close:           last.close,
+        chikouValue:     currentChikou,
+        historicalClose: currentHistorical,
+      };
+    }
+    if (wasAbove && !isAbove) {
+      const crossCloudPos = _cloudPos(results[idx]);
+      return {
+        signal:          'bearish',
+        barsAgo:         offset,
+        crossType:       'Chikou Cross',
+        strength:        _crossStrength('bearish', crossCloudPos),
+        cloudPosition:   _cloudPos(last),
+        close:           last.close,
+        chikouValue:     currentChikou,
+        historicalClose: currentHistorical,
+      };
+    }
+  }
+
+  return {
+    signal: null, barsAgo: null, crossType: 'Chikou Cross',
+    strength: null, cloudPosition: _cloudPos(last),
+    close: last.close, chikouValue: currentChikou, historicalClose: currentHistorical,
+  };
+}
+
+// ── Perfect Order ─────────────────────────────────────────────────────────────
+
+/**
+ * Perfect Order (Ideal Order) — all 5 Ichimoku components are aligned.
+ *
+ * Bullish Perfect Order requires all 5 conditions simultaneously at the current bar:
+ *   1. close > tenkan            (price above conversion line)
+ *   2. tenkan > kijun            (conversion line above base line)
+ *   3. price above cloud         (aboveCloud = true)
+ *   4. senkouA > senkouB         (cloud is bullish / green)
+ *   5. close > close[n-27]       (chikou above historical price = momentum up)
+ *
+ * Bearish Perfect Order: all conditions inverted.
+ *
+ * Score = how many of the 5 conditions satisfy the dominant direction.
+ * Signal only fires at 5/5.
+ *
+ * @param {Object[]} candles
+ */
+function getPerfectOrder(candles) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  if (last.tenkan == null || last.kijun == null) return null;
+
+  const price26ago = n >= 27 ? candles[n - 1 - 26].close : null;
+
+  // Evaluate each check as 'bullish' or 'bearish'
+  const checks = {
+    priceVsTenkan: last.close  > last.tenkan  ? 'bullish' : 'bearish',
+    tenkanVsKijun: last.tenkan > last.kijun   ? 'bullish' : 'bearish',
+    cloudPosition: last.aboveCloud            ? 'bullish' : last.belowCloud ? 'bearish' : 'neutral',
+    cloudColor:    last.senkouA != null && last.senkouB != null
+      ? (last.senkouA > last.senkouB ? 'bullish' : 'bearish')
+      : 'neutral',
+    chikou:        price26ago != null
+      ? (last.close > price26ago ? 'bullish' : 'bearish')
+      : 'neutral',
+  };
+
+  const votes     = Object.values(checks);
+  const bullScore = votes.filter((v) => v === 'bullish').length;
+  const bearScore = votes.filter((v) => v === 'bearish').length;
+  const score     = Math.max(bullScore, bearScore);
+
+  const signal = bullScore === 5 ? 'bullish'
+    : bearScore === 5             ? 'bearish'
+    : null;
+
+  return {
+    signal,
+    score,
+    checks,
+    crossType:   'Perfect Order',
+    close:       last.close,
+    tenkan:      last.tenkan,
+    kijun:       last.kijun,
+    senkouA:     last.senkouA,
+    senkouB:     last.senkouB,
+    price26ago,
+  };
+}
+
+// ── Kumo Bounce ───────────────────────────────────────────────────────────────
+
+/**
+ * Kumo Bounce — price tests the cloud edge from outside and reverses.
+ * The cloud acts as dynamic support (bullish) or resistance (bearish).
+ *
+ * Bullish Kumo Bounce:
+ *   - Current bar is above the cloud
+ *   - Within `lookback` bars, the candle LOW touched cloudTop (within `tolerance`)
+ *   - Current close is higher than the touch bar's close (bounce confirmed)
+ *
+ * Bearish Kumo Bounce:
+ *   - Current bar is below the cloud
+ *   - Within `lookback` bars, the candle HIGH touched cloudBottom (within `tolerance`)
+ *   - Current close is lower than the touch bar's close (bounce confirmed)
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=5]         — bars to search for the touch
+ * @param {number}   [opts.tolerance=0.005]    — touch proximity (0.5% of cloud edge)
+ */
+function getKumoBounce(candles, { lookback = 5, tolerance = 0.005 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  // Price must currently be outside the cloud
+  if (!last.aboveCloud && !last.belowCloud) {
+    return { signal: null, barsAgo: null, close: last.close, cloudLevel: null, cloudPosition: 'in' };
+  }
+
+  const isBullish = last.aboveCloud;
+
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx = n - 1 - offset;
+    if (idx < 0) break;
+
+    const r = results[idx];
+    const c = candles[idx]; // raw candle for high/low
+
+    if (isBullish) {
+      if (!r.cloudTop || !r.aboveCloud) continue;
+
+      // Did the LOW touch cloudTop within tolerance?
+      const touchDist = (c.low - r.cloudTop) / r.cloudTop;
+      if (touchDist >= 0 && touchDist <= tolerance) {
+        // Bounce confirmed: current close is higher than touch-bar close
+        if (last.close > r.close) {
+          return {
+            signal:        'bullish',
+            barsAgo:       offset,
+            crossType:     'Kumo Bounce',
+            cloudPosition: 'above',
+            close:         last.close,
+            cloudLevel:    round(r.cloudTop),
+          };
+        }
+      }
+    } else {
+      if (!r.cloudBottom || !r.belowCloud) continue;
+
+      // Did the HIGH touch cloudBottom within tolerance?
+      const touchDist = (r.cloudBottom - c.high) / r.cloudBottom;
+      if (touchDist >= 0 && touchDist <= tolerance) {
+        if (last.close < r.close) {
+          return {
+            signal:        'bearish',
+            barsAgo:       offset,
+            crossType:     'Kumo Bounce',
+            cloudPosition: 'below',
+            close:         last.close,
+            cloudLevel:    round(r.cloudBottom),
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    signal: null, barsAgo: null, crossType: 'Kumo Bounce',
+    cloudPosition: isBullish ? 'above' : 'below',
+    close: last.close,
+    cloudLevel: isBullish ? last.cloudTop : last.cloudBottom,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cloud Support / Cloud Resistance
+ *
+ * A trend-continuation confirmation: price is currently sitting cleanly
+ * above (bullish) or below (bearish) the cloud, the cloud color agrees
+ * with the direction, and price has held that position for at least
+ * `minBars` consecutive bars.
+ *
+ * This is distinct from kumo-bounce (which requires a touch-and-reverse
+ * event) — Cloud Support is about sustained position relative to the cloud,
+ * i.e. "the cloud is acting as a floor/ceiling right now."
+ *
+ * Score (0–5):
+ *   1 — price is above/below cloud
+ *   2 — cloud color agrees with direction (green above / red below)
+ *   3 — Tenkan is on the correct side of Kijun
+ *   4 — Chikou confirms (above/below price from 26 bars ago)
+ *   5 — Price has held above/below cloud for ≥ minBars consecutive bars
+ *
+ * @param {object[]} candles
+ * @param {{ minBars?: number }} opts
+ * @returns {{ signal, score, consecutiveBars, cloudThickness, cloudPosition,
+ *             close, cloudTop, cloudBottom, tenkan, kijun }}
+ */
+function getCloudSupport(candles, { minBars = 3 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  // Must be cleanly outside the cloud at the current bar
+  if (!last.aboveCloud && !last.belowCloud) {
+    return {
+      signal: null, score: 0,
+      cloudPosition: 'in',
+      close: last.close,
+      cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+    };
+  }
+
+  const isBullish = last.aboveCloud;
+  const signal = isBullish ? 'bullish' : 'bearish';
+
+  // Count consecutive bars where price has been on the correct side of the cloud
+  let consecutiveBars = 1;
+  for (let i = n - 2; i >= 0; i--) {
+    const r = results[i];
+    if (isBullish ? r.aboveCloud : r.belowCloud) {
+      consecutiveBars++;
+    } else {
+      break;
+    }
+  }
+
+  // Cloud color should agree: green (senkouA > senkouB) for bullish, red for bearish
+  const cloudColorAgrees = isBullish
+    ? (last.senkouA != null && last.senkouB != null && last.senkouA > last.senkouB)
+    : (last.senkouA != null && last.senkouB != null && last.senkouB > last.senkouA);
+
+  // Tenkan vs Kijun — should agree with direction
+  const tkAgrees = isBullish
+    ? (last.tenkan != null && last.kijun != null && last.tenkan > last.kijun)
+    : (last.tenkan != null && last.kijun != null && last.tenkan < last.kijun);
+
+  // Chikou: close[now] vs close[now - 26]
+  const chikouIdx = n - 1 - 26;
+  const chikouAgrees = chikouIdx >= 0
+    ? (isBullish ? last.close > results[chikouIdx].close : last.close < results[chikouIdx].close)
+    : false;
+
+  // Build score
+  let score = 1; // price is above/below cloud (already confirmed)
+  if (cloudColorAgrees) score++;
+  if (tkAgrees)         score++;
+  if (chikouAgrees)     score++;
+  if (consecutiveBars >= minBars) score++;
+
+  // Cloud thickness as a measure of support/resistance strength
+  const cloudThickness = last.cloudTop != null && last.cloudBottom != null
+    ? round(last.cloudTop - last.cloudBottom)
+    : null;
+
+  return {
+    signal,
+    score,
+    consecutiveBars,
+    cloudThickness,
+    cloudPosition: isBullish ? 'above' : 'below',
+    strength:      _crossStrength(signal, isBullish ? 'above' : 'below'),
+    close:         last.close,
+    cloudTop:      last.cloudTop  != null ? round(last.cloudTop)    : null,
+    cloudBottom:   last.cloudBottom != null ? round(last.cloudBottom) : null,
+    tenkan:        last.tenkan != null ? round(last.tenkan) : null,
+    kijun:         last.kijun  != null ? round(last.kijun)  : null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 function round(n) {
   return Math.round(n * 100) / 100;
 }
 
-module.exports = { calculate, snapshot, getSignals, getKumoBreakoutTwist, getKumoBreakout, getKumoTwist };
+module.exports = {
+  calculate,
+  snapshot,
+  getSignals,
+  getKumoBreakoutTwist,
+  getKumoBreakout,
+  getKumoTwist,
+  getTKCross,
+  getKijunCross,
+  getChikouCross,
+  getPerfectOrder,
+  getKumoBounce,
+  getCloudSupport,
+};

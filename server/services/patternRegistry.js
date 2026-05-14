@@ -16,7 +16,11 @@
  *                        returning null or throwing skips the instrument silently.
  */
 
-const { getKumoBreakoutTwist, getKumoBreakout, getKumoTwist } = require('./ichimoku');
+const {
+  getKumoBreakoutTwist, getKumoBreakout, getKumoTwist,
+  getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
+  getCloudSupport,
+} = require('./ichimoku');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pattern definitions
@@ -65,9 +69,91 @@ const PATTERNS = {
     },
   },
 
-  // ── Add future patterns here, e.g.:
-  // 'tk-cross-above-cloud': { ... },
-  // 'chikou-breakout':      { ... },
+  // ── Tier 1: Core Signals ──────────────────────────────────────────────────
+
+  'tk-cross': {
+    id:          'tk-cross',
+    label:       'TK Cross (last 5 bars)',
+    description: 'Tenkan crossed above/below Kijun within last 5 bars. Strength depends on cloud position: above=Strong, inside=Neutral, below=Weak.',
+    defaultOpts: { lookback: 5 },
+
+    run(candles, opts = {}) {
+      const result = getTKCross(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
+
+  'kijun-cross': {
+    id:          'kijun-cross',
+    label:       'Kijun Cross (last 5 bars)',
+    description: 'Price (close) crossed above/below the Kijun-sen within last 5 bars. Strong when price is also on the correct side of the cloud.',
+    defaultOpts: { lookback: 5 },
+
+    run(candles, opts = {}) {
+      const result = getKijunCross(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
+
+  'chikou-cross': {
+    id:          'chikou-cross',
+    label:       'Chikou Cross (last 5 bars)',
+    description: 'Chikou Span (lagging line) crossed above/below the price from 26 bars back within last 5 bars.',
+    defaultOpts: { lookback: 5 },
+
+    run(candles, opts = {}) {
+      const result = getChikouCross(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
+
+  // ── Tier 2: Confluence / High-Probability ────────────────────────────────
+
+  'perfect-order': {
+    id:          'perfect-order',
+    label:       'Perfect Order (all lines stacked)',
+    description: 'All 5 Ichimoku components are perfectly stacked at the current bar: Tenkan > Kijun > Price > Cloud (or inverse). Highest-conviction setup.',
+    defaultOpts: {},
+
+    run(candles, opts = {}) {
+      const result = getPerfectOrder(candles);
+      if (!result || !result.signal) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
+
+  'kumo-bounce': {
+    id:          'kumo-bounce',
+    label:       'Kumo Bounce (last 5 bars)',
+    description: 'Price pulled back to the cloud edge from outside and reversed within last 5 bars. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below.',
+    defaultOpts: { lookback: 5, tolerance: 0.005 },
+
+    run(candles, opts = {}) {
+      const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
+
+  // ── Tier 2: Cloud Position Patterns ─────────────────────────────────────
+
+  'cloud-support': {
+    id:          'cloud-support',
+    label:       'Cloud Support / Resistance',
+    description: 'Price is currently above (bullish) or below (bearish) the cloud, cloud color agrees, and price has held that position for ≥ 3 consecutive bars. Score 0–5 includes TK order, Chikou, and duration.',
+    defaultOpts: { minBars: 3 },
+
+    run(candles, opts = {}) {
+      const result = getCloudSupport(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      // Only fire when score is at least 3 — avoids alerting on weak/thin cloud setups
+      if (result.score < 3) return { matched: false };
+      return { matched: true, ...result };
+    },
+  },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

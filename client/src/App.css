@@ -2815,6 +2815,35 @@ body {
 .scan-score-num  { font-size: 11px; color: var(--txt3); margin-left: 4px; }
 .scan-score-na   { color: var(--txt3); }
 
+/* Strength badge */
+.scan-strength-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.scan-strength--strong  { background: rgba(34,197,94,0.15);  color: #22c55e; }
+.scan-strength--neutral { background: rgba(148,163,184,0.15); color: #94a3b8; }
+.scan-strength--weak    { background: rgba(234,179,8,0.15);   color: #eab308; }
+.scan-cell--strength    { white-space: nowrap; }
+
+/* Inline meta tag (e.g. "12 bars" for cloud-support duration) */
+.scan-meta-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--border2);
+  color: var(--txt3);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: middle;
+}
+
 /* Price @ alert */
 .scan-cell--price { font-family: var(--mono); color: var(--txt2); font-size: 12px; }
 .scan-cell--time  { color: var(--txt3); font-size: 12px; }

@@ -58,14 +58,6 @@ function _claimFire(key) {
   return true;
 }
 
-/**
- * Reset the dedup flag when the signal clears so the next setup can fire again.
- */
-function _resetFire(key) {
-  const today = _istDateStr();
-  _dedup.set(key, { fired: false, date: today });
-}
-
 /** Synthesise 4h candles from consecutive 1h candles (same as macroAnalysis / patternAlertWatcher). */
 function _to4H(candles1h) {
   const out = [];
@@ -104,9 +96,11 @@ function _runAndBroadcast(token, interval, candles) {
     }
 
     if (!result?.matched || !result.signal) {
-      // Pattern cleared — reset dedup so the next crossing can fire again
-      _resetFire(`${token}:${interval}:${patternId}:bullish`);
-      _resetFire(`${token}:${interval}:${patternId}:bearish`);
+      // Pattern not active — skip silently.
+      // Do NOT reset the dedup: brief oscillations (pattern goes false for
+      // one bar then true again) would otherwise fire a new alert on every
+      // candle. The dedup resets at midnight IST so a genuine new setup on
+      // the next trading day will fire correctly.
       continue;
     }
 
@@ -114,16 +108,21 @@ function _runAndBroadcast(token, interval, candles) {
     if (!_claimFire(dedupKey)) continue; // already broadcast today
 
     broadcast('scan_alert', {
-      token:        Number(token),
+      token:         Number(token),
       label,
       interval,
       tfLabel,
       patternId,
       patternLabel,
-      signal:       result.signal,
-      score:        result.score  ?? null,
-      close:        result.close  ?? null,
-      ts:           Date.now(),
+      signal:        result.signal,
+      score:         result.score         ?? null,
+      close:         result.close         ?? null,
+      strength:         result.strength         ?? null,
+      cloudPosition:    result.cloudPosition    ?? null,
+      barsAgo:          result.barsAgo          ?? null,
+      consecutiveBars:  result.consecutiveBars  ?? null,
+      cloudThickness:   result.cloudThickness   ?? null,
+      ts:            Date.now(),
     });
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);

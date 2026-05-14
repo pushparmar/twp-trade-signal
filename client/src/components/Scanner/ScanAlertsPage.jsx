@@ -34,6 +34,25 @@ function ScoreDots({ score, signal }) {
   );
 }
 
+// ── Strength badge ────────────────────────────────────────────────────────────
+
+const STRENGTH_META = {
+  strong:  { label: 'Strong',  emoji: '💪', cls: 'scan-strength--strong'  },
+  neutral: { label: 'Neutral', emoji: '➡️', cls: 'scan-strength--neutral' },
+  weak:    { label: 'Weak',    emoji: '⚠️', cls: 'scan-strength--weak'    },
+};
+
+function StrengthBadge({ strength }) {
+  if (!strength) return <span className="scan-score-na">—</span>;
+  const meta = STRENGTH_META[strength];
+  if (!meta) return <span className="scan-score-na">{strength}</span>;
+  return (
+    <span className={`scan-strength-badge ${meta.cls}`}>
+      {meta.emoji} {meta.label}
+    </span>
+  );
+}
+
 // ── Single row ────────────────────────────────────────────────────────────────
 
 function ScanRow({ alert, onSelect }) {
@@ -61,7 +80,15 @@ function ScanRow({ alert, onSelect }) {
           {alert.signal === 'bullish' ? '🟢 Bullish' : '🔴 Bearish'}
         </span>
       </td>
-      <td className="scan-cell scan-cell--pattern">{alert.patternLabel}</td>
+      <td className="scan-cell scan-cell--pattern">
+        {alert.patternLabel}
+        {alert.consecutiveBars != null && (
+          <span className="scan-meta-tag">{alert.consecutiveBars} bars</span>
+        )}
+      </td>
+      <td className="scan-cell scan-cell--strength">
+        <StrengthBadge strength={alert.strength} />
+      </td>
       <td className="scan-cell scan-cell--score">
         <ScoreDots score={alert.score} signal={alert.signal} />
       </td>
@@ -166,7 +193,7 @@ export default function ScanAlertsPage() {
           </div>
           <p className="scan-empty-text">
             {scanAlerts.length === 0
-              ? 'No pattern alerts yet. Alerts appear here when a Kumo pattern fires on any subscribed instrument.'
+              ? 'No pattern alerts yet. Alerts appear here when an Ichimoku pattern fires on any subscribed instrument.'
               : 'No alerts match the current filters.'}
           </p>
         </div>
@@ -180,6 +207,7 @@ export default function ScanAlertsPage() {
                 <th className="scan-th">TF</th>
                 <th className="scan-th">Signal</th>
                 <th className="scan-th">Pattern</th>
+                <th className="scan-th">Strength</th>
                 <th className="scan-th">Score</th>
                 <th className="scan-th">Price @ Alert</th>
                 <th className="scan-th">Time</th>

@@ -63,15 +63,6 @@ function _claimFire(key) {
   return true;
 }
 
-/**
- * If the signal has cleared (matched → false), reset the dedup flag so the
- * NEXT time the same pattern fires on a fresh setup it can alert again.
- */
-function _resetFire(key) {
-  const today = _istDateStr();
-  _dedup.set(key, { fired: false, date: today });
-}
-
 // Synthesise 4h candles from consecutive 1h candles (same as macroAnalysis.js)
 function _to4H(candles1h) {
   const out = [];
@@ -108,9 +99,12 @@ async function _runAndAlert(token, interval, candles) {
     }
 
     if (!result?.matched || !result.signal) {
-      // Pattern no longer active — reset dedup so next trigger can fire
-      _resetFire(`${token}:${interval}:${patternId}:bullish`);
-      _resetFire(`${token}:${interval}:${patternId}:bearish`);
+      // Pattern not active — skip silently.
+      // Do NOT call _resetFire here: resetting when the pattern briefly
+      // goes false (e.g. price dips inside the cloud for one bar) causes
+      // the alert to re-fire on the next candle, producing a Telegram
+      // message every 15 min. The dedup resets at midnight IST so a
+      // genuine new setup on the next trading day always fires correctly.
       continue;
     }
 
@@ -128,10 +122,18 @@ async function _runAndAlert(token, interval, candles) {
       `Signal : <b>${sigText}</b>`,
     ];
 
-    if (result.score != null)        lines.push(`Score  : ${result.score}/5`);
-    if (result.close != null)        lines.push(`Price  : ${result.close}`);
-    if (result.barsAgo != null)      lines.push(`Breakout : ${result.barsAgo} bar${result.barsAgo !== 1 ? 's' : ''} ago`);
-    if (result.twistBarsAgo != null) lines.push(`Twist  : ${result.twistBarsAgo} bar${result.twistBarsAgo !== 1 ? 's' : ''} ago`);
+    if (result.strength != null) {
+      // Strength qualifier: Strong / Neutral / Weak — based on cloud position
+      const STRENGTH_EMOJI = { strong: '💪', neutral: '➡️', weak: '⚠️' };
+      lines.push(`Strength : ${STRENGTH_EMOJI[result.strength] || ''} <b>${result.strength.charAt(0).toUpperCase() + result.strength.slice(1)}</b>`);
+    }
+    if (result.cloudPosition != null) lines.push(`Cloud pos: ${result.cloudPosition}`);
+    if (result.score != null)         lines.push(`Score    : ${result.score}/5`);
+    if (result.close != null)         lines.push(`Price    : ${result.close}`);
+    if (result.barsAgo != null)           lines.push(`${result.crossType ? result.crossType + ' ' : ''}Cross : ${result.barsAgo} bar${result.barsAgo !== 1 ? 's' : ''} ago`);
+    if (result.twistBarsAgo != null)      lines.push(`Twist    : ${result.twistBarsAgo} bar${result.twistBarsAgo !== 1 ? 's' : ''} ago`);
+    if (result.consecutiveBars != null)   lines.push(`Above/Below cloud : ${result.consecutiveBars} bar${result.consecutiveBars !== 1 ? 's' : ''}`);
+    if (result.cloudThickness != null)    lines.push(`Cloud thickness : ${result.cloudThickness}`);
 
     // Individual check summary — tick/cross per check
     if (result.checks) {
@@ -159,16 +161,21 @@ async function _runAndAlert(token, interval, candles) {
     // Broadcast to SSE clients so the Scanner tab updates in real time,
     // regardless of whether Telegram succeeded.
     broadcast('scan_alert', {
-      token:        Number(token),
+      token:         Number(token),
       label,
       interval,
       tfLabel,
       patternId,
       patternLabel,
-      signal:       result.signal,
-      score:        result.score  ?? null,
-      close:        result.close  ?? null,
-      ts:           Date.now(),
+      signal:        result.signal,
+      score:         result.score         ?? null,
+      close:         result.close         ?? null,
+      strength:         result.strength         ?? null,
+      cloudPosition:    result.cloudPosition    ?? null,
+      barsAgo:          result.barsAgo          ?? null,
+      consecutiveBars:  result.consecutiveBars  ?? null,
+      cloudThickness:   result.cloudThickness   ?? null,
+      ts:            Date.now(),
     });
   }
 }
