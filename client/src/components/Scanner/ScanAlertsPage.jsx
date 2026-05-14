@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import useAppStore from '../../store/appStore';
+import api from '../../api';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -204,17 +205,16 @@ function ScreenerToolbar({ onResults }) {
 
   // Load pattern list + universe counts on mount
   useEffect(() => {
-    fetch('/api/scan/patterns')
-      .then((r) => r.json())
-      .then((list) => {
+    api.get('/scan/patterns')
+      .then((r) => {
+        const list = r.data;
         setPatterns(list);
         if (list.length) setPatternId(list[0].id);
       })
       .catch(() => {});
 
-    fetch('/api/scan/universe')
-      .then((r) => r.json())
-      .then(setUniverse)
+    api.get('/scan/universe')
+      .then((r) => setUniverse(r.data))
       .catch(() => {});
   }, []);
 
@@ -238,26 +238,17 @@ function ScreenerToolbar({ onResults }) {
         setPhase(TF_LABEL[intervals[phaseIdx]] || intervals[phaseIdx]);
         phaseIdx++;
       }
-    }, 3500); // advances every ~3.5 s, matching interTfDelayMs=3000 + scan time
+    }, 15_000); // rough estimate: each phase takes ~10-20 s on first run, ~2 s on cache hit
 
     try {
-      const res = await fetch('/api/scan', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ patternId, scope: 'all', interTfDelayMs: 3000, batchSize: 8 }),
+      const res = await api.post('/scan', {
+        patternId, scope: 'all', interTfDelayMs: 500, batchSize: 12,
       });
 
       clearInterval(phaseTimer);
       setPhase('');
 
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        setStatus(err.error || `Scan failed (${res.status})`);
-        setStatusKind('err');
-        return;
-      }
-
-      const data = await res.json();
+      const data = res.data;
       const { matches = [], scannedCount, totalInstruments, patternLabel } = data;
 
       onResults(matches);
@@ -275,7 +266,9 @@ function ScreenerToolbar({ onResults }) {
     } catch (err) {
       clearInterval(phaseTimer);
       setPhase('');
-      setStatus(`Network error: ${err.message}`);
+      // axios wraps HTTP errors in err.response; plain network failures have only err.message
+      const msg = err.response?.data?.error || err.message || 'Request failed';
+      setStatus(`Error: ${msg}`);
       setStatusKind('err');
     } finally {
       setRunning(false);

@@ -113,14 +113,25 @@ const router = express.Router();
 // The old local version grouped from buffer index 0 and produced cross-session candles.
 const _to4H = to4H;
 
+// Minimum bars for each interval to satisfy the Ichimoku 52-bar requirement,
+// with a small headroom buffer. Keeping this tight means shorter Kite API date
+// ranges → faster fetches + better cache hit rates on repeat scans.
+const SCAN_BARS = {
+  '15minute': 100,
+  '60minute': 208,  // 4h synthesis needs 52×4 = 208 1h bars
+  'day':      100,
+};
+
 // Fetch candles for any interval, handling the synthetic 4h case.
+// Uses a minimal bar count (SCAN_BARS) so Kite API requests cover the shortest
+// date range needed — this dramatically improves cache hit rates on repeat scans.
 async function _getCandles(token, interval) {
   if (interval === '4h') {
-    // Pull enough 1h bars to produce at least 52 synthesised 4h candles (52×4 = 208 1h bars)
-    const c1h = await candleStore.getCandles(token, '60minute', 208);
+    // Pull enough 1h bars to produce at least 52 synthesised 4h candles
+    const c1h = await candleStore.getCandles(token, '60minute', SCAN_BARS['60minute']);
     return c1h && c1h.length >= 8 ? _to4H(c1h) : null;
   }
-  return candleStore.getCandles(token, interval);
+  return candleStore.getCandles(token, interval, SCAN_BARS[interval] ?? 100);
 }
 
 // ── GET /api/scan/patterns ────────────────────────────────────────────────────
@@ -377,7 +388,9 @@ router.post('/', async (req, res) => {
   for (let p = 0; p < intervals.length; p++) {
     const interval = intervals[p];
     await _scanPhase(interval);
-    // Pause between phases (skip after the last phase)
+    // Pause between phases — historicalCache handles per-request rate limiting,
+    // so this gap only exists to give the Kite API a brief breath between bulk
+    // phases. 500 ms is sufficient; the old 3 000 ms was unnecessary overhead.
     if (interTfDelayMs > 0 && p < intervals.length - 1) {
       console.log(`[Scan] pausing ${interTfDelayMs}ms before next timeframe…`);
       await _sleep(interTfDelayMs);
