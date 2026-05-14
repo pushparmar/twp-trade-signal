@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import useAppStore from '../../store/appStore';
 import api from '../../api';
 import ScanChartModal from './ScanChartModal';
@@ -17,6 +17,58 @@ function relativeTime(ts) {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
   return `${Math.floor(diffSec / 86400)}d ago`;
+}
+
+// ── Market-hours helpers ──────────────────────────────────────────────────────
+// Used to decide cache validity for the auto-screener. When the market is
+// closed, the underlying candle data is frozen, so a scan run during off-hours
+// stays valid until the next session opens — no point re-running it on every
+// tab switch through the weekend.
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * True if any Indian market session is open right now (Mon-Fri only):
+ *   NSE  — 9:15 AM to  3:30 PM IST (mins 555 – 930)
+ *   MCX  — 9:00 AM to 11:30 PM IST (mins 540 – 1410)
+ *
+ * MCX extends the "live data" window all the way to 11:30 PM, so the
+ * 5-min auto-refresh TTL stays active until MCX closes.
+ */
+function isMarketHours(now = Date.now()) {
+  const ist = new Date(now + IST_OFFSET_MS);
+  const dow = ist.getUTCDay();
+  if (dow === 0 || dow === 6) return false;           // weekends always closed
+  const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  const nseOpen = mins >= 555 && mins <= 930;         // 9:15 – 15:30
+  const mcxOpen = mins >= 540 && mins <= 1410;        // 9:00 – 23:30
+  return nseOpen || mcxOpen;
+}
+
+/**
+ * Returns the UTC ms timestamp of the most recent market close on a trading
+ * day. We use MCX close (23:30 IST) as the latest session boundary — it closes
+ * after NSE, so the cache only freezes once MCX is done for the day.
+ *
+ * If the current time is before 23:30 IST today (i.e. MCX is still open or
+ * the day hasn't closed yet), we look back to the previous trading day's
+ * 23:30 IST close. Weekends are skipped back to Friday.
+ */
+function lastMarketCloseMs(now = Date.now()) {
+  // Work in an IST-shifted Date so UTC accessors read IST values.
+  const ist = new Date(now + IST_OFFSET_MS);
+  const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  // MCX closes at 23:30 IST (mins = 1410). If we're past that, today's
+  // close counts; otherwise go back to the previous trading day.
+  const daysBack = mins >= 1410 ? 0 : 1;
+  const candidate = new Date(ist);
+  candidate.setUTCDate(candidate.getUTCDate() - daysBack);
+  candidate.setUTCHours(23, 30, 0, 0);               // 23:30 IST = MCX close
+  // Walk back through weekends to land on the last trading day (Friday).
+  while (candidate.getUTCDay() === 0 || candidate.getUTCDay() === 6) {
+    candidate.setUTCDate(candidate.getUTCDate() - 1);
+  }
+  return candidate.getTime() - IST_OFFSET_MS;
 }
 
 // ── Score dots ────────────────────────────────────────────────────────────────
@@ -267,12 +319,17 @@ function ScreenerToolbar({ onTfResults, onClear }) {
   const [universe,   setUniverse]   = useState(null);   // { macros, watchlist, futures, all }
   const [tfFilter,   setTfFilter]   = useState('all');  // 'all' | interval id
   const [running,    setRunning]    = useState(false);
-  const [status,     setStatus]     = useState('');     // overall status line
-  const [statusKind, setStatusKind] = useState('');     // '' | 'ok' | 'err'
-  // Per-TF state map: { [interval]: { state, matches, error } }
-  const [tfState,    setTfState]    = useState({});
 
-  const autoRunRef = useRef(false); // guard so auto-run fires only once per mount
+  // Status, per-TF state, and last-run timestamp are persisted in the global
+  // store so switching tabs doesn't wipe the screener's "last run" view.
+  const status               = useAppStore((s) => s.screenerStatus);
+  const statusKind           = useAppStore((s) => s.screenerStatusKind);
+  const setStatus            = useAppStore((s) => s.setScreenerStatus);
+  const setStatusKind        = useAppStore((s) => s.setScreenerStatusKind);
+  const tfState              = useAppStore((s) => s.screenerTfState);
+  const setTfState           = useAppStore((s) => s.setScreenerTfState);
+  const screenerLastRunAt    = useAppStore((s) => s.screenerLastRunAt);
+  const setScreenerLastRunAt = useAppStore((s) => s.setScreenerLastRunAt);
 
   // Load pattern list + universe counts on mount
   useEffect(() => {
@@ -305,11 +362,21 @@ function ScreenerToolbar({ onTfResults, onClear }) {
    * patterns so the actual Kite API cost stays the same.
    *
    * Per-TF pills aggregate matches across all patterns scanned for that TF.
+   *
+   * @param {string[]} [overrideIntervals]  Explicit interval list (overrides tfFilter)
+   * @param {object}   [opts]
+   * @param {boolean}  [opts.keep]   If true, don't call onClear at start
+   *                                 (used by the background fan-out so the
+   *                                 prior 15m results stay visible)
+   * @param {boolean}  [opts.silent] If true, don't update the top status line
+   *                                 (background phase shouldn't overwrite
+   *                                 the foreground summary)
    */
-  const runScan = useCallback(async () => {
+  const runScan = useCallback(async (overrideIntervals = null, opts = {}) => {
     if (!patternId || running) return;
 
-    const intervals  = tfFilter === 'all' ? ALL_INTERVALS : [tfFilter];
+    const intervals = overrideIntervals
+      ?? (tfFilter === 'all' ? ALL_INTERVALS : [tfFilter]);
 
     // Resolve list of pattern IDs to scan. If user picked 'all' but the
     // pattern list hasn't loaded yet, abort with a clear status.
@@ -324,22 +391,36 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     }
 
     setRunning(true);
-    setStatusKind('');
-    setStatus(
-      patternIds.length > 1
-        ? `Scanning ${intervals.length} TF × ${patternIds.length} patterns…`
-        : intervals.length > 1
-          ? `Scanning ${intervals.length} timeframes in parallel…`
-          : `Scanning ${TF_LABEL[intervals[0]]}…`
-    );
-    onClear();   // clear previous screener results from the table
+    if (!opts.silent) {
+      setStatusKind('');
+      setStatus(
+        patternIds.length > 1
+          ? `Scanning ${intervals.length} TF × ${patternIds.length} patterns…`
+          : intervals.length > 1
+            ? `Scanning ${intervals.length} timeframes in parallel…`
+            : `Scanning ${TF_LABEL[intervals[0]]}…`
+      );
+    }
+    if (!opts.keep) onClear();   // clear previous screener results from the table
 
-    // Initialise pill state: first TF running, rest queued
-    const initial = {};
-    intervals.forEach((iv, idx) => {
-      initial[iv] = { state: idx === 0 ? 'running' : 'queued', matches: 0 };
-    });
-    setTfState(initial);
+    // Initialise pill state for this batch: first TF running, rest queued.
+    // When `opts.keep` is set (background phase), MERGE with existing state so
+    // the foreground TF's 'done' pill is preserved.
+    if (opts.keep) {
+      setTfState((prev) => {
+        const next = { ...prev };
+        intervals.forEach((iv, idx) => {
+          next[iv] = { state: idx === 0 ? 'running' : 'queued', matches: 0 };
+        });
+        return next;
+      });
+    } else {
+      const initial = {};
+      intervals.forEach((iv, idx) => {
+        initial[iv] = { state: idx === 0 ? 'running' : 'queued', matches: 0 };
+      });
+      setTfState(initial);
+    }
 
     let totalMatches  = 0;
     let totalScanned  = 0;
@@ -413,7 +494,9 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     const totalSucceeded = totalTfOk;
     const totalFailed    = totalTfFailed;
 
-    // Build final summary
+    // Build final summary — skipped in silent mode (background phase) so the
+    // user keeps seeing the foreground summary while the rest fans out.
+    if (!opts.silent) {
     if (totalSucceeded === 0) {
       setStatus(`All ${intervals.length} timeframes failed — check server logs`);
       setStatusKind('err');
@@ -427,22 +510,95 @@ function ScreenerToolbar({ onTfResults, onClear }) {
       setStatus(`${totalMatches} match${totalMatches !== 1 ? 'es' : ''} — ${totalScanned} pairs scanned`);
       setStatusKind('ok');
     }
+    } // end if (!opts.silent)
+
+    // Mark the scan as recently completed so a tab switch within the next
+    // AUTO_RUN_TTL_MS window reuses these results instead of re-scanning.
+    // Background phase also updates this so the timestamp reflects the
+    // most recent scan activity, not just the foreground one.
+    setScreenerLastRunAt(Date.now());
 
     setRunning(false);
-  }, [patternId, running, tfFilter, patterns, onTfResults, onClear]);
+  }, [patternId, running, tfFilter, patterns, onTfResults, onClear, setScreenerLastRunAt]);
 
-  // Auto-run once after patterns load — gives the user fresh results without a click.
-  // Wait until BOTH patternId is set AND patterns list is loaded, otherwise an
-  // 'all' fan-out has nothing to iterate over.
+  // Auto-run after patterns load — BUT only if the previous run is stale.
+  //
+  // Cache rule:
+  //   • During market hours (NSE 9:15-15:30 OR MCX 9:00-23:30 IST weekdays):
+  //       5-minute TTL — candles close every 15 min so stale results aren't useful.
+  //   • Off market hours (after MCX 23:30 close, nights, weekends, holidays):
+  //       Cache stays valid until the next market open. Candle data is frozen
+  //       so re-scanning during off-hours produces identical results — pointless.
+  //
+  // We persist `screenerLastRunAt` in the global store so switching tabs and
+  // coming back does NOT trigger a fresh scan and wipe the previous results.
+  //
+  // Two-phase strategy when a scan does fire:
+  //   1. Foreground: scan 15m × all patterns immediately (one TF, ~10-20 s)
+  //   2. Background: scan 1h + 4h + 1d × all patterns silently afterwards
+  const AUTO_RUN_TTL_MS = 5 * 60 * 1000; // 5 minutes during market hours
   useEffect(() => {
-    if (autoRunRef.current) return;
-    if (!patternId)        return;
+    if (!patternId) return;
     if (patternId === 'all' && patterns.length === 0) return;
-    autoRunRef.current = true;
-    const t = setTimeout(() => { runScan(); }, 600);
+
+    // Decide whether the previous run is still valid
+    const now      = Date.now();
+    const lastRun  = screenerLastRunAt || 0;
+    const isOpen   = isMarketHours(now);
+
+    let cacheValid = false;
+    if (lastRun) {
+      if (isOpen) {
+        // Standard TTL during live trading
+        cacheValid = (now - lastRun) < AUTO_RUN_TTL_MS;
+      } else {
+        // Off-hours: valid as long as the run happened AFTER the most recent
+        // market close (i.e. during the current frozen-data window).
+        cacheValid = lastRun >= lastMarketCloseMs(now);
+      }
+    }
+    if (cacheValid) return;
+
+    const t = setTimeout(async () => {
+      // Record the timestamp BEFORE the scan so a quick re-mount during the
+      // scan doesn't double-trigger.
+      setScreenerLastRunAt(Date.now());
+
+      // Phase 1 — 15m only, foreground (clears table, sets status line)
+      await runScan(['15minute']);
+
+      // Phase 2 — remaining TFs in background, keeping the 15m table intact.
+      runScan(['60minute', '4h', 'day'], { keep: true, silent: true });
+    }, 600);
+
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patternId, patterns]);
+
+  /**
+   * Manual "Run Screener" click handler — applies the same off-market cache
+   * logic as the auto-run so the user doesn't waste time re-scanning when
+   * candle data is frozen (nights / weekends / after MCX 23:30 IST close).
+   *
+   * Off-market: skip if we already have a run from the current frozen-data
+   *   window (after the latest MCX close). Show an info message instead.
+   * Market hours: always run — data changes every candle close.
+   * Shift-click: bypass cache check and force a fresh scan.
+   */
+  const handleManualRunScan = useCallback((e) => {
+    const forceRun = e?.shiftKey;   // Shift+click overrides off-market cache
+    if (!forceRun && screenerLastRunAt) {
+      const now    = Date.now();
+      const isOpen = isMarketHours(now);
+      if (!isOpen && screenerLastRunAt >= lastMarketCloseMs(now)) {
+        // Data is frozen and we already have results — nothing new to find.
+        setStatus('Market is closed — showing cached results (Shift+click to force re-scan)');
+        setStatusKind('info');
+        return;
+      }
+    }
+    runScan();
+  }, [screenerLastRunAt, runScan, setStatus, setStatusKind]);
 
   const universeHint = universe
     ? `~${universe.all} instruments  (${universe.futures} futures + macros)`
@@ -482,8 +638,9 @@ function ScreenerToolbar({ onTfResults, onClear }) {
 
         <button
           className={`screener-run-btn ${running ? 'screener-run-btn--running' : ''}`}
-          onClick={runScan}
+          onClick={handleManualRunScan}
           disabled={running || !patternId}
+          title="Run screener — Shift+click to force re-scan during off-market hours"
         >
           {running ? (
             <>
@@ -507,7 +664,7 @@ function ScreenerToolbar({ onTfResults, onClear }) {
           <span className="screener-universe-hint">{universeHint}</span>
         )}
         {(running || status) && (
-          <span className={`screener-status ${statusKind === 'ok' ? 'screener-status--ok' : statusKind === 'err' ? 'screener-status--err' : ''}`}>
+          <span className={`screener-status ${statusKind === 'ok' ? 'screener-status--ok' : statusKind === 'err' ? 'screener-status--err' : statusKind === 'info' ? 'screener-status--info' : ''}`}>
             {status || 'Starting…'}
           </span>
         )}

@@ -11,7 +11,7 @@
  *   • Auto-resize via ResizeObserver
  */
 
-import { useEffect, useRef, useState } from "react"; // useState kept for loading/error
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react"; // useState kept for loading/error
 import { createChart, CandlestickSeries, LineSeries, AreaSeries } from "lightweight-charts";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
@@ -51,7 +51,7 @@ function cssVar(name, fallback) {
 
 // ── IchimokuChart ─────────────────────────────────────────────────────────────
 
-export default function IchimokuChart({ token, interval = "15minute" }) {
+function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null }, forwardedRef) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
@@ -182,22 +182,22 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
 
         // ── Indicator lines (rendered above the cloud) ────────────────────────
 
+        // Tenkan (green) and Kijun (red) — these are the two key reference
+        // levels traders watch most, so they get last-value labels on the
+        // right price scale. Chikou stays unlabelled to keep the axis clean.
         const kijun = chart.addSeries(LineSeries, {
-            color: "#f97316", // orange
+            color: "#ef4444", // red
             lineWidth: 2,
-            // Show current value label on price axis + dotted reference line
-            // so the user can instantly read the exact Kijun level.
-            priceLineVisible: true,
-            priceLineStyle: LINE_DASHED,
+            priceLineVisible: false,
             lastValueVisible: true,
             crosshairMarkerVisible: false
         });
 
         const tenkan = chart.addSeries(LineSeries, {
-            color: "#84cc16", // lime
+            color: "#22c55e", // green
             lineWidth: 1,
             priceLineVisible: false,
-            lastValueVisible: false,
+            lastValueVisible: true,
             crosshairMarkerVisible: false
         });
 
@@ -205,10 +205,8 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
             color: "#387ed1", // blue, dashed
             lineWidth: 1,
             lineStyle: LINE_DASHED,
-            // Show current value label + dotted reference line for Chikou too.
-            priceLineVisible: true,
-            priceLineStyle: LINE_DASHED,
-            lastValueVisible: true,
+            priceLineVisible: false,
+            lastValueVisible: false,
             crosshairMarkerVisible: false
         });
 
@@ -394,8 +392,42 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
         const lastCandle = candleData[candleData.length - 1];
         liveRef.current = lastCandle ? { ...lastCandle } : null;
 
-        // Scroll to show the last N candles with some right padding
-        chartRef.current?.timeScale().fitContent();
+        // Set the initial visible range.
+        //
+        // Default: fitContent() shows the entire dataset zoomed out (~200 bars).
+        // When `defaultBars` is set (e.g. 50 for the scanner chart modal):
+        //   1. Compute a barSpacing that makes exactly `defaultBars` fit in the
+        //      visible area — this is a "sticky" setting that survives
+        //      ResizeObserver-triggered layout passes (unlike setVisibleLogicalRange).
+        //   2. scrollToRealTime() anchors the view at the latest bar.
+        //
+        // The user can still pan left to see older bars and scroll-wheel zoom
+        // — only the INITIAL view is constrained.
+        const totalBars = candleData.length;
+        const ts = chartRef.current?.timeScale();
+        if (!ts) return;
+
+        if (defaultBars && totalBars > 0) {
+            const apply = () => {
+                // Container width minus right price-scale (~60px) — width available for bars.
+                const containerW = containerRef.current?.clientWidth || 1000;
+                const usableW    = Math.max(200, containerW - 70);
+                // Pixels per bar to fit exactly `defaultBars` in the visible area.
+                // Clamp to [4, 40] so tiny modals don't disappear bars and huge
+                // screens don't blow them up.
+                const spacing = Math.max(4, Math.min(40, Math.floor(usableW / defaultBars)));
+
+                chartRef.current?.applyOptions({
+                    timeScale: { barSpacing: spacing, rightOffset: 5 },
+                });
+                ts.scrollToRealTime();
+            };
+            // Defer to the next frame so setData layout has settled and the
+            // container has its final width (modal slide-in animation).
+            requestAnimationFrame(apply);
+        } else {
+            ts.fitContent();
+        }
     }
 
     // ── Live tick updates ─────────────────────────────────────────────────────
@@ -471,6 +503,27 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
         seriesRef.current.candles.update(updated);
     }, [tick]);
 
+    // ── Imperative zoom API ─────────────────────────────────────────────────
+    // Exposed via forwardRef so parents (e.g. ScanChartModal) can wire zoom
+    // buttons without re-implementing barSpacing math.
+    useImperativeHandle(forwardedRef, () => ({
+        /** Zoom to show approximately the last `nBars` candles. */
+        zoomToBars: (nBars) => {
+            const chart = chartRef.current;
+            if (!chart) return;
+            const ts = chart.timeScale();
+            const containerW = containerRef.current?.clientWidth || 1000;
+            const usableW    = Math.max(200, containerW - 70);
+            const spacing    = Math.max(4, Math.min(40, Math.floor(usableW / nBars)));
+            chart.applyOptions({ timeScale: { barSpacing: spacing, rightOffset: 5 } });
+            ts.scrollToRealTime();
+        },
+        /** Fit the entire dataset into view. */
+        fitAll: () => {
+            chartRef.current?.timeScale().fitContent();
+        },
+    }), []);
+
     // ── Render ────────────────────────────────────────────────────────────────
     return (
         <div className="ichi-chart-wrap">
@@ -493,3 +546,7 @@ export default function IchimokuChart({ token, interval = "15minute" }) {
         </div>
     );
 }
+
+// forwardRef wrapper so consumers can call zoomToBars / fitAll imperatively
+const IchimokuChart = forwardRef(IchimokuChartImpl);
+export default IchimokuChart;

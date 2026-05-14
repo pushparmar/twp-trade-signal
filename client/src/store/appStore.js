@@ -126,6 +126,29 @@ const useAppStore = create((set) => ({
     set((s) => ({
       scanAlerts: s.scanAlerts.filter((a) => a.source !== 'screener'),
     })),
+
+  // Timestamp (ms) of the last successful screener auto-run. Used by the
+  // Scanner tab to decide whether to auto-rerun on mount or reuse the
+  // results that are already in scanAlerts. Persisting this in the store
+  // (instead of a component ref) means tab-switching does NOT trigger a
+  // fresh scan — the previous results stay visible.
+  screenerLastRunAt: 0,
+  setScreenerLastRunAt: (ts) => set({ screenerLastRunAt: ts }),
+
+  // Per-TF status pills from the most recent screener run, persisted so they
+  // survive a tab switch without flashing back to "queued".
+  screenerTfState: {},
+  setScreenerTfState: (updater) => set((s) => ({
+    screenerTfState: typeof updater === 'function' ? updater(s.screenerTfState) : updater,
+  })),
+
+  // Status line text + kind, also persisted for cross-tab continuity.
+  // Two separate setters so callers can update each field independently
+  // without closure pitfalls when both are written in quick succession.
+  screenerStatus:     '',
+  screenerStatusKind: '',
+  setScreenerStatus:     (status) => set({ screenerStatus: status }),
+  setScreenerStatusKind: (kind)   => set({ screenerStatusKind: kind }),
 }));
 
 export default useAppStore;

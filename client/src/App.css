@@ -2647,8 +2647,8 @@ body {
   font-weight: 600;
   white-space: nowrap;
 }
-.ichi-leg--kijun      { color: #f97316; }
-.ichi-leg--tenkan     { color: #84cc16; }
+.ichi-leg--kijun      { color: #ef4444; } /* red */
+.ichi-leg--tenkan     { color: #22c55e; } /* green */
 .ichi-leg--chikou     { color: #387ed1; }
 .ichi-leg--cloud-bull { color: #59a05c; }
 .ichi-leg--cloud-bear { color: #d75a4a; }
@@ -3072,8 +3072,9 @@ body {
   color: var(--txt3);
   white-space: nowrap;
 }
-.screener-status--ok  { color: var(--green); }
-.screener-status--err { color: var(--red); }
+.screener-status--ok   { color: var(--green); }
+.screener-status--err  { color: var(--red); }
+.screener-status--info { color: #60a5fa; }   /* muted blue — off-market cache notice */
 
 /* Pattern description (full-width row below toolbar row) */
 .screener-pattern-desc {
@@ -3218,6 +3219,9 @@ body {
   border-color: var(--blue);
   color: var(--blue);
 }
+/* Spacer that pushes the Zoom group to the right end of the TF row */
+.scan-modal-zoom-spacer { flex: 1; min-width: 12px; }
+
 /* Highlight the TF where the alert actually fired (small dot indicator) */
 .scan-modal-tf-dot {
   position: absolute;

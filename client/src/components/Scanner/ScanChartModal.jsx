@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import IchimokuChart from '../Market/IchimokuChart';
 
 /**
@@ -26,6 +26,9 @@ const STRENGTH_EMOJI = { strong: '💪', neutral: '➡️', weak: '⚠️' };
 export default function ScanChartModal({ alert, onClose }) {
   // Start at the alert's TF — user can switch to compare other timeframes
   const [interval, setInterval] = useState(alert?.interval || '15minute');
+
+  // Imperative ref to the chart — used by zoom buttons
+  const chartRef = useRef(null);
 
   // Close on ESC
   useEffect(() => {
@@ -70,7 +73,7 @@ export default function ScanChartModal({ alert, onClose }) {
           <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
         </div>
 
-        {/* ── Timeframe chips ────────────────────────────────────────── */}
+        {/* ── Timeframe + Zoom chips ─────────────────────────────────── */}
         <div className="scan-modal-tfs">
           <span className="scan-modal-tf-label">Timeframe:</span>
           {TF_OPTIONS.map((tf) => (
@@ -84,11 +87,43 @@ export default function ScanChartModal({ alert, onClose }) {
               {tf.id === alert.interval && <span className="scan-modal-tf-dot" />}
             </button>
           ))}
+
+          {/* Zoom controls — push to the right end of the row */}
+          <span className="scan-modal-zoom-spacer" />
+          <span className="scan-modal-tf-label">Zoom:</span>
+          <button
+            className="scan-modal-tf-btn"
+            onClick={() => chartRef.current?.zoomToBars(50)}
+            title="Show last 50 candles"
+          >
+            50
+          </button>
+          <button
+            className="scan-modal-tf-btn"
+            onClick={() => chartRef.current?.zoomToBars(100)}
+            title="Show last 100 candles"
+          >
+            100
+          </button>
+          <button
+            className="scan-modal-tf-btn"
+            onClick={() => chartRef.current?.fitAll()}
+            title="Fit all available bars in view"
+          >
+            All
+          </button>
         </div>
 
         {/* ── Chart ──────────────────────────────────────────────────── */}
+        {/* defaultBars=50 → attempt to open zoomed; user can also click the
+            Zoom 50 / 100 / All buttons above for reliable manual control. */}
         <div className="scan-modal-chart">
-          <IchimokuChart token={alert.token} interval={interval} />
+          <IchimokuChart
+            ref={chartRef}
+            token={alert.token}
+            interval={interval}
+            defaultBars={50}
+          />
         </div>
       </div>
     </div>
