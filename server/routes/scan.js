@@ -282,9 +282,18 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'patternId is required' });
   }
 
-  const pattern = patternRegistry.get(patternId);
-  if (!pattern) {
-    return res.status(400).json({ error: `Unknown pattern: "${patternId}"` });
+  // Resolve which patterns to run. patternId === 'all' (or 'ALL') runs every
+  // registered pattern against each instrument×interval — the candle fetch is
+  // shared across patterns so the extra cost is negligible CPU work in-process.
+  let patternsToRun;
+  if (String(patternId).toLowerCase() === 'all') {
+    patternsToRun = patternRegistry.list().map(p => patternRegistry.get(p.id));
+  } else {
+    const single = patternRegistry.get(patternId);
+    if (!single) {
+      return res.status(400).json({ error: `Unknown pattern: "${patternId}"` });
+    }
+    patternsToRun = [single];
   }
 
   // Build the scan universe based on `instruments` body param or `scope`:
@@ -309,10 +318,14 @@ router.post('/', async (req, res) => {
     }
   }
 
-  console.log(`[Scan] ${patternId} — universe of ${watchlist.length} instruments × ${intervals.length} intervals (scope=${instruments ? 'explicit' : scope})`);
+  const patternsLabel = patternsToRun.length > 1
+    ? `ALL (${patternsToRun.length} patterns)`
+    : patternsToRun[0].label;
+
+  console.log(`[Scan] ${patternId} — universe of ${watchlist.length} instruments × ${intervals.length} intervals × ${patternsToRun.length} pattern(s) (scope=${instruments ? 'explicit' : scope})`);
 
   if (!watchlist.length) {
-    return res.json({ patternId, patternLabel: pattern.label, scannedCount: 0, totalInstruments: 0, matches: [] });
+    return res.json({ patternId, patternLabel: patternsLabel, scannedCount: 0, totalInstruments: 0, matches: [] });
   }
 
   const matches      = [];
@@ -333,44 +346,53 @@ router.post('/', async (req, res) => {
       await Promise.allSettled(
         watchlist.slice(i, i + batchSize).map(async (item) => {
           try {
+            // Fetch candles ONCE per instrument×interval — shared across all patterns
             const candles = await _getCandles(item.instrumentToken, interval);
             if (!candles || candles.length < 52) return;
 
             phaseScanned++;
             scannedCount++;
 
-            const result = pattern.run(candles, opts);
-            if (!result || !result.matched) return;
+            // Run every selected pattern against this candle set
+            for (const p of patternsToRun) {
+              let result;
+              try {
+                result = p.run(candles, opts);
+              } catch {
+                continue; // bad pattern run — skip
+              }
+              if (!result || !result.matched) continue;
 
-            phaseMatched++;
-            matches.push({
-              token:           item.instrumentToken,
-              tradingsymbol:   item.tradingsymbol,
-              exchange:        item.exchange,
-              name:            item.name  || '',
-              interval,
-              // Pattern identity — included so the client can display and key on them
-              patternId,
-              patternLabel:    pattern.label,
-              signal:          result.signal,
-              score:           result.score           ?? null,
-              checks:          result.checks          ?? null,
-              // Strength / context fields (new-pattern results)
-              strength:        result.strength        ?? null,
-              cloudPosition:   result.cloudPosition   ?? null,
-              barsAgo:         result.barsAgo         ?? null,
-              consecutiveBars: result.consecutiveBars ?? null,
-              cloudThickness:  result.cloudThickness  ?? null,
-              // Price / cloud values
-              close:           result.close           ?? null,
-              kijunValue:      result.kijunValue      ?? null,
-              cloudTop:        result.cloudTop        ?? null,
-              cloudBottom:     result.cloudBottom     ?? null,
-              senkouA:         result.senkouA         ?? null,
-              senkouB:         result.senkouB         ?? null,
-              price26ago:      result.price26ago      ?? null,
-              twistBarsAgo:    result.twistBarsAgo    ?? null,
-            });
+              phaseMatched++;
+              matches.push({
+                token:           item.instrumentToken,
+                tradingsymbol:   item.tradingsymbol,
+                exchange:        item.exchange,
+                name:            item.name  || '',
+                interval,
+                // Pattern identity — included so the client can display and key on them
+                patternId:       p.id,
+                patternLabel:    p.label,
+                signal:          result.signal,
+                score:           result.score           ?? null,
+                checks:          result.checks          ?? null,
+                // Strength / context fields
+                strength:        result.strength        ?? null,
+                cloudPosition:   result.cloudPosition   ?? null,
+                barsAgo:         result.barsAgo         ?? null,
+                consecutiveBars: result.consecutiveBars ?? null,
+                cloudThickness:  result.cloudThickness  ?? null,
+                // Price / cloud values
+                close:           result.close           ?? null,
+                kijunValue:      result.kijunValue      ?? null,
+                cloudTop:        result.cloudTop        ?? null,
+                cloudBottom:     result.cloudBottom     ?? null,
+                senkouA:         result.senkouA         ?? null,
+                senkouB:         result.senkouB         ?? null,
+                price26ago:      result.price26ago      ?? null,
+                twistBarsAgo:    result.twistBarsAgo    ?? null,
+              });
+            }
           } catch (err) {
             // Silence per-instrument errors — one bad token shouldn't abort the scan
             console.warn(`[Scan] ${item.tradingsymbol}:${interval} —`, err.message);
@@ -403,11 +425,12 @@ router.post('/', async (req, res) => {
     return (b.score ?? 0) - (a.score ?? 0);
   });
 
-  console.log(`[Scan] ${patternId} — scanned ${scannedCount} pairs across ${watchlist.length} instruments → ${matches.length} matches`);
+  console.log(`[Scan] ${patternId} — scanned ${scannedCount} pairs across ${watchlist.length} instruments × ${patternsToRun.length} pattern(s) → ${matches.length} matches`);
 
   res.json({
     patternId,
-    patternLabel:     pattern.label,
+    patternLabel:     patternsLabel,
+    patternsRun:      patternsToRun.length,
     scannedCount,
     totalInstruments: watchlist.length,
     matches,

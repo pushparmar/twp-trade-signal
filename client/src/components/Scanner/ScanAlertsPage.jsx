@@ -1,6 +1,7 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import useAppStore from '../../store/appStore';
 import api from '../../api';
+import ScanChartModal from './ScanChartModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -122,6 +123,47 @@ function alertRank(a) {
   return score + strength + tf;
 }
 
+// ── Column comparators ────────────────────────────────────────────────────────
+// Each returns ascending order (a - b). The sort logic flips sign for desc.
+// Tie-breakers fall back to composite rank desc inside the useMemo sort below.
+
+const _num = (v) => (v == null || Number.isNaN(v) ? -Infinity : Number(v));
+const _str = (v) => String(v ?? '').toLowerCase();
+
+const COL_COMPARATORS = {
+  // 'rank' = composite (score → strength → TF). Asc sorts weakest first.
+  rank:     (a, b) => alertRank(a) - alertRank(b),
+  symbol:   (a, b) => _str(a.label).localeCompare(_str(b.label)),
+  // LTP/Time live in the global store on the row component — sort by static fields only here
+  tf:       (a, b) => (TF_RANK[a.interval] ?? 0) - (TF_RANK[b.interval] ?? 0),
+  signal:   (a, b) => _str(a.signal).localeCompare(_str(b.signal)),
+  pattern:  (a, b) => _str(a.patternLabel).localeCompare(_str(b.patternLabel)),
+  strength: (a, b) => (STRENGTH_RANK[a.strength] ?? 0) - (STRENGTH_RANK[b.strength] ?? 0),
+  score:    (a, b) => _num(a.score) - _num(b.score),
+  price:    (a, b) => _num(a.close) - _num(b.close),
+  time:     (a, b) => _num(a.ts) - _num(b.ts),
+};
+
+/**
+ * Sortable table header cell.
+ * Shows ▲ for asc, ▼ for desc on the active column; nothing when inactive.
+ * Clicking cycles: inactive → desc → asc → default (rank desc).
+ */
+function SortHeader({ col, label, sort, onClick }) {
+  const active = sort.col === col;
+  const arrow  = !active ? '' : sort.dir === 'desc' ? '▼' : '▲';
+  return (
+    <th
+      className={`scan-th scan-th--sortable ${active ? 'scan-th--active' : ''}`}
+      onClick={() => onClick(col)}
+      title="Click to sort"
+    >
+      <span className="scan-th-label">{label}</span>
+      <span className="scan-th-arrow">{arrow}</span>
+    </th>
+  );
+}
+
 /**
  * Reduce an alert list to at most one alert per (token, signal) pair,
  * keeping the highest-ranked one. Bullish and bearish alerts for the same
@@ -193,15 +235,44 @@ function FilterBar({ signal, onSignal, interval, onInterval, dedup, onDedup }) {
 // ── Screener toolbar ──────────────────────────────────────────────────────────
 
 const TF_LABEL = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+const ALL_INTERVALS = ['15minute', '60minute', '4h', 'day'];
 
-function ScreenerToolbar({ onResults }) {
-  const [patterns,    setPatterns]    = useState([]);
-  const [patternId,   setPatternId]   = useState('');
-  const [universe,    setUniverse]    = useState(null);   // { macros, watchlist, futures, all }
-  const [running,     setRunning]     = useState(false);
-  const [status,      setStatus]      = useState('');     // progress / result message
-  const [statusKind,  setStatusKind]  = useState('');     // '' | 'ok' | 'err'
-  const [phase,       setPhase]       = useState('');     // current TF being scanned
+// Status pill per TF — shown while scan runs
+//   'queued'  → grey
+//   'running' → blue spinner
+//   'done'    → green check + match count
+//   'failed'  → red ✗ + error message
+function TfPill({ interval, state, matches, error }) {
+  const label = TF_LABEL[interval];
+  let icon = '', cls = '';
+  if (state === 'queued')  { icon = '…'; cls = 'tf-pill--queued';  }
+  if (state === 'running') { icon = '⟳'; cls = 'tf-pill--running'; }
+  if (state === 'done')    { icon = '✓'; cls = 'tf-pill--done';    }
+  if (state === 'failed')  { icon = '✗'; cls = 'tf-pill--failed';  }
+  const title = state === 'failed' ? error : state === 'done' ? `${matches} match${matches !== 1 ? 'es' : ''}` : state;
+  return (
+    <span className={`tf-pill ${cls}`} title={title}>
+      <span className="tf-pill__icon">{icon}</span>
+      <span className="tf-pill__label">{label}</span>
+      {state === 'done' && matches > 0 && (
+        <span className="tf-pill__count">{matches}</span>
+      )}
+    </span>
+  );
+}
+
+function ScreenerToolbar({ onTfResults, onClear }) {
+  const [patterns,   setPatterns]   = useState([]);
+  const [patternId,  setPatternId]  = useState('');
+  const [universe,   setUniverse]   = useState(null);   // { macros, watchlist, futures, all }
+  const [tfFilter,   setTfFilter]   = useState('all');  // 'all' | interval id
+  const [running,    setRunning]    = useState(false);
+  const [status,     setStatus]     = useState('');     // overall status line
+  const [statusKind, setStatusKind] = useState('');     // '' | 'ok' | 'err'
+  // Per-TF state map: { [interval]: { state, matches, error } }
+  const [tfState,    setTfState]    = useState({});
+
+  const autoRunRef = useRef(false); // guard so auto-run fires only once per mount
 
   // Load pattern list + universe counts on mount
   useEffect(() => {
@@ -209,7 +280,8 @@ function ScreenerToolbar({ onResults }) {
       .then((r) => {
         const list = r.data;
         setPatterns(list);
-        if (list.length) setPatternId(list[0].id);
+        // Default to "all" so the first auto-scan covers every pattern at once
+        if (list.length) setPatternId('all');
       })
       .catch(() => {});
 
@@ -218,79 +290,193 @@ function ScreenerToolbar({ onResults }) {
       .catch(() => {});
   }, []);
 
-  const selectedPattern = patterns.find((p) => p.id === patternId);
+  // 'all' is a synthetic option; otherwise look up the real pattern record
+  const selectedPattern = patternId === 'all'
+    ? { id: 'all', label: 'All patterns', description: `Runs every registered pattern (${patterns.length}) against each candle set. Candles are fetched once per instrument×timeframe and reused across patterns, so this is almost free.` }
+    : patterns.find((p) => p.id === patternId);
 
+  /**
+   * Run the scan: one request per (timeframe × pattern), in parallel.
+   *
+   * When patternId === 'all', we expand into N_patterns × N_intervals requests
+   * — each request is single-pattern, single-TF. This keeps the request size
+   * tiny and works regardless of whether the server supports the synthetic
+   * 'all' pattern keyword. The historicalCache dedupes candle fetches across
+   * patterns so the actual Kite API cost stays the same.
+   *
+   * Per-TF pills aggregate matches across all patterns scanned for that TF.
+   */
   const runScan = useCallback(async () => {
     if (!patternId || running) return;
 
-    setRunning(true);
-    setStatus('Starting scan…');
-    setStatusKind('');
-    setPhase('');
-    onResults(null); // clear previous screener results
+    const intervals  = tfFilter === 'all' ? ALL_INTERVALS : [tfFilter];
 
-    const intervals = ['15minute', '60minute', '4h', 'day'];
+    // Resolve list of pattern IDs to scan. If user picked 'all' but the
+    // pattern list hasn't loaded yet, abort with a clear status.
+    const patternIds = patternId === 'all'
+      ? (patterns.length ? patterns.map((p) => p.id) : null)
+      : [patternId];
 
-    // Show phase progress labels while waiting (cosmetic — the real phases run server-side)
-    let phaseIdx = 0;
-    const phaseTimer = setInterval(() => {
-      if (phaseIdx < intervals.length) {
-        setPhase(TF_LABEL[intervals[phaseIdx]] || intervals[phaseIdx]);
-        phaseIdx++;
-      }
-    }, 15_000); // rough estimate: each phase takes ~10-20 s on first run, ~2 s on cache hit
-
-    try {
-      const res = await api.post('/scan', {
-        patternId, scope: 'all', interTfDelayMs: 500, batchSize: 12,
-      });
-
-      clearInterval(phaseTimer);
-      setPhase('');
-
-      const data = res.data;
-      const { matches = [], scannedCount, totalInstruments, patternLabel } = data;
-
-      onResults(matches);
-
-      const bull = matches.filter((m) => m.signal === 'bullish').length;
-      const bear = matches.filter((m) => m.signal === 'bearish').length;
-
-      if (matches.length === 0) {
-        setStatus(`No matches — scanned ${scannedCount} pairs across ${totalInstruments} instruments`);
-        setStatusKind('');
-      } else {
-        setStatus(`${matches.length} match${matches.length !== 1 ? 'es' : ''} (🟢 ${bull}  🔴 ${bear})  —  ${scannedCount} pairs scanned`);
-        setStatusKind('ok');
-      }
-    } catch (err) {
-      clearInterval(phaseTimer);
-      setPhase('');
-      // axios wraps HTTP errors in err.response; plain network failures have only err.message
-      const msg = err.response?.data?.error || err.message || 'Request failed';
-      setStatus(`Error: ${msg}`);
+    if (!patternIds) {
+      setStatus('Pattern list not loaded yet — refresh and try again');
       setStatusKind('err');
-    } finally {
-      setRunning(false);
+      return;
     }
-  }, [patternId, running, onResults]);
+
+    setRunning(true);
+    setStatusKind('');
+    setStatus(
+      patternIds.length > 1
+        ? `Scanning ${intervals.length} TF × ${patternIds.length} patterns…`
+        : intervals.length > 1
+          ? `Scanning ${intervals.length} timeframes in parallel…`
+          : `Scanning ${TF_LABEL[intervals[0]]}…`
+    );
+    onClear();   // clear previous screener results from the table
+
+    // Initialise pill state: first TF running, rest queued
+    const initial = {};
+    intervals.forEach((iv, idx) => {
+      initial[iv] = { state: idx === 0 ? 'running' : 'queued', matches: 0 };
+    });
+    setTfState(initial);
+
+    let totalMatches  = 0;
+    let totalScanned  = 0;
+    let totalTfOk     = 0;
+    let totalTfFailed = 0;
+
+    // One async block per TF — runs all N patterns for that TF in parallel,
+    // aggregates results, then updates the pill once everything is in.
+    const tfTasks = intervals.map((interval, idx) => new Promise((resolve) => {
+      setTimeout(async () => {
+        // Mark this TF as running (it may already be 'running' if idx===0)
+        setTfState((prev) => ({ ...prev, [interval]: { ...prev[interval], state: 'running' } }));
+
+        const patternPromises = patternIds.map((pid) =>
+          api.post('/scan', {
+            patternId:      pid,
+            intervals:      [interval],
+            scope:          'all',
+            interTfDelayMs: 0,
+            batchSize:      12,
+          }, { timeout: 90_000 })
+        );
+
+        const results = await Promise.allSettled(patternPromises);
+
+        let ivMatches = 0;
+        let ivScanned = 0;
+        let anySucceeded = false;
+        let lastErr = null;
+
+        for (const r of results) {
+          if (r.status === 'fulfilled') {
+            anySucceeded = true;
+            const data    = r.value.data;
+            const matches = data.matches || [];
+            ivMatches    += matches.length;
+            ivScanned    += data.scannedCount ?? 0;
+            // Merge this pattern's matches into the table immediately
+            if (matches.length) onTfResults(matches);
+          } else {
+            const err = r.reason;
+            lastErr = err.response?.data?.error || err.message || 'Request failed';
+            console.warn(`[Scan] ${interval} pattern failed:`, lastErr);
+          }
+        }
+
+        totalMatches += ivMatches;
+        totalScanned += ivScanned;
+
+        if (anySucceeded) {
+          totalTfOk++;
+          setTfState((prev) => ({
+            ...prev,
+            [interval]: { state: 'done', matches: ivMatches },
+          }));
+        } else {
+          totalTfFailed++;
+          setTfState((prev) => ({
+            ...prev,
+            [interval]: { state: 'failed', matches: 0, error: lastErr || 'all patterns failed' },
+          }));
+        }
+
+        resolve();
+      }, idx * 400); // 400 ms stagger between TFs
+    }));
+
+    await Promise.all(tfTasks);
+
+    // Renamed locals so the summary code below stays unchanged
+    const totalSucceeded = totalTfOk;
+    const totalFailed    = totalTfFailed;
+
+    // Build final summary
+    if (totalSucceeded === 0) {
+      setStatus(`All ${intervals.length} timeframes failed — check server logs`);
+      setStatusKind('err');
+    } else if (totalFailed > 0) {
+      setStatus(`${totalMatches} match${totalMatches !== 1 ? 'es' : ''} — ${totalSucceeded} TF ok, ${totalFailed} failed`);
+      setStatusKind('ok');
+    } else if (totalMatches === 0) {
+      setStatus(`No matches — scanned ${totalScanned} pairs across ${intervals.length} timeframe${intervals.length !== 1 ? 's' : ''}`);
+      setStatusKind('');
+    } else {
+      setStatus(`${totalMatches} match${totalMatches !== 1 ? 'es' : ''} — ${totalScanned} pairs scanned`);
+      setStatusKind('ok');
+    }
+
+    setRunning(false);
+  }, [patternId, running, tfFilter, patterns, onTfResults, onClear]);
+
+  // Auto-run once after patterns load — gives the user fresh results without a click.
+  // Wait until BOTH patternId is set AND patterns list is loaded, otherwise an
+  // 'all' fan-out has nothing to iterate over.
+  useEffect(() => {
+    if (autoRunRef.current) return;
+    if (!patternId)        return;
+    if (patternId === 'all' && patterns.length === 0) return;
+    autoRunRef.current = true;
+    const t = setTimeout(() => { runScan(); }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patternId, patterns]);
 
   const universeHint = universe
     ? `~${universe.all} instruments  (${universe.futures} futures + macros)`
     : '';
 
+  const intervalsInUse = tfFilter === 'all' ? ALL_INTERVALS : [tfFilter];
+
   return (
     <div className="screener-toolbar">
-      {/* Left: pattern picker + run button */}
+      {/* Left: pattern picker + TF picker + run button */}
       <div className="screener-toolbar__left">
         <select
           className="screener-pattern-select"
           value={patternId}
           onChange={(e) => setPatternId(e.target.value)}
           disabled={running}
+          title="Pattern to scan for"
         >
+          <option value="all">★ All patterns ({patterns.length || 9})</option>
           {patterns.map((p) => (
             <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </select>
+
+        <select
+          className="screener-tf-select"
+          value={tfFilter}
+          onChange={(e) => setTfFilter(e.target.value)}
+          disabled={running}
+          title="Timeframe to scan"
+        >
+          <option value="all">All timeframes</option>
+          {ALL_INTERVALS.map((iv) => (
+            <option key={iv} value={iv}>{TF_LABEL[iv]}</option>
           ))}
         </select>
 
@@ -302,7 +488,7 @@ function ScreenerToolbar({ onResults }) {
           {running ? (
             <>
               <span className="screener-spinner" />
-              {phase ? `Scanning ${phase}…` : 'Starting…'}
+              Scanning…
             </>
           ) : (
             <>
@@ -315,17 +501,32 @@ function ScreenerToolbar({ onResults }) {
         </button>
       </div>
 
-      {/* Right: universe hint + status */}
+      {/* Right: universe hint OR status */}
       <div className="screener-toolbar__right">
         {universeHint && !running && !status && (
           <span className="screener-universe-hint">{universeHint}</span>
         )}
         {(running || status) && (
           <span className={`screener-status ${statusKind === 'ok' ? 'screener-status--ok' : statusKind === 'err' ? 'screener-status--err' : ''}`}>
-            {status || (phase ? `Scanning ${phase}…` : 'Starting…')}
+            {status || 'Starting…'}
           </span>
         )}
       </div>
+
+      {/* Per-TF pill row — shown while running or right after a run */}
+      {(running || Object.keys(tfState).length > 0) && (
+        <div className="screener-tf-pills">
+          {intervalsInUse.map((iv) => (
+            <TfPill
+              key={iv}
+              interval={iv}
+              state={tfState[iv]?.state ?? 'queued'}
+              matches={tfState[iv]?.matches ?? 0}
+              error={tfState[iv]?.error}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Pattern description tooltip row */}
       {selectedPattern?.description && (
@@ -347,37 +548,56 @@ export default function ScanAlertsPage() {
   // Dedup: ON by default — show the single strongest alert per symbol
   const [dedup, setDedup] = useState(true);
 
-  // Screener results: array of match objects returned by POST /api/scan
-  // Null means no screener run yet (don't show the "X results" banner).
-  const [screenerResults, setScreenerResults] = useState(null);
+  // Column sort: { col: 'score'|'symbol'|..., dir: 'asc'|'desc' }
+  // Default is 'rank' desc which preserves the "strongest first" ordering.
+  const [sort, setSort] = useState({ col: 'rank', dir: 'desc' });
 
-  // When screener finishes, push every match into the shared scanAlerts store
-  // so they appear in the live table immediately (tagged source:'screener').
-  const handleScreenerResults = useCallback((matches) => {
-    setScreenerResults(matches); // null = cleared, [] = no matches, [...] = results
-    if (!matches) return;
+  /** Toggle sort: clicking same column flips direction, new column starts desc. */
+  const toggleSort = useCallback((col) => {
+    setSort((prev) => {
+      if (prev.col !== col) return { col, dir: 'desc' };
+      // Same column — flip direction, with a third click cycling back to default 'rank' desc
+      if (prev.dir === 'desc') return { col, dir: 'asc' };
+      return { col: 'rank', dir: 'desc' };
+    });
+  }, []);
+
+  const clearScreenerAlerts = useAppStore((s) => s.clearScreenerAlerts);
+
+  /**
+   * Called by the screener once per timeframe as each parallel /api/scan
+   * call resolves. Matches are merged into the shared scanAlerts store so
+   * they appear in the live table immediately (tagged source:'screener').
+   */
+  const handleTfResults = useCallback((matches) => {
+    if (!matches?.length) return;
     const now = Date.now();
     for (const m of matches) {
       addScanAlert({
-        token:         m.token,
-        label:         m.tradingsymbol || m.name || `Token ${m.token}`,
-        interval:      m.interval,
-        tfLabel:       TF_LABEL[m.interval] || m.interval,
-        patternId:     m.patternId  ?? 'screener',
-        patternLabel:  m.patternLabel ?? '—',
-        signal:        m.signal,
-        score:         m.score         ?? null,
-        close:         m.close         ?? null,
-        strength:      m.strength      ?? null,
-        cloudPosition: m.cloudPosition ?? null,
-        barsAgo:       m.barsAgo       ?? null,
+        token:           m.token,
+        label:           m.tradingsymbol || m.name || `Token ${m.token}`,
+        interval:        m.interval,
+        tfLabel:         TF_LABEL[m.interval] || m.interval,
+        patternId:       m.patternId  ?? 'screener',
+        patternLabel:    m.patternLabel ?? '—',
+        signal:          m.signal,
+        score:           m.score          ?? null,
+        close:           m.close          ?? null,
+        strength:        m.strength       ?? null,
+        cloudPosition:   m.cloudPosition  ?? null,
+        barsAgo:         m.barsAgo        ?? null,
         consecutiveBars: m.consecutiveBars ?? null,
         cloudThickness:  m.cloudThickness  ?? null,
-        ts:            now,
-        source:        'screener',
+        ts:              now,
+        source:          'screener',
       });
     }
   }, [addScanAlert]);
+
+  /** Called when a new scan starts — wipes previous screener results from the table. */
+  const handleClearScreener = useCallback(() => {
+    clearScreenerAlerts();
+  }, [clearScreenerAlerts]);
 
   const filtered = useMemo(() => {
     // 1. Apply signal + interval filters
@@ -392,24 +612,29 @@ export default function ScanAlertsPage() {
     //    timeframes or multiple patterns — only the strongest one is shown.
     if (dedup) list = bestPerSymbol(list);
 
-    // 3. Sort: bullish first, then by rank descending, then recency
+    // 3. Sort by the selected column.
+    //    Default ('rank' desc) preserves the "strongest first" ordering.
+    //    Any other column sorts on its raw value with rank as the tie-breaker.
+    const cmp = COL_COMPARATORS[sort.col] || COL_COMPARATORS.rank;
+    const dir = sort.dir === 'asc' ? 1 : -1;
     list.sort((a, b) => {
-      if (a.signal !== b.signal) return a.signal === 'bullish' ? -1 : 1;
+      const primary = cmp(a, b) * dir;
+      if (primary !== 0) return primary;
+      // Tie-breaker: always fall back to composite rank desc, then recency
       const rd = alertRank(b) - alertRank(a);
       if (rd !== 0) return rd;
       return (b.ts ?? 0) - (a.ts ?? 0);
     });
 
     return list;
-  }, [scanAlerts, signalFilter, intervalFilter, dedup]);
+  }, [scanAlerts, signalFilter, intervalFilter, dedup, sort]);
+
+  // Modal: alert currently being shown in the chart popup (null = closed)
+  const [chartAlert, setChartAlert] = useState(null);
 
   function handleSelect(alert) {
-    setSelectedInstrument({
-      type:     'stock',
-      token:    alert.token,
-      label:    alert.label,
-      sublabel: alert.interval,
-    });
+    // Open the chart modal pre-loaded at the alert's timeframe
+    setChartAlert(alert);
   }
 
   const liveCount      = scanAlerts.filter((a) => a.source !== 'screener').length;
@@ -434,7 +659,7 @@ export default function ScanAlertsPage() {
       </div>
 
       {/* ── Screener toolbar ────────────────────────────────────────────── */}
-      <ScreenerToolbar onResults={handleScreenerResults} />
+      <ScreenerToolbar onTfResults={handleTfResults} onClear={handleClearScreener} />
 
       {/* ── Filters ─────────────────────────────────────────────────────── */}
       <FilterBar
@@ -465,15 +690,15 @@ export default function ScanAlertsPage() {
           <table className="scan-table">
             <thead>
               <tr>
-                <th className="scan-th">Symbol</th>
+                <SortHeader col="symbol"   label="Symbol"        sort={sort} onClick={toggleSort} />
                 <th className="scan-th">LTP</th>
-                <th className="scan-th">TF</th>
-                <th className="scan-th">Signal</th>
-                <th className="scan-th">Pattern</th>
-                <th className="scan-th">Strength</th>
-                <th className="scan-th">Score</th>
-                <th className="scan-th">Price @ Alert</th>
-                <th className="scan-th">Time</th>
+                <SortHeader col="tf"       label="TF"            sort={sort} onClick={toggleSort} />
+                <SortHeader col="signal"   label="Signal"        sort={sort} onClick={toggleSort} />
+                <SortHeader col="pattern"  label="Pattern"       sort={sort} onClick={toggleSort} />
+                <SortHeader col="strength" label="Strength"      sort={sort} onClick={toggleSort} />
+                <SortHeader col="score"    label="Score"         sort={sort} onClick={toggleSort} />
+                <SortHeader col="price"    label="Price @ Alert" sort={sort} onClick={toggleSort} />
+                <SortHeader col="time"     label="Time"          sort={sort} onClick={toggleSort} />
               </tr>
             </thead>
             <tbody>
@@ -487,6 +712,11 @@ export default function ScanAlertsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* ── Chart modal (opens on row click) ────────────────────────────── */}
+      {chartAlert && (
+        <ScanChartModal alert={chartAlert} onClose={() => setChartAlert(null)} />
       )}
     </div>
   );

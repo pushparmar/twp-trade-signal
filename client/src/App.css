@@ -2755,7 +2755,25 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
+  user-select: none;
 }
+/* Clickable sortable header */
+.scan-th--sortable {
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.scan-th--sortable:hover { background: var(--sidebar-hover); color: var(--txt2); }
+/* Active sort column — highlighted */
+.scan-th--active { color: var(--blue); }
+.scan-th-arrow {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 9px;
+  color: var(--blue);
+  width: 8px;
+  text-align: center;
+}
+.scan-th-label { display: inline-block; }
 .scan-row {
   cursor: pointer;
   transition: background .12s;
@@ -2932,6 +2950,82 @@ body {
 .screener-pattern-select:focus  { border-color: var(--blue); }
 .screener-pattern-select:disabled { opacity: .5; cursor: not-allowed; }
 
+/* Timeframe dropdown — same look as pattern select but compact */
+.screener-tf-select {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  color: var(--txt);
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 120px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color .15s;
+}
+.screener-tf-select:focus    { border-color: var(--blue); }
+.screener-tf-select:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Per-TF status pills (full-width row below toolbar controls) */
+.screener-tf-pills {
+  width: 100%;
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+.tf-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.tf-pill__icon  { font-weight: 700; font-size: 13px; line-height: 1; }
+.tf-pill__label { color: var(--txt2); }
+.tf-pill__count {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  background: var(--border2);
+  color: var(--txt);
+}
+.tf-pill--queued  { color: var(--txt3); }
+.tf-pill--queued  .tf-pill__icon { color: var(--txt3); }
+.tf-pill--running {
+  border-color: var(--blue);
+  background: var(--blue-dim);
+  color: var(--blue);
+}
+.tf-pill--running .tf-pill__icon {
+  animation: screener-spin 1s linear infinite;
+  display: inline-block;
+}
+.tf-pill--done {
+  border-color: var(--green);
+  background: var(--green-dim);
+  color: var(--green);
+}
+.tf-pill--done .tf-pill__count {
+  background: var(--green);
+  color: #fff;
+}
+.tf-pill--failed {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
 /* Run button */
 .screener-run-btn {
   display: inline-flex;
@@ -3030,3 +3124,124 @@ body {
 /* Light-theme overrides for toolbar */
 [data-theme="light"] .screener-pattern-select { background: #fff; }
 [data-theme="light"] .screener-run-btn        { background: var(--blue); }
+
+/* ── Scanner chart modal ────────────────────────────────────────────────────── */
+/* Override the default 520px width — charts need much more room */
+.scan-modal-card {
+  width: min(1100px, 96vw);
+  max-width: 96vw;
+  max-height: 92vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.scan-modal-header {
+  align-items: flex-start;
+  padding: 14px 18px;
+  gap: 12px;
+}
+.scan-modal-title { flex: 1; min-width: 0; }
+.scan-modal-symbol {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--txt);
+  font-family: var(--mono);
+  margin-bottom: 6px;
+}
+.scan-modal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: var(--txt2);
+  font-weight: 500;
+}
+.scan-modal-signal {
+  padding: 2px 9px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+.scan-modal-signal--bullish { background: var(--green-dim); color: var(--green); }
+.scan-modal-signal--bearish { background: var(--red-dim);   color: var(--red);   }
+
+.scan-modal-pattern  { color: var(--txt); font-weight: 600; }
+.scan-modal-strength {
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+.scan-modal-score,
+.scan-modal-price {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--txt3);
+}
+
+/* Timeframe chip row */
+.scan-modal-tfs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.scan-modal-tf-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-right: 4px;
+}
+.scan-modal-tf-btn {
+  position: relative;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: var(--card);
+  color: var(--txt2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.scan-modal-tf-btn:hover { background: var(--sidebar-hover); color: var(--txt); }
+.scan-modal-tf-btn--active {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+/* Highlight the TF where the alert actually fired (small dot indicator) */
+.scan-modal-tf-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #a855f7;
+}
+
+/* Chart area — fixed minimum height so the chart canvas has room to render */
+.scan-modal-chart {
+  flex: 1;
+  min-height: 520px;
+  height: 65vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.scan-modal-chart > * { flex: 1; }
+
+/* On smaller screens, give the chart less vertical room */
+@media (max-width: 720px) {
+  .scan-modal-chart { min-height: 360px; height: 55vh; }
+  .scan-modal-symbol { font-size: 16px; }
+}

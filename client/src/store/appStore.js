@@ -117,7 +117,14 @@ const useAppStore = create((set) => ({
               a.patternId === alert.patternId
             )
         ),
-      ].slice(0, 200),
+      ].slice(0, 500),
+    })),
+
+  // Wipe only the screener-sourced alerts. Live SSE alerts (source !== 'screener')
+  // are preserved so a new screener run doesn't erase the day's live signals.
+  clearScreenerAlerts: () =>
+    set((s) => ({
+      scanAlerts: s.scanAlerts.filter((a) => a.source !== 'screener'),
     })),
 }));
 
