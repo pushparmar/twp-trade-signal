@@ -155,6 +155,21 @@ async function _runAndAlert(token, interval, candles) {
     } catch (err) {
       console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);
     }
+
+    // Broadcast to SSE clients so the Scanner tab updates in real time,
+    // regardless of whether Telegram succeeded.
+    broadcast('scan_alert', {
+      token:        Number(token),
+      label,
+      interval,
+      tfLabel,
+      patternId,
+      patternLabel,
+      signal:       result.signal,
+      score:        result.score  ?? null,
+      close:        result.close  ?? null,
+      ts:           Date.now(),
+    });
   }
 }
 
@@ -191,7 +206,7 @@ async function onCandleClose(token, interval) {
 }
 
 /**
- * Register index and macro tokens to watch.
+ * Register index and macro tokens to watch, then pre-seed their candle buffers.
  * Must be called AFTER instrumentCache has loaded so getFrontMonthFutures works.
  */
 function start() {
@@ -211,6 +226,20 @@ function start() {
   if (goldInst)   _tokenLabel.set(goldInst.instrumentToken,   `Gold (${goldInst.tradingsymbol})`);
   if (silverInst) _tokenLabel.set(silverInst.instrumentToken, `Silver (${silverInst.tradingsymbol})`);
   if (usdinrInst) _tokenLabel.set(usdinrInst.instrumentToken, `USD/INR (${usdinrInst.tradingsymbol})`);
+
+  // ── Pre-seed candle buffers for every watched token × interval ─────────
+  // Without this, getCandlesSync() always returns null for macro tokens and
+  // pattern alerts for those instruments never fire.
+  // Index tokens (NIFTY/BANKNIFTY) are already seeded by indexSignalWatcher,
+  // but seeding them here is safe — getCandles() deduplicates concurrent requests.
+  const seedIntervals = ['15minute', '60minute', 'day'];
+  for (const [token] of _tokenLabel) {
+    for (const interval of seedIntervals) {
+      candleStore.getCandles(token, interval).catch((err) => {
+        console.warn(`[PatternAlert] Seed failed ${token}:${interval} —`, err.message);
+      });
+    }
+  }
 
   const patterns = patternRegistry.list().map((p) => p.label).join(', ');
   console.log(`[PatternAlert] Ready — watching ${_tokenLabel.size} instruments on 15m / 1h / 4h / 1d`);

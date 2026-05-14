@@ -1,6 +1,31 @@
 const { fetchLastNCandles } = require('./historicalCache');
 
-const MAX_CANDLES = 120;
+// Re-export so callers that use priority seeding can pass the flag through
+// getCandles without needing to import historicalCache separately.
+
+// ── Per-interval ring buffer capacity (1.5× chart display needs) ──────────────
+//
+// 60minute is large because it serves TWO purposes:
+//   1. 1h chart display  (needs ~200 candles)
+//   2. 4h synthesis      (200 4h bars × 4 × 1.5 safety = 1 200 1h candles)
+//
+// 'day' is 450 so 1d chart can display 300 bars comfortably.
+// Short intraday intervals (1m / 5m / 15m) keep 300 which is ~5 h / 25 h / 75 h.
+const MAX_CANDLES_MAP = {
+  'minute':    300,
+  '3minute':   300,
+  '5minute':   300,
+  '10minute':  300,
+  '15minute':  300,
+  '30minute':  300,
+  '60minute':  1200,
+  'day':       450,
+};
+const DEFAULT_MAX_CANDLES = 300;
+
+function _maxFor(interval) {
+  return MAX_CANDLES_MAP[interval] ?? DEFAULT_MAX_CANDLES;
+}
 
 // Milliseconds per interval
 const INTERVAL_MS = {
@@ -20,6 +45,8 @@ const _store = new Map();
 const _tokenIndex = new Map();
 // Map<"token:interval", Promise> — deduplicates concurrent seed requests
 const _seeding = new Map();
+// Map<"token:interval", number> — how many candles this key was seeded with
+const _seededWith = new Map();
 
 function _slotStart(tsMs, intervalMs) {
   return Math.floor(tsMs / intervalMs) * intervalMs;
@@ -46,13 +73,14 @@ function onTick(instrumentToken, lastPrice, tradeTimeMs, onCandleClose) {
     const entry = _store.get(key);
     if (!entry) continue;
 
-    const slot = _slotStart(now, iMs);
+    const slot   = _slotStart(now, iMs);
+    const maxCap = _maxFor(interval);
 
     if (entry.currentSlot !== slot) {
       // Candle boundary — commit current candle into history ring, start new one
       if (entry.currentCandle) {
         entry.candles.push({ ...entry.currentCandle });
-        if (entry.candles.length > MAX_CANDLES) entry.candles.shift();
+        if (entry.candles.length > maxCap) entry.candles.shift();
         if (onCandleClose) onCandleClose(instrumentToken, interval);
       }
       entry.currentSlot   = slot;
@@ -88,26 +116,66 @@ function getCandlesSync(instrumentToken, interval) {
 
 /**
  * Return candles for a token+interval, seeding from historical API on first call.
- * Concurrent calls for the same key share a single seed promise.
+ * Re-seeds if the buffer currently holds fewer candles than requested (e.g. a
+ * previous seed used a smaller count). Concurrent calls share a single seed promise.
  *
  * @param {number} instrumentToken
- * @param {string} interval - Kite interval string e.g. '15minute', 'day'
- * @param {number} [bars]   - Override seed count (defaults to MAX_CANDLES)
+ * @param {string} interval   - Kite interval string e.g. '15minute', 'day'
+ * @param {number}  [bars]     - Desired bar count (capped at MAX_CANDLES_MAP[interval])
+ * @param {boolean} [priority] - true = user-initiated chart request; bypasses
+ *                               background seeding queue so the chart loads
+ *                               immediately even during bulk boot-time seeding.
  *
  * Returns: historical candles (ring) + current open candle appended.
  */
-async function getCandles(instrumentToken, interval, bars) {
-  const token   = Number(instrumentToken);
-  const key     = `${token}:${interval}`;
-  const nCandles = bars && bars > 0 ? Math.min(bars, MAX_CANDLES * 2) : MAX_CANDLES;
+async function getCandles(instrumentToken, interval, bars, priority = false) {
+  const token  = Number(instrumentToken);
+  const key    = `${token}:${interval}`;
+  const maxCap = _maxFor(interval);
 
-  if (!_store.has(key)) {
+  // How many candles to seed — capped at this interval's ring-buffer size
+  const nCandles = bars && bars > 0 ? Math.min(bars, maxCap) : maxCap;
+
+  // Re-seed if:
+  //   a) buffer doesn't exist yet, OR
+  //   b) buffer exists but was seeded with fewer candles than now requested
+  const prevSeed   = _seededWith.get(key) ?? 0;
+  const needsReseed = nCandles > prevSeed;
+
+  if (!_store.has(key) || (needsReseed && !_seeding.has(key))) {
     if (!_seeding.has(key)) {
-      const p = fetchLastNCandles(token, interval, nCandles)
+      // ── Pre-register BEFORE the async fetch so ticks are never dropped ──────
+      //
+      // Bug: _tokenIndex and _store were only written inside `.then()`, so any
+      // tick arriving during the ~1 s Kite API call was silently skipped by
+      // onTick's early-exit guard. This prevented the first candle-close from
+      // ever firing and broke 15-minute macro triggers on boot.
+      //
+      // Fix: register both _tokenIndex and a placeholder _store entry RIGHT NOW,
+      // before the network call. onTick will start accepting ticks immediately;
+      // currentSlot/currentCandle are built from the first tick as normal. When
+      // the fetch resolves we overwrite _store.candles with historical data while
+      // keeping whatever currentSlot/currentCandle ticks have already built.
+      if (!_tokenIndex.has(token)) _tokenIndex.set(token, new Set());
+      _tokenIndex.get(token).add(interval);
+
+      if (!_store.has(key)) {
+        // Placeholder so onTick's `const entry = _store.get(key)` returns an
+        // object rather than undefined. candles is empty until fetch completes.
+        _store.set(key, { candles: [], currentSlot: null, currentCandle: null });
+      }
+
+      const p = fetchLastNCandles(token, interval, nCandles, priority)
         .then((candles) => {
-          _store.set(key, { candles: [...candles], currentSlot: null, currentCandle: null });
-          if (!_tokenIndex.has(token)) _tokenIndex.set(token, new Set());
-          _tokenIndex.get(token).add(interval);
+          // Read current live-candle state that ticks may have built during the
+          // fetch — preserve it so we don't discard any partial candle data.
+          const live = _store.get(key);
+          _store.set(key, {
+            candles:       [...candles],
+            currentSlot:   live?.currentSlot   ?? null,
+            currentCandle: live?.currentCandle ?? null,
+          });
+          _seededWith.set(key, nCandles);
         })
         .finally(() => _seeding.delete(key));
       _seeding.set(key, p);
@@ -132,7 +200,9 @@ function remove(instrumentToken) {
   const intervals = _tokenIndex.get(token);
   if (intervals) {
     for (const interval of intervals) {
-      _store.delete(`${token}:${interval}`);
+      const key = `${token}:${interval}`;
+      _store.delete(key);
+      _seededWith.delete(key);
     }
     _tokenIndex.delete(token);
   }

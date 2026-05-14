@@ -21,6 +21,7 @@ const kiteTicker = require('./services/kiteTicker');
 const indexSignalWatcher    = require('./services/indexSignalWatcher');
 const macroWatcher          = require('./services/macroWatcher');
 const patternAlertWatcher   = require('./services/patternAlertWatcher');
+const liveScanner           = require('./services/liveScanner');
 const store = require('./store');
 
 const app = express();
@@ -81,12 +82,11 @@ app.use('/api/scan',    scanRouter);
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
 
-  try {
-    telegramPoller.start();
-    console.log('[Telegram] Auto-started polling on server boot');
-  } catch (err) {
-    console.warn('[Telegram] Could not auto-start polling:', err.message);
-  }
+  // start() is async (awaits deleteWebhook) — must use .catch(), not try/catch,
+  // so errors from async steps (missing bot token, network) are not swallowed.
+  telegramPoller.start()
+    .then(() => console.log('[Telegram] Auto-started polling on server boot'))
+    .catch(err  => console.warn('[Telegram] Could not auto-start polling:', err.message));
 
   // Init market data — load instruments and connect ticker if Kite is authenticated
   const { kite } = store.getConfig();
@@ -106,6 +106,16 @@ app.listen(PORT, async () => {
       console.log('[KiteTicker] Watchlist cleared on boot — client will re-subscribe on connect');
     } catch (err) {
       console.warn('[KiteTicker] Could not connect on boot:', err.message);
+    }
+
+    // Seed liveScanner from the persisted watchlist so Scanner tab alerts fire
+    // correctly after a server restart (even before the client re-subscribes).
+    // Note: watchlist is cleared above on boot, so this is a no-op on a fresh start
+    // but will pick up items if setWatchlist([]) is removed in the future.
+    try {
+      liveScanner.seedFromWatchlist();
+    } catch (err) {
+      console.warn('[LiveScanner] Could not seed from watchlist:', err.message);
     }
 
     try {

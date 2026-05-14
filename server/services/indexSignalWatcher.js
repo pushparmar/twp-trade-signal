@@ -21,12 +21,14 @@ const telegramNotifier = require('./telegramNotifier');
 const kiteService = require('./kiteService');
 const store = require('../store');
 
-// All token+interval combinations to watch
+// All token+interval combinations to watch.
+// NOTE: Kite uses 'minute' (not '1minute') for the 1-min interval — both the
+// historical API and candleStore.INTERVAL_MS key on this exact string.
 const INDEX_WATCHES = [
-  { token: 256265, name: 'NIFTY',     interval: '1minute'  },
+  { token: 256265, name: 'NIFTY',     interval: 'minute'   },
   { token: 256265, name: 'NIFTY',     interval: '5minute'  },
   { token: 256265, name: 'NIFTY',     interval: '15minute' },
-  { token: 260105, name: 'BANKNIFTY', interval: '1minute'  },
+  { token: 260105, name: 'BANKNIFTY', interval: 'minute'   },
   { token: 260105, name: 'BANKNIFTY', interval: '5minute'  },
   { token: 260105, name: 'BANKNIFTY', interval: '15minute' },
 ];
@@ -118,7 +120,8 @@ async function onCandleClose(token, interval) {
 
   try {
     const candles = candleStore.getCandlesSync(token, interval);
-    if (!candles || candles.length < 26) return;
+    // getSignals() requires minimum 52 candles for Senkou Span B
+    if (!candles || candles.length < 52) return;
 
     const signals = getSignals(candles, interval);
     if (!signals) return;

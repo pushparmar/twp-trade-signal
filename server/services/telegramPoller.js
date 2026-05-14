@@ -5,19 +5,37 @@ const signalParser = require('./signalParser');
 const kiteService = require('./kiteService');
 const { broadcast } = require('../sseHub');
 
-let offset = 0;
-let isPolling = false;
+let offset     = 0;
+let isPolling  = false;
 let pollTimeout = null;
 let lastMessages = [];
+let _conflictRetries = 0;
+const MAX_CONFLICT_RETRIES = 5;
+const CONFLICT_BACKOFF_MS  = 5_000; // wait 5 s before retrying after a 409
 
 function getStatus() {
   return { isPolling, offset };
 }
 
-function start() {
+async function start() {
   if (isPolling) throw new Error('Telegram polling is already running');
   const { telegram } = store.getConfig();
   if (!telegram.botToken) throw new Error('Telegram bot token is not configured');
+
+  // Delete any existing webhook before polling — webhook + getUpdates = 409
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${telegram.botToken}/deleteWebhook`,
+      { drop_pending_updates: false },
+      { timeout: 8_000 },
+    );
+    console.log('[Telegram] Webhook cleared — polling mode active');
+  } catch (err) {
+    // Non-fatal: if deleteWebhook fails we still try to poll
+    console.warn('[Telegram] deleteWebhook failed (non-fatal):', err.message);
+  }
+
+  _conflictRetries = 0;
   isPolling = true;
   broadcast('status', { pollingStatus: 'running' });
   schedulePoll();
@@ -48,11 +66,28 @@ async function poll() {
       `https://api.telegram.org/bot${telegram.botToken}/getUpdates`,
       { params: { offset, timeout: 10, allowed_updates: ['message'] }, timeout: 15_000 },
     );
+    _conflictRetries = 0; // successful poll — reset backoff counter
     for (const update of response.data?.result || []) {
       offset = update.update_id + 1;
       await handleUpdate(update);
     }
   } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 409) {
+      // Another instance (or a webhook) is holding the connection.
+      // Back off and retry — the stale connection usually drops within seconds.
+      _conflictRetries++;
+      if (_conflictRetries > MAX_CONFLICT_RETRIES) {
+        console.error(`[Telegram] 409 conflict persists after ${MAX_CONFLICT_RETRIES} retries — stopping poller. Run deleteWebhook or kill the other process, then restart.`);
+        stop();
+        return;
+      }
+      console.warn(`[Telegram] 409 conflict — backing off ${CONFLICT_BACKOFF_MS / 1000}s (attempt ${_conflictRetries}/${MAX_CONFLICT_RETRIES})`);
+      pollTimeout = setTimeout(poll, CONFLICT_BACKOFF_MS);
+      return; // skip schedulePoll() below
+    }
+
     console.error('[Telegram] Poll error:', err.message);
   }
 

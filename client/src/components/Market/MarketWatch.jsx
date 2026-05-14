@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
+import IchimokuChart from "./IchimokuChart";
 
 // ── Format helper ──────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -105,7 +106,7 @@ function useIchiSignal(token, interval) {
 }
 
 // ── TFCard ────────────────────────────────────────────────────────────────────
-function TFCard({ token, interval, label }) {
+function TFCard({ token, interval, label, active = false, onClick }) {
     const { ichi, loading } = useIchiSignal(token, interval);
     const sig = overallSig(ichi);
     const color = sigColor(sig);
@@ -124,7 +125,12 @@ function TFCard({ token, interval, label }) {
     else sigLabel = sig.charAt(0).toUpperCase() + sig.slice(1);
 
     return (
-        <div className={`mw-tf-card ${cardMod}`}>
+        <div
+            className={`mw-tf-card ${cardMod}${active ? " mw-tf-card--active" : ""}`}
+            onClick={onClick}
+            style={onClick ? { cursor: "pointer" } : undefined}
+            title={onClick ? `View ${label} Ichimoku chart` : undefined}
+        >
             <div className="mw-tf-card-label">{label}</div>
             <div className="mw-tf-card-signal" style={{ color }}>
                 {sigLabel}
@@ -352,6 +358,7 @@ function OhlcItem({ label, value, cls = "" }) {
 
 // ── InstrumentDetail — detail panel for a selected instrument ─────────────────
 function InstrumentDetail({ token, label, sublabel }) {
+    const [chartInterval, setChartInterval] = useState("15minute");
     const tick = useAppStore(s => (token ? s.ticks[token] : null));
     const ltp = tick?.lastPrice ?? null;
     const change = tick?.change ?? null;
@@ -401,13 +408,23 @@ function InstrumentDetail({ token, label, sublabel }) {
             </div>
 
             {token && (
-                /* ── TF Signal Bar: 4 individual TF cards ── */
+                /* ── TF Signal Bar: clicking a card switches the chart below ── */
                 <div className="mw-tf-bar">
                     {INDEX_TFS.map(tf => (
-                        <TFCard key={tf.value} token={token} interval={tf.value} label={tf.label} />
+                        <TFCard
+                            key={tf.value}
+                            token={token}
+                            interval={tf.value}
+                            label={tf.label}
+                            active={chartInterval === tf.value}
+                            onClick={() => setChartInterval(tf.value)}
+                        />
                     ))}
                 </div>
             )}
+
+            {/* ── Ichimoku Cloud Chart — interval driven by selected TF card ── */}
+            {token && <IchimokuChart token={token} interval={chartInterval} />}
         </>
     );
 }

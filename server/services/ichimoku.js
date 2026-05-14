@@ -128,8 +128,9 @@ function snapshot(candles) {
  * Threshold: (max - min) / avg < thresholdPct%
  * For NIFTY at ~22000 with 0.1% threshold that's ~22 points range.
  */
+// Kite uses 'minute' (not '1minute') for the 1-min interval
 const KIJUN_FLAT_PARAMS = {
-  '1minute':   { lookback: 30, thresholdPct: 0.05 },
+  'minute':    { lookback: 30, thresholdPct: 0.05 },
   '5minute':   { lookback: 20, thresholdPct: 0.10 },
   '15minute':  { lookback: 10, thresholdPct: 0.15 },
 };

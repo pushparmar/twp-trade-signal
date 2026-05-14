@@ -34,6 +34,8 @@
 const express          = require('express');
 const candleStore      = require('../services/candleStore');
 const patternRegistry  = require('../services/patternRegistry');
+const liveScanner      = require('../services/liveScanner');
+const { broadcast }    = require('../sseHub');
 const store            = require('../store');
 
 const router = express.Router();
@@ -68,6 +70,75 @@ async function _getCandles(token, interval) {
 // ── GET /api/scan/patterns ────────────────────────────────────────────────────
 router.get('/patterns', (_req, res) => {
   res.json(patternRegistry.list());
+});
+
+// ── GET /api/scan/scanner-status ─────────────────────────────────────────────
+// Diagnostic: shows how many instruments are registered in liveScanner,
+// candleStore memory stats, and current watchlist.
+router.get('/scanner-status', (req, res) => {
+  const storeStats = candleStore.stats();
+  const watchlist  = store.getWatchlist();
+  res.json({
+    liveScannerWatchCount: liveScanner.watchCount(),
+    watchlistLength:       watchlist.length,
+    candleStoreKeys:       storeStats.keys,
+    candleStoreCandles:    storeStats.totalCandles,
+    watchlist:             watchlist.map(i => ({ token: i.instrumentToken, symbol: i.tradingsymbol })),
+  });
+});
+
+// ── POST /api/scan/fire-test-alert ────────────────────────────────────────────
+// Broadcasts a fake scan_alert SSE event to verify the client pipeline
+// (SSE → appStore → Scanner tab) without needing real candle closes.
+// Body: { token?, label?, signal?, interval?, patternId? }
+router.post('/fire-test-alert', (req, res) => {
+  const alert = {
+    token:        Number(req.body.token       ?? 256265),
+    label:        req.body.label              ?? 'NIFTY 50 [TEST]',
+    interval:     req.body.interval           ?? '15minute',
+    tfLabel:      req.body.tfLabel            ?? '15m',
+    patternId:    req.body.patternId          ?? 'kumo-breakout-twist',
+    patternLabel: req.body.patternLabel       ?? 'Kumo Breakout + Twist (5/5)',
+    signal:       req.body.signal             ?? 'bullish',
+    score:        req.body.score              ?? 4,
+    close:        req.body.close              ?? 22500,
+    ts:           Date.now(),
+  };
+  broadcast('scan_alert', alert);
+  console.log('[ScanTest] Fired test alert:', alert.label, alert.signal);
+  res.json({ ok: true, alert });
+});
+
+// ── POST /api/scan/trigger-close ──────────────────────────────────────────────
+// Manually invokes liveScanner.onCandleClose for a specific token+interval.
+// Uses whatever candles are currently in candleStore (must be seeded first).
+// Body: { token: number, interval: string }
+router.post('/trigger-close', async (req, res) => {
+  const { token, interval } = req.body;
+  if (!token || !interval) {
+    return res.status(400).json({ error: 'token and interval are required' });
+  }
+
+  const candles = candleStore.getCandlesSync(Number(token), interval);
+  const entry = {
+    token:    Number(token),
+    interval,
+    hasCandleData:  candles !== null,
+    candleCount:    candles?.length ?? 0,
+    meetsThreshold: (candles?.length ?? 0) >= 52,
+    isWatched:      liveScanner.watchCount() > 0,
+  };
+
+  if (!candles) {
+    return res.json({ ...entry, result: 'no_candle_data', message: 'candleStore has no entry for this token:interval — subscribe it first' });
+  }
+  if (candles.length < 52) {
+    return res.json({ ...entry, result: 'insufficient_candles', message: `Only ${candles.length} candles — need 52 for Ichimoku signals` });
+  }
+
+  // Call the scanner directly — it will broadcast scan_alert if pattern matches
+  liveScanner.onCandleClose(Number(token), interval);
+  res.json({ ...entry, result: 'triggered', message: 'onCandleClose called — check server logs and Scanner tab for alerts' });
 });
 
 // ── POST /api/scan ────────────────────────────────────────────────────────────

@@ -118,12 +118,32 @@ function start() {
   // Subscribe to live tick stream — may be deferred if WebSocket not yet connected
   _kiteTicker().subscribe(tokens);
 
-  // Retry subscribe after 5s in case the initial call lost the race with WebSocket connect
+  // Retry after 5s — twin purposes:
+  //   1. Re-subscribe to WebSocket in case the initial subscribe() lost the race
+  //      with the WebSocket connect event.
+  //   2. Re-seed any candleStore buffer whose initial Kite API fetch failed
+  //      (e.g. network blip on boot). The second attempt runs after the ticker
+  //      is already live, so the fetch is more likely to succeed; and if it does,
+  //      the first candle close will have historical data ready instead of an
+  //      empty ring.
   setTimeout(() => {
     const t = _kiteTicker();
     if (t.isConnected()) {
       console.log('[MacroWatcher] Retrying subscribe 5s after start (safety net)');
       t.subscribe(tokens);
+    }
+
+    // Re-seed any buffer that hasn't been seeded yet (seededWith=0 means the
+    // initial fetch either failed or is still in-flight — getCandles() is
+    // idempotent and deduplicates concurrent requests via _seeding map).
+    const s = candleStore.stats();
+    console.log(`[MacroWatcher] 5s retry — candleStore has ${s.keys} keys, ${s.totalCandles} total candles`);
+    for (const token of tokens) {
+      for (const interval of MACRO_INTERVALS) {
+        candleStore.getCandles(token, interval).catch((e) => {
+          console.warn(`[MacroWatcher] Retry seed failed ${token}:${interval} —`, e.message);
+        });
+      }
     }
   }, 5000);
 

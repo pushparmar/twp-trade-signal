@@ -5,23 +5,86 @@ const { getConfig } = require('../store');
 const _cache = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-/**
- * Fetch OHLCV candles from Kite historical API.
- * Returns array of { date, open, high, low, close, volume }
- *
- * @param {number} instrumentToken
- * @param {string} interval  - minute|3minute|5minute|10minute|15minute|30minute|60minute|day
- * @param {string} from      - "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
- * @param {string} to        - "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
- * @param {boolean} continuous - for futures continuous data
- */
-async function fetchCandles(instrumentToken, interval, from, to, continuous = false) {
-  const cacheKey = `${instrumentToken}_${interval}_${from}_${to}`;
-  const cached = _cache.get(cacheKey);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return cached.candles;
+// ── Rate-limit queue ──────────────────────────────────────────────────────────
+// Kite historical API allows ~3 req/s. We cap at MAX_CONCURRENT in-flight
+// requests and add MIN_GAP_MS between successive dispatches to stay well clear
+// of the limit even during burst seeding on server boot.
+//
+// TWO queues — same rate-limit pool but different insertion points:
+//   _queueBackground  — bulk boot-time seeding (watchers); appended to tail
+//   _queuePriority    — user-initiated chart fetches;      inserted at head
+//
+// Both queues drain through the same _inFlight / _lastSent counters so the
+// global rate limit is respected, but a user opening a chart never waits
+// behind 20+ background seeds.
+const MAX_CONCURRENT = 2;
+const MIN_GAP_MS     = 350; // ms between dispatches
+
+let _inFlight   = 0;
+let _lastSent   = 0;
+const _queueBackground = []; // { run, resolve, reject } — background seeding
+const _queuePriority   = []; // { run, resolve, reject } — user chart requests
+
+function _drain() {
+  // Priority queue drains first; background fills remaining slots
+  const combined = [..._queuePriority, ..._queueBackground];
+  if (combined.length === 0 || _inFlight >= MAX_CONCURRENT) return;
+
+  const gap = MIN_GAP_MS - (Date.now() - _lastSent);
+  if (gap > 0) {
+    setTimeout(_drain, gap);
+    return;
   }
 
+  // Take from priority queue first, then background
+  let item;
+  if (_queuePriority.length > 0) {
+    item = _queuePriority.shift();
+  } else {
+    item = _queueBackground.shift();
+  }
+
+  const { run, resolve, reject } = item;
+  _inFlight++;
+  _lastSent = Date.now();
+
+  run()
+    .then(resolve)
+    .catch(reject)
+    .finally(() => {
+      _inFlight--;
+      _drain();
+    });
+
+  // Immediately try to dispatch a second slot if capacity allows
+  if (_inFlight < MAX_CONCURRENT) _drain();
+}
+
+/**
+ * Enqueue a background (low-priority) fetch — appended to tail.
+ * Used by watchers that bulk-seed on boot.
+ */
+function _enqueue(run) {
+  return new Promise((resolve, reject) => {
+    _queueBackground.push({ run, resolve, reject });
+    _drain();
+  });
+}
+
+/**
+ * Enqueue a priority (high-priority) fetch — inserted at head.
+ * Used by user-initiated chart API calls so they bypass background seeding.
+ */
+function _enqueuePriority(run) {
+  return new Promise((resolve, reject) => {
+    _queuePriority.push({ run, resolve, reject });
+    _drain();
+  });
+}
+
+// ── Raw Kite API fetch ────────────────────────────────────────────────────────
+
+async function _fetchFromKite(instrumentToken, interval, from, to, continuous) {
   const { kite } = getConfig();
   if (!kite.apiKey || !kite.accessToken) {
     throw new Error('Kite not authenticated');
@@ -38,24 +101,50 @@ async function fetchCandles(instrumentToken, interval, from, to, continuous = fa
   });
 
   const raw = response.data?.data?.candles || [];
-  const candles = raw.map(([date, open, high, low, close, volume]) => ({
+  return raw.map(([date, open, high, low, close, volume]) => ({
     date,
-    open: Number(open),
-    high: Number(high),
-    low: Number(low),
-    close: Number(close),
+    open:   Number(open),
+    high:   Number(high),
+    low:    Number(low),
+    close:  Number(close),
     volume: Number(volume),
   }));
+}
 
-  _cache.set(cacheKey, { candles, fetchedAt: Date.now() });
-  return candles;
+/**
+ * Fetch OHLCV candles from Kite historical API.
+ * Returns array of { date, open, high, low, close, volume }
+ *
+ * @param {number}  instrumentToken
+ * @param {string}  interval    - minute|3minute|5minute|10minute|15minute|30minute|60minute|day
+ * @param {string}  from        - "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
+ * @param {string}  to          - "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS"
+ * @param {boolean} continuous  - for futures continuous data
+ * @param {boolean} [priority]  - true = user chart request (jumps the queue)
+ */
+async function fetchCandles(instrumentToken, interval, from, to, continuous = false, priority = false) {
+  const cacheKey = `${instrumentToken}_${interval}_${from}_${to}`;
+  const cached = _cache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+    return cached.candles;
+  }
+
+  const enqueue = priority ? _enqueuePriority : _enqueue;
+
+  return enqueue(async () => {
+    const candles = await _fetchFromKite(instrumentToken, interval, from, to, continuous);
+    _cache.set(cacheKey, { candles, fetchedAt: Date.now() });
+    return candles;
+  });
 }
 
 /**
  * Fetch the last N candles ending now.
  * Automatically calculates the `from` date based on interval and count.
+ *
+ * @param {boolean} [priority] - true = user chart request (bypasses background queue)
  */
-async function fetchLastNCandles(instrumentToken, interval, count) {
+async function fetchLastNCandles(instrumentToken, interval, count, priority = false) {
   const now = new Date();
   const to = formatDate(now);
 
@@ -78,7 +167,7 @@ async function fetchLastNCandles(instrumentToken, interval, count) {
   const minutesNeeded = Math.max(count * minutesPerCandle * 2.5, minDays * 24 * 60);
   const from = formatDate(new Date(now.getTime() - minutesNeeded * 60 * 1000));
 
-  const candles = await fetchCandles(instrumentToken, interval, from, to);
+  const candles = await fetchCandles(instrumentToken, interval, from, to, false, priority);
   // Return the last `count` candles
   return candles.slice(-count);
 }

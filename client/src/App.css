@@ -616,6 +616,26 @@ body {
 .poll-error  { color: var(--red); font-size: 12px; margin-top: 8px; }
 .poll-hint   { color: var(--txt3); font-size: 12px; margin-top: 8px; }
 
+/* ── Telegram format hint ─────────────────────────── */
+.tg-format-hint { margin-top: 14px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.tg-format-label { font-size: 11px; color: var(--txt3); margin: 0 0 4px; }
+.tg-format-pre { font-family: var(--font-mono, monospace); font-size: 12px; color: var(--txt); background: none; margin: 0; white-space: pre; }
+
+/* ── Telegram debug panel ─────────────────────────── */
+.tg-debug { margin-top: 16px; }
+.tg-debug-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.tg-debug-title { font-size: 12px; font-weight: 600; color: var(--txt2); text-transform: uppercase; letter-spacing: .04em; }
+.tg-debug-empty { font-size: 12px; color: var(--txt3); margin: 0; }
+.tg-debug-list  { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.tg-debug-row   { display: grid; grid-template-columns: 90px 70px 1fr; align-items: start; gap: 8px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); }
+.tg-debug-row--ok  { border-color: rgba(89,160,92,.35); }
+.tg-debug-row--err { border-color: rgba(215,90,74,.35); }
+.tg-debug-badge    { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.tg-debug-badge--ok  { color: var(--green); }
+.tg-debug-badge--err { color: var(--red); }
+.tg-debug-ts   { font-size: 11px; color: var(--txt3); white-space: nowrap; }
+.tg-debug-text { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--txt); background: none; margin: 0; white-space: pre-wrap; word-break: break-all; }
+
 /* ── Toggle switch ───────────────────────────────── */
 .toggle-field { flex-direction: row !important; align-items: flex-start; gap: 10px; margin-top: 8px; }
 .toggle-label { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; color: var(--txt); }
@@ -2279,10 +2299,13 @@ body {
   border-radius: 10px;
   padding: 12px 14px;
   text-align: center;
-  transition: border-color 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.mw-tf-card--bull { border-color: rgba(89,160,92,0.45); background: rgba(89,160,92,0.05); }
-.mw-tf-card--bear { border-color: rgba(215,90,74,0.45); background: rgba(215,90,74,0.05); }
+.mw-tf-card--bull   { border-color: rgba(89,160,92,0.45);  background: rgba(89,160,92,0.05); }
+.mw-tf-card--bear   { border-color: rgba(215,90,74,0.45);  background: rgba(215,90,74,0.05); }
+/* Active card: selected TF drives the chart below */
+.mw-tf-card--active { box-shadow: 0 0 0 2px var(--blue); border-color: var(--blue); }
+.mw-tf-card--active:hover { box-shadow: 0 0 0 2px var(--blue); }
 
 .mw-tf-card-label {
   font-size: 10px;
@@ -2556,3 +2579,281 @@ body {
     color: var(--blue);
   }
 }
+
+/* ── Ichimoku Chart ───────────────────────────────── */
+.ichi-chart-wrap {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-top: 18px;
+}
+
+/* Header row: title left, legend right */
+.ichi-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);   /* explicit so canvas can't bleed through */
+  position: relative;
+  z-index: 2;                /* sit above the chart canvas */
+}
+
+.ichi-chart-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--txt2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* TF selector pill buttons */
+.ichi-chart-tfs {
+  display: flex;
+  gap: 4px;
+}
+
+.ichi-tf-btn {
+  background: transparent;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--txt2);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.ichi-tf-btn:hover { background: var(--surface); color: var(--txt); }
+.ichi-tf-btn--active {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/* Legend — now inline inside the header row */
+.ichi-chart-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ichi-leg {
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ichi-leg--kijun      { color: #f97316; }
+.ichi-leg--tenkan     { color: #84cc16; }
+.ichi-leg--chikou     { color: #387ed1; }
+.ichi-leg--cloud-bull { color: #59a05c; }
+.ichi-leg--cloud-bear { color: #d75a4a; }
+
+/* The lightweight-charts canvas container */
+.ichi-chart {
+  width: 100%;
+  background: var(--bg);     /* fallback while canvas initialises */
+  display: block;
+  /* height is set programmatically (420px) via chart options */
+}
+
+/* Loading / error overlay */
+.ichi-chart-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(6, 9, 26, 0.6);
+  color: var(--txt2);
+  font-size: 13px;
+  font-weight: 500;
+  pointer-events: none;
+}
+.ichi-chart-overlay--err { color: var(--red); background: rgba(6, 9, 26, 0.75); }
+
+/* Spinner for loading state */
+.ichi-chart-overlay-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Scanner / Live Scan Alerts page ─────────────────────────────────────── */
+.scanner-page { display: flex; flex-direction: column; gap: 16px; }
+
+/* Filters */
+.scan-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  padding: 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.scan-filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.scan-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  min-width: 48px;
+}
+.scan-filter-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border2);
+  background: transparent;
+  color: var(--txt2);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.scan-filter-btn:hover  { background: var(--sidebar-hover); color: var(--txt); }
+.scan-filter-btn--active {
+  background: var(--blue-dim);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/* Table */
+.scan-table-wrap {
+  overflow-x: auto;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+.scan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.scan-th {
+  padding: 10px 14px;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--txt3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.scan-row {
+  cursor: pointer;
+  transition: background .12s;
+  border-bottom: 1px solid var(--border);
+}
+.scan-row:last-child { border-bottom: none; }
+.scan-row:hover { background: var(--sidebar-hover); }
+.scan-row--bullish { border-left: 3px solid var(--green); }
+.scan-row--bearish { border-left: 3px solid var(--red); }
+.scan-cell { padding: 10px 14px; color: var(--txt); vertical-align: middle; white-space: nowrap; }
+
+/* Symbol */
+.scan-symbol { font-weight: 600; font-family: var(--mono); font-size: 13px; }
+
+/* LTP + change */
+.scan-ltp  { font-weight: 600; font-family: var(--mono); margin-right: 6px; }
+.scan-chg  { font-size: 11px; font-weight: 500; }
+
+/* Timeframe badge */
+.scan-tf-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  color: var(--txt2);
+}
+
+/* Signal badge */
+.scan-signal-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.scan-signal-badge--bullish { background: var(--green-dim); color: var(--green); }
+.scan-signal-badge--bearish { background: var(--red-dim);   color: var(--red);   }
+
+/* Score dots */
+.scan-score-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.scan-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.scan-dot--bull  { background: var(--green); }
+.scan-dot--bear  { background: var(--red); }
+.scan-dot--empty { background: var(--border2); }
+.scan-score-num  { font-size: 11px; color: var(--txt3); margin-left: 4px; }
+.scan-score-na   { color: var(--txt3); }
+
+/* Price @ alert */
+.scan-cell--price { font-family: var(--mono); color: var(--txt2); font-size: 12px; }
+.scan-cell--time  { color: var(--txt3); font-size: 12px; }
+.scan-cell--pattern { color: var(--txt2); max-width: 180px; white-space: normal; }
+
+/* Empty state */
+.scan-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 64px 24px;
+  color: var(--txt3);
+  text-align: center;
+}
+.scan-empty-icon { opacity: .4; }
+.scan-empty-text { font-size: 14px; max-width: 400px; line-height: 1.6; }
+
+/* Count badge in header subtitle */
+.scan-count-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--blue-dim);
+  color: var(--blue);
+  vertical-align: middle;
+}
+
+/* Sidebar badge for scanner tab */
+.nav-badge--scan {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+/* Light-theme overrides for scanner */
+[data-theme="light"] .scan-row--bullish { border-left-color: var(--green); }
+[data-theme="light"] .scan-row--bearish { border-left-color: var(--red); }
+[data-theme="light"] .scan-th { background: var(--surface); }

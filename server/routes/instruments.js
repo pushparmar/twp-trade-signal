@@ -3,6 +3,7 @@ const instrumentCache = require('../services/instrumentCache');
 const kiteTicker = require('../services/kiteTicker');
 const kiteService = require('../services/kiteService');
 const candleStore = require('../services/candleStore');
+const liveScanner = require('../services/liveScanner');
 const store = require('../store');
 
 const BATCH_SIZE = 500; // Kite quote API limit per request
@@ -44,6 +45,8 @@ router.post('/subscribe', (req, res) => {
 
   const watchlist = store.addToWatchlist(item);
   kiteTicker.subscribe([item.instrumentToken]);
+  // Register with live scanner so candle closes for this token trigger pattern checks
+  liveScanner.addWatch(item.instrumentToken, item.tradingsymbol || item.name || `Token ${item.instrumentToken}`);
   res.json({ ok: true, watchlist });
 });
 
@@ -57,6 +60,7 @@ router.post('/unsubscribe', (req, res) => {
   const watchlist = store.removeFromWatchlist(token);
   kiteTicker.unsubscribe([token]);
   candleStore.remove(token);
+  liveScanner.removeWatch(token);
   res.json({ ok: true, watchlist });
 });
 

@@ -17,6 +17,7 @@ export default function useSSE() {
   const setTickerConnected = useAppStore((s) => s.setTickerConnected);
   const setIchiSignal = useAppStore((s) => s.setIchiSignal);
   const setMacroData = useAppStore((s) => s.setMacroData);
+  const addScanAlert = useAppStore((s) => s.addScanAlert);
 
   useEffect(() => {
     // In production VITE_API_URL points to Railway — SSE cannot go through Vercel rewrites.
@@ -51,7 +52,8 @@ export default function useSSE() {
     es.addEventListener('ticker_status', (e) => setTickerConnected(JSON.parse(e.data).connected));
     es.addEventListener('ichimoku_update', (e) => setIchiSignal(JSON.parse(e.data)));
     es.addEventListener('macro_update', (e) => setMacroData(JSON.parse(e.data)));
+    es.addEventListener('scan_alert', (e) => addScanAlert(JSON.parse(e.data)));
 
     return () => es.close();
-  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData]);
+  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData, addScanAlert]);
 }

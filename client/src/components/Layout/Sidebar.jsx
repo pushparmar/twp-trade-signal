@@ -72,6 +72,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    id: 'scanner',
+    label: 'Scanner',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        <polyline points="11 8 11 11 13 13" />
+      </svg>
+    ),
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: (
@@ -99,9 +110,11 @@ export default function Sidebar({
   tickerConnected,
   showSettings = false,
 }) {
-  const isLive      = pollingStatus === 'running';
-  const isMarket    = activePage === 'market';
-  const visibleNav  = NAV_ITEMS.filter(item => item.id !== 'settings' || showSettings);
+  const isLive       = pollingStatus === 'running';
+  const isMarket     = activePage === 'market';
+  const visibleNav   = NAV_ITEMS.filter(item => item.id !== 'settings' || showSettings);
+  const scanAlerts   = useAppStore(s => s.scanAlerts);
+  const scanCount    = scanAlerts.length;
 
   // Instrument list data — only needed when on market page
   const watchlist            = useAppStore(s => s.watchlist);
@@ -158,6 +171,9 @@ export default function Sidebar({
             {!collapsed && <span className="nav-label">{item.label}</span>}
             {!collapsed && item.id === 'dashboard' && signalCount > 0 && (
               <span className="nav-badge">{signalCount}</span>
+            )}
+            {!collapsed && item.id === 'scanner' && scanCount > 0 && (
+              <span className="nav-badge nav-badge--scan">{scanCount}</span>
             )}
             {item.id === 'market' && (
               <span

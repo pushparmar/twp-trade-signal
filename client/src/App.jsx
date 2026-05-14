@@ -6,6 +6,7 @@ import Sidebar from './components/Layout/Sidebar';
 import Dashboard from './components/Dashboard/Dashboard';
 import SettingsPanel from './components/Settings/SettingsPanel';
 import MarketWatch from './components/Market/MarketWatch';
+import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import ToastContainer from './components/Toast/Toast';
 import './App.css';
 
@@ -23,8 +24,9 @@ function useTheme() {
 
 const PAGES = {
   dashboard: Dashboard,
-  market: MarketWatch,
-  settings: SettingsPanel,
+  market:    MarketWatch,
+  scanner:   ScanAlertsPage,
+  settings:  SettingsPanel,
 };
 
 export default function App() {

@@ -98,6 +98,27 @@ const useAppStore = create((set) => ({
   setMacroData:          (macroData)          => set({ macroData }),
   setMacroPrices:        (macroPrices)        => set({ macroPrices }),
   setSelectedInstrument: (selectedInstrument) => set({ selectedInstrument }),
+
+  // Scanner tab — accumulated pattern alert events
+  // Each entry: { token, label, interval, tfLabel, patternId, patternLabel,
+  //               signal, score, close, ts }
+  // Keyed by "token:interval:patternId" so each combo shows only the latest firing.
+  // Stored as array sorted newest-first; capped at 200 entries.
+  scanAlerts: [],
+  addScanAlert: (alert) =>
+    set((s) => ({
+      scanAlerts: [
+        alert,
+        ...s.scanAlerts.filter(
+          (a) =>
+            !(
+              a.token     === alert.token     &&
+              a.interval  === alert.interval  &&
+              a.patternId === alert.patternId
+            )
+        ),
+      ].slice(0, 200),
+    })),
 }));
 
 export default useAppStore;

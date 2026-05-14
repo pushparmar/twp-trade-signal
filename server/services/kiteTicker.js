@@ -1,11 +1,12 @@
 const { KiteTicker } = require('kiteconnect');
 const { getConfig } = require('../store');
-const { broadcast } = require('../sseHub');
+const { broadcast, broadcastTick } = require('../sseHub');
 const candleStore = require('./candleStore');
 const { getSignals } = require('./ichimoku');
 const indexSignalWatcher    = require('./indexSignalWatcher');
 const macroWatcher          = require('./macroWatcher');
 const patternAlertWatcher   = require('./patternAlertWatcher');
+const liveScanner           = require('./liveScanner');
 
 let _ticker = null;
 let _connected = false;
@@ -89,7 +90,9 @@ function connect() {
         sellQuantity: tick.total_sell_quantity ?? 0,
         averageTradePrice: tick.average_traded_price ?? 0,
       };
-      broadcast('tick', payload);
+      // Throttled broadcast — only the latest price per token is sent every
+      // 250 ms. This prevents SSE queue saturation from rapid Kite ticks.
+      broadcastTick(payload);
 
       // Update live macro prices on every tick (debounced inside macroWatcher)
       macroWatcher.onTick(tick.instrument_token, tick.last_price);
@@ -115,6 +118,8 @@ function connect() {
         macroWatcher.onCandleClose(token, interval).catch(() => {});
         // Run pattern alerts — fires Telegram if a kumo pattern matches
         patternAlertWatcher.onCandleClose(token, interval).catch(() => {});
+        // Scan user watchlist stocks for patterns — broadcasts scan_alert SSE
+        liveScanner.onCandleClose(token, interval);
       });
     }
   });

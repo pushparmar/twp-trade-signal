@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
 
@@ -12,6 +12,8 @@ export default function SettingsPanel() {
     const [pollError, setPollError] = useState("");
     const [savingDefaults, setSavingDefaults] = useState(false);
     const [defaultsForm, setDefaultsForm] = useState(null);
+    const [debugMsgs, setDebugMsgs] = useState(null);   // null = not yet loaded
+    const [debugLoading, setDebugLoading] = useState(false);
 
     const isRunning = pollingStatus === "running";
     const form = defaultsForm ?? tradingDefaults;
@@ -45,6 +47,18 @@ export default function SettingsPanel() {
             console.error("Kite login error:", err.message);
         }
     }
+
+    const loadDebug = useCallback(async () => {
+        setDebugLoading(true);
+        try {
+            const r = await api.get("/telegram/debug");
+            setDebugMsgs(r.data.lastMessages || []);
+        } catch {
+            setDebugMsgs([]);
+        } finally {
+            setDebugLoading(false);
+        }
+    }, []);
 
     async function togglePolling() {
         setPollError("");
@@ -112,6 +126,50 @@ export default function SettingsPanel() {
                         </button>
                     </div>
                     {pollError && <p className="poll-error">{pollError}</p>}
+
+                    {/* Expected signal format hint */}
+                    <div className="tg-format-hint">
+                        <p className="tg-format-label">Expected message format (4 lines):</p>
+                        <pre className="tg-format-pre">{`NIFTY24550CE\n216\n200\n289`}</pre>
+                        <p className="tg-format-label" style={{ marginTop: 6 }}>
+                            Line 1: symbol &nbsp;·&nbsp; Line 2: entry price(s) &nbsp;·&nbsp;
+                            Line 3: stop-loss &nbsp;·&nbsp; Line 4: target(s) (optional)
+                        </p>
+                    </div>
+
+                    {/* Debug: recent messages */}
+                    <div className="tg-debug">
+                        <div className="tg-debug-header">
+                            <span className="tg-debug-title">Recent messages</span>
+                            <button
+                                className="btn btn-sm btn-secondary"
+                                onClick={loadDebug}
+                                disabled={debugLoading}
+                            >
+                                {debugLoading ? "Loading…" : "Refresh"}
+                            </button>
+                        </div>
+
+                        {debugMsgs === null && (
+                            <p className="tg-debug-empty">Click Refresh to inspect received messages.</p>
+                        )}
+                        {debugMsgs !== null && debugMsgs.length === 0 && (
+                            <p className="tg-debug-empty">No messages received yet.</p>
+                        )}
+                        {debugMsgs !== null && debugMsgs.length > 0 && (
+                            <div className="tg-debug-list">
+                                {debugMsgs.map((m, i) => (
+                                    <div key={i} className={`tg-debug-row tg-debug-row--${m.status === "MATCHED" ? "ok" : "err"}`}>
+                                        <span className={`tg-debug-badge tg-debug-badge--${m.status === "MATCHED" ? "ok" : "err"}`}>
+                                            {m.status === "MATCHED" ? "✓ matched" : "✗ no match"}
+                                        </span>
+                                        <span className="tg-debug-ts">{new Date(m.ts).toLocaleTimeString()}</span>
+                                        <pre className="tg-debug-text">{m.text}</pre>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         </div>
