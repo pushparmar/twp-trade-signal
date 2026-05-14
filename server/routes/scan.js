@@ -38,6 +38,74 @@ const liveScanner      = require('../services/liveScanner');
 const { broadcast }    = require('../sseHub');
 const store            = require('../store');
 const { to4H }         = require('../services/ichimoku');
+const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis');
+const instrumentCache  = require('../services/instrumentCache');
+
+/**
+ * Build the list of every active NFO front-month stock future (~200-250 names).
+ * Reads from instrumentCache — returns [] if cache hasn't loaded yet.
+ *
+ * Used as the default scan universe so the Screener button doesn't need
+ * any manual subscription — every F&O-eligible stock is included automatically.
+ *
+ * Returns: [{ instrumentToken, tradingsymbol, exchange, name }]
+ */
+function _allNfoFutures() {
+  if (!instrumentCache.isLoaded()) return [];
+
+  const names = instrumentCache.getFutureNames();
+  const out = [];
+  for (const name of names) {
+    const inst = instrumentCache.getFrontMonthFuture(name, 'NFO');
+    if (!inst) continue;
+    out.push({
+      instrumentToken: inst.instrumentToken,
+      tradingsymbol:   inst.tradingsymbol,
+      exchange:        inst.exchange,
+      name:            inst.name,
+    });
+  }
+  return out;
+}
+
+/**
+ * Build the list of macro + index instruments that are always included in the
+ * on-demand scan. Matches the set covered by patternAlertWatcher so the
+ * Scanner UI never says "no matches" just because the user's watchlist is
+ * empty on a fresh server boot.
+ *
+ * Returns: [{ instrumentToken, tradingsymbol, exchange, name }]
+ */
+function _macroAndIndexInstruments() {
+  const list = [
+    // Indices — always present, no instrument cache lookup needed
+    { instrumentToken: 256265, tradingsymbol: 'NIFTY 50',   exchange: 'NSE', name: 'NIFTY 50'   },
+    { instrumentToken: 260105, tradingsymbol: 'NIFTY BANK', exchange: 'NSE', name: 'NIFTY BANK' },
+    { instrumentToken: VIX_TOKEN, tradingsymbol: 'INDIA VIX', exchange: 'NSE', name: 'India VIX' },
+  ];
+
+  // Macro futures — depend on instrumentCache being loaded; skip silently if unavailable
+  const macros = [
+    ['CRUDEOIL', 'MCX', 'Crude Oil'],
+    ['GOLD',     'MCX', 'Gold'],
+    ['SILVER',   'MCX', 'Silver'],
+    ['USDINR',   'CDS', 'USD/INR'],
+  ];
+  for (const [symbol, exchange, label] of macros) {
+    try {
+      const inst = getFrontMonthFutures(symbol, exchange);
+      if (inst) {
+        list.push({
+          instrumentToken: inst.instrumentToken,
+          tradingsymbol:   inst.tradingsymbol,
+          exchange:        inst.exchange,
+          name:            label,
+        });
+      }
+    } catch { /* instrument cache not ready — ignore */ }
+  }
+  return list;
+}
 
 const router = express.Router();
 
@@ -58,6 +126,22 @@ async function _getCandles(token, interval) {
 // ── GET /api/scan/patterns ────────────────────────────────────────────────────
 router.get('/patterns', (_req, res) => {
   res.json(patternRegistry.list());
+});
+
+// ── GET /api/scan/universe ────────────────────────────────────────────────────
+// Returns the counts of each instrument set the scanner can scan, so the
+// client can show an accurate "scanning N instruments" hint before running.
+router.get('/universe', (_req, res) => {
+  const macros   = _macroAndIndexInstruments();
+  const watchlist = store.getWatchlist();
+  const futures  = _allNfoFutures();
+  res.json({
+    macros:    macros.length,
+    watchlist: watchlist.length,
+    futures:   futures.length,
+    // Same dedup math the POST handler uses
+    all:       new Set([...macros, ...watchlist, ...futures].map(i => Number(i.instrumentToken))).size,
+  });
 });
 
 // ── GET /api/scan/scanner-status ─────────────────────────────────────────────
@@ -131,6 +215,14 @@ router.post('/trigger-close', async (req, res) => {
 
 // ── POST /api/scan ────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
+  // The default scope ('all') scans ~250 NFO futures × 4 intervals ≈ 1000 pairs.
+  // historicalCache enforces ~5.7 req/s — so the first scan can take ~3 minutes
+  // before any per-instrument cache hits. Disable the default socket timeout so
+  // the response is never cut off mid-scan. Subsequent scans are much faster
+  // (historicalCache TTL = 5 min).
+  req.setTimeout(0);
+  res.setTimeout(0);
+
   const {
     patternId,
     intervals   = ['15minute', '60minute', '4h', 'day'],
@@ -139,6 +231,18 @@ router.post('/', async (req, res) => {
     // that are not in the persistent watchlist (e.g. macro instruments: VIX, Crude…).
     // Shape: [{ instrumentToken, tradingsymbol, exchange, name }]
     instruments = null,
+    // Scope of the auto-built universe when `instruments` is not supplied:
+    //   'all'       → macros + indices + ALL NFO front-month futures (~200 stocks) [default]
+    //   'futures'   → macros + indices + NFO futures (alias of 'all')
+    //   'watchlist' → macros + indices + user watchlist only (faster, smaller scan)
+    //   'macros'    → macros + indices only (7 instruments)
+    scope       = 'all',
+    // Pause between consecutive timeframe phases to spread Kite API load.
+    // Phases run sequentially: 15m for ALL instruments → wait → 1h for ALL → wait → 4h → wait → 1d.
+    // Set to 0 to disable phasing (old behaviour: all intervals interleaved).
+    interTfDelayMs = 3000,
+    // Concurrent fetches per phase (also rate-limited globally by historicalCache).
+    batchSize      = 8,
   } = req.body;
 
   if (!patternId) {
@@ -150,65 +254,102 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: `Unknown pattern: "${patternId}"` });
   }
 
-  // Prefer the caller-supplied list; fall back to the persistent watchlist.
-  const watchlist = instruments
-    ? instruments.map(i => ({ ...i, instrumentToken: Number(i.instrumentToken) }))
-    : store.getWatchlist();
+  // Build the scan universe based on `instruments` body param or `scope`:
+  let watchlist;
+  if (instruments) {
+    // Explicit list supplied by caller — used by tests / specialised scans
+    watchlist = instruments.map(i => ({ ...i, instrumentToken: Number(i.instrumentToken) }));
+  } else {
+    const macros   = _macroAndIndexInstruments();
+    const userList = (scope === 'macros') ? [] : store.getWatchlist();
+    const futures  = (scope === 'all' || scope === 'futures') ? _allNfoFutures() : [];
+
+    // Merge in priority order — macros at the top, then user watchlist, then
+    // the bulk NFO futures list. Dedup by instrumentToken.
+    const seen = new Set();
+    watchlist = [];
+    for (const it of [...macros, ...userList, ...futures]) {
+      const tk = Number(it.instrumentToken);
+      if (seen.has(tk)) continue;
+      seen.add(tk);
+      watchlist.push({ ...it, instrumentToken: tk });
+    }
+  }
+
+  console.log(`[Scan] ${patternId} — universe of ${watchlist.length} instruments × ${intervals.length} intervals (scope=${instruments ? 'explicit' : scope})`);
 
   if (!watchlist.length) {
     return res.json({ patternId, patternLabel: pattern.label, scannedCount: 0, totalInstruments: 0, matches: [] });
   }
 
-  // Build the full task list: one entry per (instrument × interval)
-  const tasks = [];
-  for (const item of watchlist) {
-    for (const interval of intervals) {
-      tasks.push({ item, interval });
-    }
-  }
-
   const matches      = [];
   let scannedCount   = 0;
 
-  // Process in small concurrent batches to avoid hammering the Kite historical API
-  const BATCH_SIZE = 8;
-  for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
-    await Promise.allSettled(
-      tasks.slice(i, i + BATCH_SIZE).map(async ({ item, interval }) => {
-        try {
-          const candles = await _getCandles(item.instrumentToken, interval);
-          // Skip instruments with insufficient history — not an error worth logging
-          if (!candles || candles.length < 52) return;
+  // Sleep helper for inter-phase gaps
+  const _sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-          scannedCount++;
+  // Scan one (interval × instruments) phase: fetches candles in concurrent
+  // sub-batches (capped by `batchSize`, further rate-limited by historicalCache),
+  // runs the pattern, and appends matches. Reusable between phases.
+  async function _scanPhase(interval) {
+    const phaseStart = Date.now();
+    let phaseScanned = 0;
+    let phaseMatched = 0;
 
-          const result = pattern.run(candles, opts);
-          if (!result || !result.matched) return;
+    for (let i = 0; i < watchlist.length; i += batchSize) {
+      await Promise.allSettled(
+        watchlist.slice(i, i + batchSize).map(async (item) => {
+          try {
+            const candles = await _getCandles(item.instrumentToken, interval);
+            if (!candles || candles.length < 52) return;
 
-          matches.push({
-            token:         item.instrumentToken,
-            tradingsymbol: item.tradingsymbol,
-            exchange:      item.exchange,
-            name:          item.name  || '',
-            interval,
-            signal:        result.signal,
-            score:         result.score,
-            checks:        result.checks,
-            twistBarsAgo:  result.twistBarsAgo  ?? null,
-            close:         result.close         ?? null,
-            kijunValue:    result.kijunValue     ?? null,
-            cloudTop:      result.cloudTop       ?? null,
-            cloudBottom:   result.cloudBottom    ?? null,
-            senkouA:       result.senkouA        ?? null,
-            senkouB:       result.senkouB        ?? null,
-            price26ago:    result.price26ago     ?? null,
-          });
-        } catch (err) {
-          // Silence per-instrument errors — one bad token shouldn't abort the scan
-          console.warn(`[Scan] ${item.tradingsymbol}:${interval} —`, err.message);
-        }
-      }),
-    );
+            phaseScanned++;
+            scannedCount++;
+
+            const result = pattern.run(candles, opts);
+            if (!result || !result.matched) return;
+
+            phaseMatched++;
+            matches.push({
+              token:         item.instrumentToken,
+              tradingsymbol: item.tradingsymbol,
+              exchange:      item.exchange,
+              name:          item.name  || '',
+              interval,
+              signal:        result.signal,
+              score:         result.score,
+              checks:        result.checks,
+              twistBarsAgo:  result.twistBarsAgo  ?? null,
+              close:         result.close         ?? null,
+              kijunValue:    result.kijunValue     ?? null,
+              cloudTop:      result.cloudTop       ?? null,
+              cloudBottom:   result.cloudBottom    ?? null,
+              senkouA:       result.senkouA        ?? null,
+              senkouB:       result.senkouB        ?? null,
+              price26ago:    result.price26ago     ?? null,
+            });
+          } catch (err) {
+            // Silence per-instrument errors — one bad token shouldn't abort the scan
+            console.warn(`[Scan] ${item.tradingsymbol}:${interval} —`, err.message);
+          }
+        }),
+      );
+    }
+
+    const took = ((Date.now() - phaseStart) / 1000).toFixed(1);
+    console.log(`[Scan] phase ${interval}: ${phaseScanned}/${watchlist.length} scanned, ${phaseMatched} matched (${took}s)`);
+  }
+
+  // Run phases sequentially with a configurable pause between them so we don't
+  // burst all 4 intervals × N instruments through the Kite rate limiter at once.
+  for (let p = 0; p < intervals.length; p++) {
+    const interval = intervals[p];
+    await _scanPhase(interval);
+    // Pause between phases (skip after the last phase)
+    if (interTfDelayMs > 0 && p < intervals.length - 1) {
+      console.log(`[Scan] pausing ${interTfDelayMs}ms before next timeframe…`);
+      await _sleep(interTfDelayMs);
+    }
   }
 
   // Sort: bullish first, then bearish; then by score descending within each group
