@@ -61,13 +61,20 @@ async function fetchLastNCandles(instrumentToken, interval, count) {
 
   // Indian market trades only 6.25h/day on 5 of 7 days, so calendar lookback must be
   // much wider than raw (count × minutesPerCandle) to guarantee enough candles.
-  //   – 60minute: needs a 45-day floor so _to4H() always produces ≥26 4h candles
-  //   – day: 60-day floor → ≥42 trading days of daily history
-  //   – all others: 14-day floor (enough for 15m / 30m / 1m signals)
+  //
+  //   – day: each trading day = 1 candle but 1440 calendar minutes (non-trading time is large).
+  //     To collect `count` trading-day candles safely, look back count×2 calendar days
+  //     (≈ count × 7/5 rounded up with a margin). For count=100 that is 200 calendar days
+  //     → ~143 trading days, so slice(-100) always yields a full 100-candle set ≥ 52 needed
+  //     by Ichimoku.
+  //   – 60minute: 45-day floor gives ~281 1h candles; _to4H(208) produces 52 4h candles
+  //     needed by Ichimoku.  We also scale with count so large bar requests don't starve.
+  //   – all others: 14-day floor (sufficient for 15m / 5m / 1m signals)
   const minutesPerCandle = intervalToMinutes(interval);
   const minDays =
-    interval === '60minute' ? 45 :
-    interval === 'day'      ? 60 : 14;
+    interval === 'day'      ? Math.ceil(count * 2) :
+    interval === '60minute' ? Math.max(45, Math.ceil(count / 6.25 * 1.6)) :
+    14;
   const minutesNeeded = Math.max(count * minutesPerCandle * 2.5, minDays * 24 * 60);
   const from = formatDate(new Date(now.getTime() - minutesNeeded * 60 * 1000));
 

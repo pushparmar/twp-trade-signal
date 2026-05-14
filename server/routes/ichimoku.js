@@ -44,15 +44,18 @@ router.get('/:token', async (req, res) => {
     // Need 4× the bars in 1h to produce the requested number of 4h candles.
     let candles;
     if (interval === '4h') {
-      const candles1h = await candleStore.getCandles(token, '60minute', bars ? bars * 4 : undefined);
-      candles = candles1h && candles1h.length >= 8 ? _to4H(candles1h) : [];
+      // Need ≥208 1h candles to synthesise ≥52 4h candles (Ichimoku minimum)
+      const need1h = bars ? bars * 4 : 240;
+      const candles1h = await candleStore.getCandles(token, '60minute', need1h);
+      candles = candles1h && candles1h.length >= 208 ? _to4H(candles1h) : [];
     } else {
       candles = await candleStore.getCandles(token, interval, bars);
     }
 
-    if (!candles || candles.length < 26) {
+    // getSignals() requires at minimum 52 candles (Senkou Span B needs 52 periods)
+    if (!candles || candles.length < 52) {
       return res.status(422).json({
-        error: `Need at least 26 candles, got ${candles?.length ?? 0}. Try increasing bars or a longer interval.`,
+        error: `Need at least 52 candles, got ${candles?.length ?? 0}. Try increasing bars or a longer interval.`,
       });
     }
 

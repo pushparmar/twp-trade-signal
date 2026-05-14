@@ -155,42 +155,41 @@ async function _notify(indexName, signalType, signals, candles, interval) {
 
   const optionType = signalType === 'PUT_BUY' ? 'PE' : 'CE';
 
-  // Resolve ATM option
+  // Resolve ATM option — failure is non-fatal; we send the signal anyway without levels
   let atmOption = null;
   try {
     atmOption = await atmResolver.resolve(indexName, optionType);
   } catch (e) {
-    console.warn(`[IndexSignalWatcher] ATM resolve failed: ${e.message}`);
+    console.warn(`[IndexSignalWatcher] ATM resolve failed (signal will fire without option levels): ${e.message}`);
   }
 
-  if (!atmOption || atmOption.error) {
-    console.warn('[IndexSignalWatcher] Skipping — no ATM option resolved');
-    return;
-  }
-
-  // Get option's current LTP
+  // Get option's current LTP — also non-fatal
   let optionLtp = null;
-  try {
-    const inst = atmOption.instrument;
-    const symbol = `${inst.exchange}:${inst.tradingsymbol}`;
-    const ltpData = await kiteService.getLTP([symbol]);
-    optionLtp = ltpData[symbol]?.last_price ?? Object.values(ltpData)[0]?.last_price ?? null;
-  } catch (e) {
-    console.warn(`[IndexSignalWatcher] Option LTP fetch failed: ${e.message}`);
+  if (atmOption && !atmOption.error) {
+    try {
+      const inst   = atmOption.instrument;
+      const symbol = `${inst.exchange}:${inst.tradingsymbol}`;
+      const ltpData = await kiteService.getLTP([symbol]);
+      optionLtp = ltpData[symbol]?.last_price ?? Object.values(ltpData)[0]?.last_price ?? null;
+    } catch (e) {
+      console.warn(`[IndexSignalWatcher] Option LTP fetch failed: ${e.message}`);
+    }
   }
 
-  if (!optionLtp) {
-    console.warn('[IndexSignalWatcher] Skipping — could not fetch option LTP');
-    return;
+  // Build and send message — include option levels only when both resolved
+  let text;
+  if (atmOption && !atmOption.error && optionLtp) {
+    const slPct = _indexSlPct(candles, signals, signalType);
+    const { entry, sl, target } = _optionLevels(optionLtp, slPct);
+    text = _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval, signals);
+  } else {
+    // Fallback: signal fires without ATM option detail
+    text = _formatMessageNoOption(indexName, signalType, interval, signals);
   }
-
-  const slPct = _indexSlPct(candles, signals, signalType);
-  const { entry, sl, target } = _optionLevels(optionLtp, slPct);
-  const text = _formatMessage(indexName, signalType, atmOption, entry, sl, target, interval, signals);
 
   try {
     await telegramNotifier.sendMessage(chatId, text);
-    console.log(`[IndexSignalWatcher] Sent ${signalType} on ${indexName} (${interval}) — option LTP ${optionLtp}`);
+    console.log(`[IndexSignalWatcher] Sent ${signalType} on ${indexName} (${interval})${optionLtp ? ` — option LTP ${optionLtp}` : ' — no ATM option'}`);
   } catch (err) {
     console.error('[IndexSignalWatcher] Telegram send failed:', err.message);
   }
@@ -210,6 +209,22 @@ function _formatMessage(indexName, signalType, atmOption, entry, sl, target, int
     `Entry  : <b>${entry}</b>`,
     `SL     : <b>${sl}</b>`,
     `Target : <b>${target}</b>`,
+  ].join('\n');
+}
+
+// Fallback when ATM option or LTP cannot be resolved (e.g. outside market hours)
+function _formatMessageNoOption(indexName, signalType, interval, signals) {
+  const emoji = signalType === 'PUT_BUY' ? '🔴' : '🟢';
+  const label = signalType === 'PUT_BUY' ? 'PUT BUY' : 'CALL BUY';
+
+  return [
+    `${emoji} <b>${label} — ${indexName} (${interval})</b>`,
+    ``,
+    `Price  : <b>${signals.close}</b>`,
+    `Kijun  : ${signals.kijun}`,
+    `Chikou : ${signals.chikouValue}  (vs ${signals.price26ago} 26-bars ago)`,
+    ``,
+    `⚠️ ATM option not resolved — check NFO instrument cache`,
   ].join('\n');
 }
 
