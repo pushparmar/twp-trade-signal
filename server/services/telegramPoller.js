@@ -10,8 +10,8 @@ let isPolling  = false;
 let pollTimeout = null;
 let lastMessages = [];
 let _conflictRetries = 0;
-const MAX_CONFLICT_RETRIES = 5;
-const CONFLICT_BACKOFF_MS  = 5_000; // wait 5 s before retrying after a 409
+const MAX_CONFLICT_RETRIES = 10;      // retry for up to ~80s total before giving up
+const CONFLICT_BACKOFF_MS  = 8_000;  // wait 8s per retry — old instance usually dies within 5s
 
 function getStatus() {
   return { isPolling, offset };
@@ -38,7 +38,10 @@ async function start() {
   _conflictRetries = 0;
   isPolling = true;
   broadcast('status', { pollingStatus: 'running' });
-  schedulePoll();
+  // Short startup delay — on Railway, the old instance gets SIGTERM and has
+  // ~2s to stop. Waiting here ensures its long-poll connection is released
+  // before we open a new one, preventing the 409 conflict on redeploy.
+  pollTimeout = setTimeout(poll, 3_000);
 }
 
 function stop() {

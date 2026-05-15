@@ -158,3 +158,17 @@ app.listen(PORT, async () => {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }
 });
+
+// ── Graceful shutdown (Railway sends SIGTERM on redeploy) ─────────────────────
+// Stop Telegram polling before the process exits so the long-poll connection is
+// released. Without this the old instance holds the connection while the new one
+// starts → 409 conflict on the new instance.
+function _gracefulShutdown(signal) {
+  console.log(`[Server] ${signal} received — shutting down gracefully`);
+  telegramPoller.stop();
+  backgroundScanner.stop();
+  // Give in-flight requests a moment to complete, then exit
+  setTimeout(() => process.exit(0), 2_000);
+}
+process.on('SIGTERM', () => _gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => _gracefulShutdown('SIGINT'));
