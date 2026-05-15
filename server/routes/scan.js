@@ -172,6 +172,14 @@ router.get('/scanner-status', (req, res) => {
   });
 });
 
+// ── POST /api/scan/clear-dedup ────────────────────────────────────────────────
+// Clears the background-scanner dedup map so every pattern will re-fire on the
+// next candle close. Use this when you want to re-receive today's alerts.
+router.post('/clear-dedup', (req, res) => {
+  const count = backgroundScanner.clearDedup();
+  res.json({ ok: true, clearedEntries: count });
+});
+
 // ── POST /api/scan/fire-test-alert ────────────────────────────────────────────
 // Broadcasts a fake scan_alert SSE event to verify the client pipeline
 // (SSE → appStore → Scanner tab) without needing real candle closes.

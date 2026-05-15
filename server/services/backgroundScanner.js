@@ -415,4 +415,15 @@ function getSchedule() {
   );
 }
 
-module.exports = { start, stop, getSchedule };
+/**
+ * Clear all dedup entries so every pattern fires again on the next scan.
+ * Useful after a server restart or when testing — call via POST /api/scan/clear-dedup.
+ */
+function clearDedup() {
+  const count = _dedup.size;
+  _dedup.clear();
+  console.log(`[BgScanner] Dedup cleared — ${count} entries removed`);
+  return count;
+}
+
+module.exports = { start, stop, getSchedule, clearDedup };
