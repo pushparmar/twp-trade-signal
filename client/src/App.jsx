@@ -8,6 +8,7 @@ import SettingsPanel from './components/Settings/SettingsPanel';
 import MarketWatch from './components/Market/MarketWatch';
 import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import ToastContainer from './components/Toast/Toast';
+import LoginPage from './components/Auth/LoginPage';
 import './App.css';
 
 // ── Global paper-trade auto-close watcher ─────────────────────────────────────
@@ -56,6 +57,9 @@ function usePaperAutoClose() {
         closedIds.current.add(trade.id);
         closeScanPaperTrade(trade.id, closeAt);
         addToast({ type: 'info', message: msg });
+        // Sync the auto-close to the server so trades-current.json reflects
+        // the closed status and the 6 AM archive captures correct P&L.
+        api.post(`/paper/${trade.id}/close`, { exitPrice: closeAt }).catch(() => {});
       }
     }
   }, [ticks, paperTrades, closeScanPaperTrade, addToast]);
@@ -80,7 +84,10 @@ const PAGES = {
   settings:  SettingsPanel,
 };
 
-export default function App() {
+// ── Authenticated shell ────────────────────────────────────────────────────────
+// Extracted into its own component so all hooks are called unconditionally,
+// regardless of whether the user is logged in (satisfies React rules of hooks).
+function AppShell() {
   const [activePage, setActivePage] = useState('market');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Settings tab visible only when ?setting=1 is in the URL
@@ -162,4 +169,18 @@ export default function App() {
       <ToastContainer />
     </div>
   );
+}
+
+// ── Root — auth gate ───────────────────────────────────────────────────────────
+// Renders either the login screen or the full app shell based on the stored flag.
+export default function App() {
+  // A simple localStorage flag keeps the session alive across refreshes.
+  // LoginPage sets twp_auth='1' on success; clearing it here forces a re-login.
+  const [loggedIn, setLoggedIn] = useState(() => localStorage.getItem('twp_auth') === '1');
+
+  if (!loggedIn) {
+    return <LoginPage onLogin={() => setLoggedIn(true)} />;
+  }
+
+  return <AppShell />;
 }

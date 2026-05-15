@@ -416,23 +416,28 @@ function getKumoBreakout(candles, { lookback = 10 } = {}) {
 
   // Price must currently be outside the cloud — if it drifted back in, signal is dead.
   if (!last.aboveCloud && !last.belowCloud) {
-    return { signal: null, barsAgo: null, close: last.close, cloudTop: last.cloudTop, cloudBottom: last.cloudBottom, senkouA: last.senkouA, senkouB: last.senkouB };
+    return {
+      signal: null, barsAgo: null,
+      close:       last.close,
+      cloudTop:    last.cloudTop,    cloudBottom: last.cloudBottom,
+      senkouA:     last.senkouA,     senkouB:     last.senkouB,
+      tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+      kijun:       last.kijun  != null ? round(last.kijun)  : null,
+    };
   }
 
   const lookingForBullish = last.aboveCloud;
 
-  // Scan backwards from the current bar to find when the cross happened.
-  // offset=0 means the CURRENT bar itself is the breakout bar (price just crossed).
+  // Scan backwards to find when the crossover happened within `lookback` bars.
   for (let offset = 0; offset < lookback; offset++) {
-    const idx  = n - 1 - offset; // candidate breakout bar
-    const idxP = idx - 1;        // bar just before it
+    const idx  = n - 1 - offset;
+    const idxP = idx - 1;
     if (idxP < 0) break;
 
     const cur  = results[idx];
     const prev = results[idxP];
 
     if (lookingForBullish) {
-      // Breakout bar: was NOT above cloud, then became above cloud
       if (cur.aboveCloud && !prev.aboveCloud) {
         return {
           signal:      'bullish',
@@ -442,11 +447,11 @@ function getKumoBreakout(candles, { lookback = 10 } = {}) {
           cloudBottom: last.cloudBottom,
           senkouA:     last.senkouA,
           senkouB:     last.senkouB,
+          tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+          kijun:       last.kijun  != null ? round(last.kijun)  : null,
         };
       }
-      // If price was already above cloud before this bar, the cross is even older — keep searching
     } else {
-      // Bearish — was NOT below cloud, then became below cloud
       if (cur.belowCloud && !prev.belowCloud) {
         return {
           signal:      'bearish',
@@ -456,13 +461,22 @@ function getKumoBreakout(candles, { lookback = 10 } = {}) {
           cloudBottom: last.cloudBottom,
           senkouA:     last.senkouA,
           senkouB:     last.senkouB,
+          tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+          kijun:       last.kijun  != null ? round(last.kijun)  : null,
         };
       }
     }
   }
 
   // Price is outside the cloud but the crossover happened more than `lookback` bars ago — stale.
-  return { signal: null, barsAgo: null, close: last.close, cloudTop: last.cloudTop, cloudBottom: last.cloudBottom, senkouA: last.senkouA, senkouB: last.senkouB };
+  return {
+    signal: null, barsAgo: null,
+    close:       last.close,
+    cloudTop:    last.cloudTop,    cloudBottom: last.cloudBottom,
+    senkouA:     last.senkouA,     senkouB:     last.senkouB,
+    tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+    kijun:       last.kijun  != null ? round(last.kijun)  : null,
+  };
 }
 
 /**
@@ -566,10 +580,9 @@ function _crossStrength(signal, cloudPosition) {
  * Tenkan-Kijun Cross — Tenkan (9-period, green/fast) crossing Kijun (26-period, red/slow).
  * The most widely traded Ichimoku signal.
  *
- * Directional filter (high-probability setups only):
- *   Bullish: Tenkan (green) crossed ABOVE Kijun (red), price ABOVE cloud at cross bar.
- *   Bearish: Tenkan (green) crossed BELOW Kijun (red), price BELOW cloud at cross bar.
- *   Crosses inside the cloud or on the wrong side are filtered out — returns null.
+ * Fires on any TK cross regardless of cloud position.
+ * Strength is labelled (strong/neutral/weak) based on cloud position for context,
+ * but does NOT filter out crosses inside the cloud or on the counter-trend side.
  *
  * @param {Object[]} candles
  * @param {Object}   [opts]
@@ -602,21 +615,11 @@ function getTKCross(candles, { lookback = 5 } = {}) {
 
     const crossCloudPos = _cloudPos(r);
 
-    // ── Directional filter ────────────────────────────────────────────────────
-    // Bearish: Tenkan (green) crossed down through Kijun (red) → only valid
-    //   when price was BELOW the cloud at the cross bar (confirmed bear zone).
-    // Bullish: Tenkan (green) crossed up through Kijun (red) → only valid
-    //   when price was ABOVE the cloud at the cross bar (confirmed bull zone).
-    // Crosses inside the cloud or on the counter-trend side are skipped.
-    if (r.tkCross === 'bearish' && crossCloudPos !== 'below') continue;
-    if (r.tkCross === 'bullish' && crossCloudPos !== 'above') continue;
-    // ─────────────────────────────────────────────────────────────────────────
-
     return {
       signal:        r.tkCross,
       barsAgo:       offset,
       crossType:     'TK Cross',
-      strength:      'strong', // always strong — filter ensures this
+      strength:      _crossStrength(r.tkCross, crossCloudPos),
       cloudPosition: _cloudPos(last), // current price position (context)
       close:         last.close,
       tenkan:        last.tenkan,
@@ -899,6 +902,8 @@ function getKumoBounce(candles, { lookback = 5, tolerance = 0.005 } = {}) {
             cloudPosition: 'above',
             close:         last.close,
             cloudLevel:    round(r.cloudTop),
+            tenkan:        last.tenkan != null ? round(last.tenkan) : null,
+            kijun:         last.kijun  != null ? round(last.kijun)  : null,
           };
         }
       }
@@ -916,6 +921,8 @@ function getKumoBounce(candles, { lookback = 5, tolerance = 0.005 } = {}) {
             cloudPosition: 'below',
             close:         last.close,
             cloudLevel:    round(r.cloudBottom),
+            tenkan:        last.tenkan != null ? round(last.tenkan) : null,
+            kijun:         last.kijun  != null ? round(last.kijun)  : null,
           };
         }
       }

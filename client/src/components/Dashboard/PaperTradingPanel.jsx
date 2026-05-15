@@ -38,7 +38,11 @@ function CloseTradeModal({ trade, onClose, onConfirm }) {
             <span className={`pill ${trade.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>{trade.action}</span>
             <span style={{ fontWeight: 600 }}>{trade.symbol}</span>
             <span style={{ color: 'var(--txt2)' }}>Entry: {trade.entryPrice}</span>
-            <span style={{ color: 'var(--txt2)' }}>Qty: {trade.quantity}</span>
+            <span style={{ color: 'var(--txt2)' }}>
+              {trade.lots != null && trade.lotSize > 1
+                ? `${trade.lots} lot${trade.lots > 1 ? 's' : ''} (${trade.quantity} qty)`
+                : `Qty: ${trade.quantity}`}
+            </span>
           </div>
           <div className="close-trade-hints">
             {trade.target && <button className="hint-btn" onClick={() => setExitPrice(trade.target)}>Target: {trade.target}</button>}
@@ -198,7 +202,11 @@ function OpenTradeRow({ trade, onClose }) {
           {ltp != null ? fmtPrice(ltp) : '—'}
         </span>
       </td>
-      <td className="td-num">{trade.quantity}</td>
+      <td className="td-num">
+        {trade.lots != null && trade.lotSize > 1
+          ? <span title={`${trade.lots} lot${trade.lots > 1 ? 's' : ''} × ${trade.lotSize}`}>{trade.lots}L<span style={{ color: 'var(--txt3)', fontSize: 11 }}> /{trade.quantity}</span></span>
+          : trade.quantity}
+      </td>
       <td className="td-num td-sl">
         {trade.sl != null ? fmtPrice(trade.sl) : '—'}
         {slHit && <span className="paper-hit-tag paper-hit-tag--sl"> 🛑</span>}
@@ -354,7 +362,11 @@ export default function PaperTradingPanel() {
                     <td className="td-symbol">{t.symbol}</td>
                     <td className="td-num">{t.entryPrice}</td>
                     <td className="td-num">{t.exitPrice}</td>
-                    <td className="td-num">{t.quantity}</td>
+                    <td className="td-num">
+                      {t.lots != null && t.lotSize > 1
+                        ? <span title={`${t.lots} lot${t.lots > 1 ? 's' : ''} × ${t.lotSize}`}>{t.lots}L<span style={{ color: 'var(--txt3)', fontSize: 11 }}> /{t.quantity}</span></span>
+                        : t.quantity}
+                    </td>
                     <td className={`td-num ${pnlColor(t.pnl)}`}>
                       {t.pnl !== null ? `${t.pnl >= 0 ? '+' : ''}₹${t.pnl.toFixed(2)}` : '—'}
                     </td>

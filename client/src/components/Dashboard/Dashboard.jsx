@@ -153,7 +153,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {testMode ? (
+            {testMode && (
                 <div className="test-mode-banner">
                     <svg
                         width="15"
@@ -171,14 +171,15 @@ export default function Dashboard() {
                         <line x1="9" y1="15" x2="15" y2="15" />
                     </svg>
                     <span>
-                        <strong>Test Mode</strong> — orders are simulated, nothing is sent to Kite
+                        <strong>Paper Mode</strong> — orders are simulated, nothing is sent to Kite
                     </span>
                 </div>
-            ) : (
-                ""
             )}
 
-            {testMode ? <PaperTradingPanel /> : <SummaryCards signals={signals} orders={orders} />}
+            {/* Paper trades — always visible; active trades update live */}
+            <PaperTradingPanel />
+
+            <SummaryCards signals={signals} orders={orders} />
 
             {/* Signals */}
             <section className="dash-section">

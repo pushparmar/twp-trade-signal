@@ -152,9 +152,6 @@ function ScanRow({ alert, onSelect, onBuy }) {
           <span className="scan-meta-tag">{alert.consecutiveBars} bars</span>
         )}
       </td>
-      <td className="scan-cell scan-cell--strength">
-        <StrengthBadge strength={alert.strength} />
-      </td>
       <td className="scan-cell scan-cell--score">
         <ScoreDots score={alert.score} signal={alert.signal} />
       </td>
@@ -261,48 +258,58 @@ function bestPerSymbol(alerts) {
 // quantity, SL and target before confirming. Shows live LTP and balance impact.
 
 function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfirm }) {
-  const tick         = useAppStore((s) => s.ticks[alert.token]);
-  const paperBalance = useAppStore((s) => s.paperBalance);
+  const tick            = useAppStore((s) => s.ticks[alert.token]);
+  const paperBalance    = useAppStore((s) => s.paperBalance);
   const tradingDefaults = useAppStore((s) => s.tradingDefaults);
+  const watchlist       = useAppStore((s) => s.watchlist);
+
+  // Look up lot size for this instrument from the watchlist.
+  // Falls back to 1 for indices / instruments not in the FO watchlist.
+  const watchItem = watchlist.find((w) => w.instrumentToken === alert.token);
+  const lotSize   = watchItem?.lotSize ?? 1;
 
   const ltp = tick?.lastPrice ?? null;
 
   // Entry price — auto-follows LTP until user edits it
-  const [entryStr,  setEntryStr]  = useState(String(suggestedEntry ?? ltp ?? ''));
+  const [entryStr,    setEntryStr]    = useState(String(suggestedEntry ?? ltp ?? ''));
   const [entryEdited, setEntryEdited] = useState(false);
-  const [qtyStr,    setQtyStr]    = useState(String(tradingDefaults.quantity || 1));
-  const [slStr,     setSlStr]     = useState('');
-  const [targetStr, setTargetStr] = useState('');
+  // Lots (number of lots) — actual quantity = lots * lotSize
+  const [lotsStr,     setLotsStr]     = useState(String(tradingDefaults.quantity || 1));
+  const [slStr,       setSlStr]       = useState('');
+  const [targetStr,   setTargetStr]   = useState('');
 
   // Keep entry synced with live LTP until user touches the field
   useEffect(() => {
     if (!entryEdited && ltp != null) setEntryStr(String(ltp));
   }, [ltp, entryEdited]);
 
-  const entry  = parseFloat(entryStr)  || 0;
-  const qty    = parseInt(qtyStr, 10)  || 1;
-  const sl     = parseFloat(slStr)     || null;
-  const target = parseFloat(targetStr) || null;
+  const entry      = parseFloat(entryStr)  || 0;
+  const lots       = Math.max(1, parseInt(lotsStr, 10) || 1);
+  // Actual number of shares traded — this is what P&L is calculated on
+  const actualQty  = lots * lotSize;
+  const sl         = parseFloat(slStr)     || null;
+  const target     = parseFloat(targetStr) || null;
 
-  // Capital required for this trade
-  const cost = entry * qty;
+  // Capital required for this trade (entry × actual shares)
+  const cost      = entry * actualQty;
   const available = paperBalance?.available ?? 0;
   const canAfford = cost <= available;
 
   // Risk / reward preview — direction-aware (BUY vs SELL)
   // BUY:  SL is below entry (price going down is loss), target is above (profit up)
   // SELL: SL is above entry (price going up is loss),  target is below (profit down)
-  const maxRisk   = sl != null     ? Math.abs(entry - sl)     * qty : null;
-  const potProfit = target != null ? Math.abs(entry - target) * qty : null;
+  const maxRisk   = sl != null     ? Math.abs(entry - sl)     * actualQty : null;
+  const potProfit = target != null ? Math.abs(entry - target) * actualQty : null;
   const rrRatio   = maxRisk && potProfit && maxRisk > 0
     ? (potProfit / maxRisk).toFixed(1)
     : null;
 
-  const valid = entry > 0 && qty > 0 && canAfford;
+  const valid = entry > 0 && lots > 0 && canAfford;
 
   function handleConfirm() {
     if (!valid) return;
-    onConfirm({ entryPrice: entry, quantity: qty, sl, target });
+    // Pass both lots/lotSize (for display) and actual quantity (for P&L)
+    onConfirm({ entryPrice: entry, lots, lotSize, quantity: actualQty, sl, target });
   }
 
   function handleOverlayClick(e) {
@@ -331,7 +338,7 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
             <span className="pbm-ltp-hint">(updates live · click entry to lock)</span>
           </div>
 
-          {/* Entry + Quantity */}
+          {/* Entry + Lots */}
           <div className="pbm-fields">
             <div className="pbm-field">
               <label className="pbm-label">Entry Price ₹</label>
@@ -347,15 +354,23 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
               />
             </div>
             <div className="pbm-field">
-              <label className="pbm-label">Quantity</label>
+              <label className="pbm-label">
+                Lots
+                {lotSize > 1 && (
+                  <span className="pbm-lot-hint"> (1 lot = {lotSize} qty)</span>
+                )}
+              </label>
               <input
                 className="pbm-input"
                 type="number"
-                value={qtyStr}
+                value={lotsStr}
                 min="1"
                 step="1"
-                onChange={(e) => setQtyStr(e.target.value)}
+                onChange={(e) => setLotsStr(e.target.value)}
               />
+              {lotSize > 1 && (
+                <span className="pbm-actual-qty">= {actualQty} shares</span>
+              )}
             </div>
           </div>
 
@@ -390,7 +405,14 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
           {/* Balance / P&L preview */}
           <div className="pbm-preview">
             <div className="pbm-preview-row">
-              <span>Capital required</span>
+              <span>
+                Capital required
+                {lotSize > 1 && (
+                  <span className="pbm-calc-note">
+                    {' '}({lots} lot{lots > 1 ? 's' : ''} × {lotSize} qty × ₹{fmt(entry)})
+                  </span>
+                )}
+              </span>
               <span className={canAfford ? 'pbm-val' : 'pbm-val pbm-val--danger'}>
                 ₹{cost.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
               </span>
@@ -1084,33 +1106,48 @@ export default function ScanAlertsPage() {
 
   // Called when the modal's "Confirm BUY" button is clicked.
   // Creates the paper trade with all user-specified fields.
-  const handleConfirmBuy = useCallback(({ entryPrice, quantity, sl, target }) => {
+  // quantity = lots × lotSize (actual number of shares for P&L calculation)
+  const handleConfirmBuy = useCallback(({ entryPrice, lots, lotSize, quantity, sl, target }) => {
     const alert = buyModalData?.alert;
     if (!alert) return;
 
     const action = buyModalData?.action ?? 'BUY';
     const trade = {
-      id:         `scan-${Date.now()}-${alert.token}`,
-      ts:         Date.now(),
-      signalId:   null,
-      symbol:     alert.label,
-      token:      alert.token,
+      id:           `scan-${Date.now()}-${alert.token}`,
+      ts:           Date.now(),
+      signalId:     null,
+      symbol:       alert.label,
+      token:        alert.token,
       action,
       entryPrice,
-      quantity,
+      lots:         lots    ?? 1,
+      lotSize:      lotSize ?? 1,
+      quantity,             // actual shares = lots * lotSize
       sl,
       target,
-      targets:    [],
-      status:     'OPEN',
-      exitPrice:  null,
-      pnl:        null,
-      closedTs:   null,
-      source:     'scan',
+      targets:      [],
+      status:       'OPEN',
+      exitPrice:    null,
+      pnl:          null,
+      closedTs:     null,
+      source:       'scan',
+      // Pattern metadata — stored for end-of-day archive analysis
+      patternId:    alert.patternId    ?? null,
+      patternLabel: alert.patternLabel ?? null,
+      signal:       alert.signal       ?? null,
+      interval:     alert.interval     ?? null,
+      tfLabel:      alert.tfLabel      ?? null,
     };
 
     addPaperTrade(trade);
     addToast({ type: 'buy', message: `Paper ${action} — ${alert.label} @ ₹${fmt(entryPrice)}` });
     setBuyModalData(null);
+
+    // Persist to server so trades-current.json stays current for the daily 6 AM archive.
+    // Fire-and-forget — a network failure does NOT block the UI.
+    api.post('/paper', trade).catch((err) =>
+      console.warn('[Paper] Server sync failed for new trade:', err.message)
+    );
   }, [buyModalData, addPaperTrade, addToast]);
 
   const liveCount      = scanAlerts.filter((a) => a.source !== 'screener').length;
@@ -1154,8 +1191,7 @@ export default function ScanAlertsPage() {
         dedup={dedup}             onDedup={setDedup}
       />
 
-      {/* ── Active paper trades (only in paper mode) ────────────────────── */}
-      {testMode && <ActivePaperTrades />}
+      {/* Paper trades are shown exclusively on the Dashboard tab */}
 
       {/* ── Results table ───────────────────────────────────────────────── */}
       {filtered.length === 0 ? (
@@ -1184,7 +1220,6 @@ export default function ScanAlertsPage() {
                 <SortHeader col="tf"       label="TF"            sort={sort} onClick={toggleSort} />
                 <SortHeader col="signal"   label="Signal"        sort={sort} onClick={toggleSort} />
                 <SortHeader col="pattern"  label="Pattern"       sort={sort} onClick={toggleSort} />
-                <SortHeader col="strength" label="Strength"      sort={sort} onClick={toggleSort} />
                 <SortHeader col="score"    label="Score"         sort={sort} onClick={toggleSort} />
                 <SortHeader col="price"    label="Price @ Alert" sort={sort} onClick={toggleSort} />
                 <SortHeader col="time"     label="Time"          sort={sort} onClick={toggleSort} />

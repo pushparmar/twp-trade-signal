@@ -24,6 +24,7 @@ const patternAlertWatcher   = require('./services/patternAlertWatcher');
 const liveScanner           = require('./services/liveScanner');
 const backgroundScanner     = require('./services/backgroundScanner');
 const foStockRegistry       = require('./services/foStockRegistry');
+const tradeArchiver         = require('./services/tradeArchiver');
 const store = require('./store');
 
 const app = express();
@@ -102,6 +103,14 @@ app.listen(PORT, async () => {
     telegramPoller.start()
       .then(() => console.log('[Telegram] Auto-started polling on server boot'))
       .catch(err  => console.warn('[Telegram] Could not auto-start polling:', err.message));
+  }
+
+  // Start the daily 6 AM IST trade archiver — runs regardless of Kite auth.
+  // Archives paper trades to data/history/trades-YYYY-MM-DD.json then clears.
+  try {
+    tradeArchiver.start();
+  } catch (err) {
+    console.warn('[TradeArchiver] Could not start:', err.message);
   }
 
   // Load F&O stock registry from disk immediately — no auth needed.

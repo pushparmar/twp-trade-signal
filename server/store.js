@@ -98,9 +98,40 @@ function setTelegramChatId(chatId) {
 }
 
 // ── Test / Paper trading ─────────────────────────────
+
+// Write-through path for paper trades — survives server restarts.
+// On Railway: stored under DATA_DIR persistent volume.
+const TRADES_PATH = process.env.DATA_DIR
+  ? path.join(process.env.DATA_DIR, 'trades-current.json')
+  : path.join(__dirname, 'data', 'trades-current.json');
+
 let _testMode = false;
 let _paperTrades = [];
 let _paperInitialBalance = 100000;
+
+// Persist current trades to disk after every mutation.
+function _saveTrades() {
+  try {
+    fs.writeFileSync(TRADES_PATH, JSON.stringify(_paperTrades, null, 2), 'utf8');
+  } catch (err) {
+    console.warn('[store] Failed to persist trades:', err.message);
+  }
+}
+
+// Load trades from the previous session on module boot.
+;(function _loadTrades() {
+  try {
+    if (fs.existsSync(TRADES_PATH)) {
+      const loaded = JSON.parse(fs.readFileSync(TRADES_PATH, 'utf8'));
+      if (Array.isArray(loaded)) {
+        _paperTrades = loaded;
+        console.log(`[store] Loaded ${_paperTrades.length} paper trades from disk`);
+      }
+    }
+  } catch (err) {
+    console.warn('[store] Could not load trades from disk:', err.message);
+  }
+}());
 
 function getTestMode() { return _testMode; }
 function setTestMode(enabled) { _testMode = enabled; }
@@ -126,6 +157,7 @@ function getPaperBalance() {
 function addPaperTrade(trade) {
   _paperTrades.unshift(trade);
   if (_paperTrades.length > 200) _paperTrades.pop();
+  _saveTrades();
 }
 
 function closePaperTrade(id, exitPrice) {
@@ -138,6 +170,7 @@ function closePaperTrade(id, exitPrice) {
   trade.exitPrice = exitPrice;
   trade.pnl = Math.round(pnl * 100) / 100;
   trade.closedTs = Date.now();
+  _saveTrades();
   return trade;
 }
 
@@ -150,7 +183,11 @@ function autoClosePaperTrades(symbol, exitPrice, exitAction) {
 }
 
 function getPaperTrades() { return _paperTrades; }
-function clearPaperTrades() { _paperTrades = []; }
+function clearPaperTrades() {
+  _paperTrades = [];
+  // Remove the current-session file so it doesn't reload on next boot
+  try { fs.unlinkSync(TRADES_PATH); } catch { /* file may not exist — ignore */ }
+}
 
 // ── Watchlist (persisted) ────────────────────────────
 function getWatchlist() {

@@ -1,0 +1,177 @@
+/* ── Full-screen backdrop ─────────────────────────────────────────── */
+.backdrop {
+  display:         flex;
+  align-items:     center;
+  justify-content: center;
+  width:           100vw;
+  min-height:      100vh;
+  background:      var(--bg);
+}
+
+/* ── Login card ──────────────────────────────────────────────────── */
+.card {
+  width:            360px;
+  background:       var(--card);
+  border:           1px solid var(--border);
+  border-radius:    14px;
+  padding:          40px 36px 36px;
+  box-shadow:       var(--shadow);
+  display:          flex;
+  flex-direction:   column;
+  gap:              0;
+  /* animation anchor for shake */
+  transform-origin: center;
+}
+
+/* ── Logo mark ───────────────────────────────────────────────────── */
+.logo {
+  display:         flex;
+  justify-content: center;
+  margin-bottom:   20px;
+}
+
+.logoMark {
+  display:         inline-flex;
+  align-items:     center;
+  justify-content: center;
+  width:           52px;
+  height:          52px;
+  border-radius:   14px;
+  background:      var(--blue);
+  color:           #fff;
+  font-size:       17px;
+  font-weight:     700;
+  letter-spacing:  1px;
+}
+
+/* ── Title / subtitle ────────────────────────────────────────────── */
+.title {
+  text-align:   center;
+  font-size:    18px;
+  font-weight:  600;
+  color:        var(--txt);
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  text-align:   center;
+  font-size:    12px;
+  color:        var(--txt2);
+  margin-bottom: 24px;
+}
+
+/* ── Error banner ────────────────────────────────────────────────── */
+.errorBanner {
+  background:    var(--red-dim);
+  border:        1px solid var(--red);
+  color:         var(--red);
+  font-size:     12px;
+  padding:       8px 12px;
+  border-radius: 7px;
+  margin-bottom: 16px;
+  text-align:    center;
+}
+
+/* ── Form labels ─────────────────────────────────────────────────── */
+.label {
+  display:       block;
+  font-size:     11px;
+  font-weight:   600;
+  color:         var(--txt2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  margin-top:    14px;
+}
+
+.label:first-of-type {
+  margin-top: 0;
+}
+
+/* ── Text inputs ─────────────────────────────────────────────────── */
+.input {
+  width:         100%;
+  background:    var(--surface);
+  border:        1px solid var(--border2);
+  border-radius: 8px;
+  color:         var(--txt);
+  font-size:     13px;
+  padding:       9px 12px;
+  outline:       none;
+  transition:    border-color 0.2s, box-shadow 0.2s;
+}
+
+.input::placeholder {
+  color: var(--txt3);
+}
+
+.input:focus {
+  border-color: var(--blue);
+  box-shadow:   0 0 0 3px rgba(56, 126, 209, 0.15);
+}
+
+/* ── Password wrapper (input + eye button) ───────────────────────── */
+.passwordWrap {
+  position: relative;
+}
+
+.passwordWrap .input {
+  padding-right: 40px;
+}
+
+.eyeBtn {
+  position:   absolute;
+  right:      10px;
+  top:        50%;
+  transform:  translateY(-50%);
+  background: none;
+  border:     none;
+  cursor:     pointer;
+  font-size:  15px;
+  line-height: 1;
+  padding:    0;
+  opacity:    0.7;
+}
+
+.eyeBtn:hover {
+  opacity: 1;
+}
+
+/* ── Submit button ───────────────────────────────────────────────── */
+.submitBtn {
+  margin-top:    24px;
+  width:         100%;
+  background:    var(--blue);
+  color:         #fff;
+  border:        none;
+  border-radius: 8px;
+  font-size:     13px;
+  font-weight:   600;
+  padding:       11px 0;
+  cursor:        pointer;
+  transition:    opacity 0.2s, background 0.2s;
+}
+
+.submitBtn:hover:not(:disabled) {
+  background: #4a8fdf;
+}
+
+.submitBtn:disabled {
+  opacity: 0.45;
+  cursor:  not-allowed;
+}
+
+/* ── Shake animation (wrong credentials) ────────────────────────── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15%       { transform: translateX(-8px); }
+  30%       { transform: translateX(8px); }
+  45%       { transform: translateX(-6px); }
+  60%       { transform: translateX(6px); }
+  75%       { transform: translateX(-3px); }
+  90%       { transform: translateX(3px); }
+}
+
+.shake {
+  animation: shake 0.55s ease;
+}

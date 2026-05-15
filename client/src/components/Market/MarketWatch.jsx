@@ -428,6 +428,8 @@ function InstrumentDetail({ token, label, sublabel }) {
             {token && (
                 <>
                     {/* Zoom controls — mirrors ScanChartModal pattern */}
+
+                    <IchimokuChart ref={chartRef} token={token} interval={chartInterval} />
                     <div className="chart-zoom-bar">
                         <span className="chart-zoom-label">Zoom</span>
                         {[50, 100, 200].map(n => (
@@ -448,7 +450,6 @@ function InstrumentDetail({ token, label, sublabel }) {
                             All
                         </button>
                     </div>
-                    <IchimokuChart ref={chartRef} token={token} interval={chartInterval} />
                 </>
             )}
         </>
