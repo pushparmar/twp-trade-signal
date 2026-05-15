@@ -34,7 +34,8 @@
 const express          = require('express');
 const candleStore      = require('../services/candleStore');
 const patternRegistry  = require('../services/patternRegistry');
-const liveScanner      = require('../services/liveScanner');
+const liveScanner       = require('../services/liveScanner');
+const backgroundScanner = require('../services/backgroundScanner');
 const { broadcast }    = require('../sseHub');
 const store            = require('../store');
 const { to4H }         = require('../services/ichimoku');
@@ -156,17 +157,18 @@ router.get('/universe', (_req, res) => {
 });
 
 // ── GET /api/scan/scanner-status ─────────────────────────────────────────────
-// Diagnostic: shows how many instruments are registered in liveScanner,
-// candleStore memory stats, and current watchlist.
+// Diagnostic: liveScanner state, candleStore stats, and backgroundScanner schedule.
 router.get('/scanner-status', (req, res) => {
   const storeStats = candleStore.stats();
   const watchlist  = store.getWatchlist();
   res.json({
-    liveScannerWatchCount: liveScanner.watchCount(),
-    watchlistLength:       watchlist.length,
-    candleStoreKeys:       storeStats.keys,
-    candleStoreCandles:    storeStats.totalCandles,
-    watchlist:             watchlist.map(i => ({ token: i.instrumentToken, symbol: i.tradingsymbol })),
+    liveScannerWatchCount:  liveScanner.watchCount(),
+    watchlistLength:        watchlist.length,
+    candleStoreKeys:        storeStats.keys,
+    candleStoreCandles:     storeStats.totalCandles,
+    watchlist:              watchlist.map(i => ({ token: i.instrumentToken, symbol: i.tradingsymbol })),
+    // Background scanner — next fire times per interval
+    backgroundScanSchedule: backgroundScanner.getSchedule(),
   });
 });
 

@@ -22,6 +22,7 @@ const indexSignalWatcher    = require('./services/indexSignalWatcher');
 const macroWatcher          = require('./services/macroWatcher');
 const patternAlertWatcher   = require('./services/patternAlertWatcher');
 const liveScanner           = require('./services/liveScanner');
+const backgroundScanner     = require('./services/backgroundScanner');
 const store = require('./store');
 
 const app = express();
@@ -134,6 +135,16 @@ app.listen(PORT, async () => {
       patternAlertWatcher.start();
     } catch (err) {
       console.warn('[PatternAlert] Could not start:', err.message);
+    }
+
+    // Background scanner — auto-scans all ~200 NFO futures at every candle
+    // close (15m / 1h / 4h / 1d) and sends Telegram alerts for pattern matches.
+    // This runs independently of KiteTicker so it works even when no user
+    // watchlist stocks are explicitly subscribed.
+    try {
+      backgroundScanner.start();
+    } catch (err) {
+      console.warn('[BgScanner] Could not start:', err.message);
     }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
