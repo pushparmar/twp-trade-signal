@@ -27,14 +27,13 @@ const {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PATTERNS = {
-  // All three patterns share the same `lookback: 10` window — every event
-  // (breakout cross, twist cross) must have occurred within the last 10 candles.
+  // All patterns use lookback: 1 — signal must fire on the current (last closed) candle only.
 
   'kumo-breakout-twist': {
     id:          'kumo-breakout-twist',
     label:       'Kumo Breakout + Twist (5/5)',
-    description: 'All 5 must agree within last 10 bars: price broke cloud · cloud color matches · twist occurred · chikou confirms · price vs kijun',
-    defaultOpts: { lookback: 10 },
+    description: 'All 5 must agree on the current candle: price broke cloud · cloud color matches · twist occurred · chikou confirms · price vs kijun',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getKumoBreakoutTwist(candles, { ...this.defaultOpts, ...opts });
@@ -45,9 +44,9 @@ const PATTERNS = {
 
   'kumo-breakout': {
     id:          'kumo-breakout',
-    label:       'Kumo Breakout (last 10 candles)',
-    description: 'Price broke above or below the cloud within the last 10 bars and has not re-entered it',
-    defaultOpts: { lookback: 10 },
+    label:       'Kumo Breakout',
+    description: 'Price broke above or below the cloud on the current candle and has not re-entered it',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
@@ -58,9 +57,9 @@ const PATTERNS = {
 
   'kumo-twist': {
     id:          'kumo-twist',
-    label:       'Kumo Twist (last 10 candles)',
-    description: 'Cloud color flipped (Senkou A crossed Senkou B) within the last 10 bars',
-    defaultOpts: { lookback: 10 },
+    label:       'Kumo Twist',
+    description: 'Cloud color flipped (Senkou A crossed Senkou B) on the current candle',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getKumoTwist(candles, { ...this.defaultOpts, ...opts });
@@ -73,9 +72,9 @@ const PATTERNS = {
 
   'tk-cross': {
     id:          'tk-cross',
-    label:       'TK Cross (last 5 bars)',
-    description: 'Tenkan crossed above/below Kijun within last 5 bars. Strength depends on cloud position: above=Strong, inside=Neutral, below=Weak.',
-    defaultOpts: { lookback: 5 },
+    label:       'TK Cross',
+    description: 'Tenkan (green/fast) crossed Kijun (red/slow) with directional confirmation: bullish only above cloud, bearish only below cloud. Weak/neutral crosses filtered out.',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getTKCross(candles, { ...this.defaultOpts, ...opts });
@@ -86,9 +85,9 @@ const PATTERNS = {
 
   'kijun-cross': {
     id:          'kijun-cross',
-    label:       'Kijun Cross (last 5 bars)',
-    description: 'Price (close) crossed above/below the Kijun-sen within last 5 bars. Strong when price is also on the correct side of the cloud.',
-    defaultOpts: { lookback: 5 },
+    label:       'Kijun Cross',
+    description: 'Price (close) crossed above/below the Kijun-sen on the current candle. Strong when price is also on the correct side of the cloud.',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getKijunCross(candles, { ...this.defaultOpts, ...opts });
@@ -99,9 +98,9 @@ const PATTERNS = {
 
   'chikou-cross': {
     id:          'chikou-cross',
-    label:       'Chikou Cross (last 5 bars)',
-    description: 'Chikou Span (lagging line) crossed above/below the price from 26 bars back within last 5 bars.',
-    defaultOpts: { lookback: 5 },
+    label:       'Chikou Cross',
+    description: 'Chikou Span (lagging line) crossed above/below the price from 26 bars back on the current candle.',
+    defaultOpts: { lookback: 1 },
 
     run(candles, opts = {}) {
       const result = getChikouCross(candles, { ...this.defaultOpts, ...opts });
@@ -127,9 +126,9 @@ const PATTERNS = {
 
   'kumo-bounce': {
     id:          'kumo-bounce',
-    label:       'Kumo Bounce (last 5 bars)',
-    description: 'Price pulled back to the cloud edge from outside and reversed within last 5 bars. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below.',
-    defaultOpts: { lookback: 5, tolerance: 0.005 },
+    label:       'Kumo Bounce',
+    description: 'Price pulled back to the cloud edge from outside and reversed on the current candle. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below.',
+    defaultOpts: { lookback: 1, tolerance: 0.005 },
 
     run(candles, opts = {}) {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });

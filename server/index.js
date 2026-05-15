@@ -23,6 +23,7 @@ const macroWatcher          = require('./services/macroWatcher');
 const patternAlertWatcher   = require('./services/patternAlertWatcher');
 const liveScanner           = require('./services/liveScanner');
 const backgroundScanner     = require('./services/backgroundScanner');
+const foStockRegistry       = require('./services/foStockRegistry');
 const store = require('./store');
 
 const app = express();
@@ -91,11 +92,22 @@ app.use('/api/scan',    scanRouter);
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
 
-  // start() is async (awaits deleteWebhook) — must use .catch(), not try/catch,
-  // so errors from async steps (missing bot token, network) are not swallowed.
-  telegramPoller.start()
-    .then(() => console.log('[Telegram] Auto-started polling on server boot'))
-    .catch(err  => console.warn('[Telegram] Could not auto-start polling:', err.message));
+  // DISABLE_TELEGRAM_POLLING=true in local .env prevents 409 conflicts when
+  // both local dev server and Railway are running simultaneously.
+  if (process.env.DISABLE_TELEGRAM_POLLING === 'true') {
+    console.log('[Telegram] Polling disabled via DISABLE_TELEGRAM_POLLING env var');
+  } else {
+    // start() is async (awaits deleteWebhook) — must use .catch(), not try/catch,
+    // so errors from async steps (missing bot token, network) are not swallowed.
+    telegramPoller.start()
+      .then(() => console.log('[Telegram] Auto-started polling on server boot'))
+      .catch(err  => console.warn('[Telegram] Could not auto-start polling:', err.message));
+  }
+
+  // Load F&O stock registry from disk immediately — no auth needed.
+  // The registry (fo-stocks.json) holds stable NSE EQ tokens that never expire.
+  // If the file doesn't exist yet it's a no-op; build() runs after auth below.
+  foStockRegistry.load();
 
   // Init market data — load instruments and connect ticker if Kite is authenticated
   const { kite } = store.getConfig();
@@ -104,6 +116,18 @@ app.listen(PORT, async () => {
       await instrumentCache.load();
     } catch (err) {
       console.warn('[InstrumentCache] Load failed on boot:', err.message);
+    }
+
+    // Auto-build the F&O registry if it's missing or stale (>35 days old).
+    // This runs once after Kite auth and takes only a few milliseconds since
+    // it reads from the already-loaded instrumentCache in-memory — no network calls.
+    try {
+      if (foStockRegistry.isStale()) {
+        const result = foStockRegistry.build();
+        console.log(`[FoRegistry] Auto-built: ${result.total} stocks (${result.added.length} added, ${result.removed.length} removed)`);
+      }
+    } catch (err) {
+      console.warn('[FoRegistry] Auto-build failed:', err.message);
     }
 
     try {

@@ -160,6 +160,39 @@ function getOptionsByStrike(name, exchange, strikeValues) {
 }
 
 /**
+ * Find the permanent NSE EQ instrument for a given F&O stock name.
+ *
+ * This is the key helper for the F&O stock registry. It resolves an F&O
+ * name (e.g. "RELIANCE") to the NSE cash equity instrument whose token
+ * never changes — unlike monthly futures contracts.
+ *
+ * Strategy (tried in order):
+ *   1. Exact tradingsymbol match on NSE (instrumentType === 'EQ')
+ *   2. Name-field match on NSE (handles edge cases like 'M&MFIN' where
+ *      the futures `name` field is the same as the equity tradingsymbol)
+ *
+ * Returns null if no NSE EQ is found (unusual — logged as a warning by caller).
+ */
+function getNseEquity(name) {
+  const n = name.toUpperCase();
+
+  // 1. Exact tradingsymbol match (covers >95% of F&O stocks)
+  const bySymbol = _instruments.find(
+    (i) => i.exchange === 'NSE'
+         && i.instrumentType === 'EQ'
+         && i.tradingsymbol.toUpperCase() === n,
+  );
+  if (bySymbol) return bySymbol;
+
+  // 2. Name-field match — fallback for stocks where futures `name` ≠ tradingsymbol
+  return _instruments.find(
+    (i) => i.exchange === 'NSE'
+         && i.instrumentType === 'EQ'
+         && i.name.toUpperCase() === n,
+  ) || null;
+}
+
+/**
  * Return sorted list of unique stock names that have active futures on NFO.
  * Excludes index futures (NIFTY, BANKNIFTY, etc.).
  */
@@ -193,4 +226,4 @@ function getCount() {
   return _instruments.length;
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getFrontMonthFuture, getOptionsByStrike, getFutureNames, isLoaded, getLastLoaded, getCount };
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getFutureNames, isLoaded, getLastLoaded, getCount };

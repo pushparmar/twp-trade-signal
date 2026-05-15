@@ -2733,6 +2733,25 @@ body {
   color: var(--blue);
 }
 
+/* Pattern filter dropdown */
+.scan-filter-select {
+  height: 28px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+  color: var(--txt);
+  cursor: pointer;
+  outline: none;
+}
+.scan-filter-select:hover  { border-color: var(--blue); }
+.scan-filter-select--active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--blue-dim);
+}
+
 /* Table */
 .scan-table-wrap {
   overflow-x: auto;
@@ -3375,4 +3394,299 @@ body {
   .scan-modal-tfs      { flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px; }
   .scan-modal-zoom-spacer { display: none; } /* no spacer needed when wrapping */
   .scan-modal-chart    { min-height: 280px; height: calc(100dvh - 160px); }
+}
+
+/* ── Paper BUY button in scan row ────────────────────────────────────────── */
+.scan-buy-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid #22c55e;
+  background: transparent;
+  color: #22c55e;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scan-buy-btn:hover {
+  background: #22c55e;
+  color: #000;
+}
+.scan-buy-btn--sell {
+  border-color: var(--red);
+  color: var(--red);
+}
+.scan-buy-btn--sell:hover {
+  background: var(--red);
+  color: #fff;
+}
+
+/* ── Paper trade dashboard rows — SL/target hit highlights ───────────────── */
+.paper-row--sl     { background: rgba(215, 90, 74, 0.07); }
+.paper-row--target { background: rgba(89, 160, 92, 0.07); }
+.paper-hit-tag     { font-size: 11px; }
+
+/* btn-danger for SELL confirm in paper modal */
+.btn-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+
+/* ── Paper Mode toggle (Scanner page header) ─────────────────────────────── */
+.paper-mode-toggle {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: var(--card);
+  color: var(--txt2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+  white-space: nowrap;
+  align-self: center;
+}
+.paper-mode-toggle:hover {
+  border-color: #22c55e;
+  color: #22c55e;
+}
+.paper-mode-toggle--on {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+/* ── Paper Buy Modal ─────────────────────────────────────────────────────── */
+.paper-buy-modal {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+}
+.pbm-ltp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0 12px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+.pbm-ltp-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--txt3);
+  letter-spacing: .05em;
+}
+.pbm-ltp-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--txt);
+  font-family: var(--mono);
+}
+.pbm-ltp-hint {
+  font-size: 10px;
+  color: var(--txt3);
+  margin-left: auto;
+}
+.pbm-fields {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pbm-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pbm-label {
+  font-size: 11px;
+  color: var(--txt2);
+  font-weight: 600;
+}
+.pbm-optional {
+  font-weight: 400;
+  color: var(--txt3);
+}
+.pbm-input {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  color: var(--txt);
+  font-size: 13px;
+  font-family: var(--mono);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color .15s;
+}
+.pbm-input:focus            { border-color: var(--blue); }
+.pbm-input--sl:focus        { border-color: var(--red); }
+.pbm-input--target:focus    { border-color: var(--green); }
+
+.pbm-preview {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pbm-preview-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--txt2);
+}
+.pbm-preview-row--profit { color: var(--green); }
+.pbm-preview-row--loss   { color: var(--red); }
+.pbm-preview-row--rr     { color: var(--blue); font-weight: 600; }
+.pbm-val { font-family: var(--mono); font-weight: 600; }
+.pbm-val--danger { color: var(--red); }
+
+.pbm-warn {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--red);
+  background: var(--red-dim);
+  border-radius: 5px;
+  padding: 6px 10px;
+}
+
+/* ── Active paper trades panel ───────────────────────────────────────────── */
+.active-paper-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.active-paper-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.active-paper-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+}
+.active-paper-total-pnl {
+  margin-left: auto;
+  font-size: 12px;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.active-trade-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  transition: background .15s;
+}
+.active-trade-row:last-child { border-bottom: none; }
+.active-trade-row--sl     { background: rgba(215, 90, 74, 0.06); }
+.active-trade-row--target { background: rgba(89, 160, 92, 0.06); }
+
+.active-trade-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.active-trade-symbol {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--txt);
+  white-space: nowrap;
+}
+.active-trade-meta {
+  font-size: 11px;
+  color: var(--txt3);
+  white-space: nowrap;
+}
+.active-trade-hit {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.active-trade-hit--sl     { background: var(--red-dim);   color: var(--red);   }
+.active-trade-hit--target { background: var(--green-dim); color: var(--green); }
+
+.active-trade-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.active-trade-ltp {
+  font-size: 13px;
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--txt);
+  min-width: 72px;
+  text-align: right;
+}
+.active-trade-pnl {
+  font-size: 13px;
+  font-family: var(--mono);
+  font-weight: 700;
+  min-width: 80px;
+  text-align: right;
+}
+.active-trade-close-btn { font-size: 11px; }
+
+/* ── Chart zoom bar (MarketWatch indices / macro detail panel) ────────────── */
+.chart-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 0 6px;
+  justify-content: flex-end;
+}
+.chart-zoom-label {
+  font-size: 11px;
+  color: var(--txt3);
+  margin-right: 4px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.chart-zoom-btn {
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border2);
+  background: var(--card);
+  color: var(--txt2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.chart-zoom-btn:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--blue);
+  color: var(--txt);
+}
+.chart-zoom-btn--all {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.chart-zoom-btn--all:hover {
+  background: var(--blue-dim);
+  color: var(--blue);
 }

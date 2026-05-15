@@ -254,8 +254,12 @@ router.get('/:token', async (req, res) => {
 
     // getSignals() requires at minimum 52 candles (Senkou Span B needs 52 periods)
     if (!candles || candles.length < 52) {
+      const { kite } = require('../store').getConfig();
+      const notAuth = !kite.accessToken;
       return res.status(422).json({
-        error: `Need at least 52 candles, got ${candles?.length ?? 0}. Try increasing bars or a longer interval.`,
+        error: notAuth
+          ? 'Kite session expired — please re-login via Settings to refresh the access token.'
+          : `Need at least 52 candles, got ${candles?.length ?? 0}. The futures contract may have expired — try re-running the screener.`,
       });
     }
 

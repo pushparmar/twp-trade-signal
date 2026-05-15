@@ -24,6 +24,7 @@ const atmResolver = require('./atmResolver');
 const telegramNotifier = require('./telegramNotifier');
 const kiteService = require('./kiteService');
 const store = require('../store');
+const { isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 
 // All token+interval combinations to watch.
 // NOTE: Kite uses 'minute' (not '1minute') for the 1-min interval — both the
@@ -45,8 +46,6 @@ const _watchMap = new Map(
 // Dedup: "token:interval:direction" → { fired: bool, date: string (IST) }
 // One entry per (token, interval, direction) per IST trading day.
 const _dedup = new Map();
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -150,6 +149,12 @@ async function onCandleClose(token, interval) {
 }
 
 async function _notify(indexName, signalType, signals, candles, interval) {
+  // Indices are NSE-only — skip Telegram outside NSE trading hours
+  if (!isNseOpen()) {
+    console.log(`[IndexSignalWatcher] ⏸ ${signalType} on ${indexName} (${interval}) — Telegram skipped (NSE closed)`);
+    return;
+  }
+
   const chatId = store.getTelegramChatId();
   if (!chatId) {
     console.warn('[IndexSignalWatcher] No Telegram chat ID configured — signal not sent');

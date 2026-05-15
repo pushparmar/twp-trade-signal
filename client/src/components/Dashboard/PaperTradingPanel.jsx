@@ -1,9 +1,14 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import api from '../../api';
 import useAppStore from '../../store/appStore';
 
 function fmt(ts) {
   return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function fmtPrice(n) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function pnlColor(pnl) {
@@ -142,6 +147,80 @@ function BalanceCard({ balance, onUpdate }) {
   );
 }
 
+// ── Live open trade row ───────────────────────────────────────────────────────
+// Subscribes to the tick for this trade's token so LTP and unrealized P&L
+// update every second without re-rendering the whole panel.
+function OpenTradeRow({ trade, onClose }) {
+  const tick    = useAppStore((s) => s.ticks[trade.token]);
+  const ltp     = tick?.lastPrice ?? null;
+  const priceRef = useRef(null);
+  const prevRef  = useRef(null);
+
+  // Flash animation when price changes
+  useEffect(() => {
+    if (!tick || !priceRef.current) return;
+    const curr = tick.lastPrice;
+    if (prevRef.current == null) { prevRef.current = curr; return; }
+    const dir = curr > prevRef.current ? 'flash-up' : curr < prevRef.current ? 'flash-down' : null;
+    prevRef.current = curr;
+    if (!dir) return;
+    priceRef.current.classList.remove('flash-up', 'flash-down');
+    void priceRef.current.offsetWidth;
+    priceRef.current.classList.add(dir);
+  }, [tick?.lastPrice]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unrealizedPnl = ltp != null
+    ? (trade.action === 'BUY'
+        ? (ltp - trade.entryPrice)
+        : (trade.entryPrice - ltp)) * trade.quantity
+    : null;
+
+  const pnlCls = unrealizedPnl == null ? '' : unrealizedPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+
+  // SL / target breach indicators
+  const slHit     = ltp != null && trade.sl     != null
+    && (trade.action === 'BUY' ? ltp <= trade.sl     : ltp >= trade.sl);
+  const targetHit = ltp != null && trade.target != null
+    && (trade.action === 'BUY' ? ltp >= trade.target : ltp <= trade.target);
+
+  return (
+    <tr className={slHit ? 'paper-row--sl' : targetHit ? 'paper-row--target' : ''}>
+      <td className="td-mono">{fmt(trade.ts)}</td>
+      <td>
+        <span className={`pill ${trade.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>
+          {trade.action}
+        </span>
+      </td>
+      <td className="td-symbol">{trade.symbol}</td>
+      <td className="td-num">{fmtPrice(trade.entryPrice)}</td>
+      <td className="td-num">
+        <span ref={priceRef}>
+          {ltp != null ? fmtPrice(ltp) : '—'}
+        </span>
+      </td>
+      <td className="td-num">{trade.quantity}</td>
+      <td className="td-num td-sl">
+        {trade.sl != null ? fmtPrice(trade.sl) : '—'}
+        {slHit && <span className="paper-hit-tag paper-hit-tag--sl"> 🛑</span>}
+      </td>
+      <td className="td-num td-tgt">
+        {trade.target != null ? fmtPrice(trade.target) : '—'}
+        {targetHit && <span className="paper-hit-tag paper-hit-tag--target"> 🎯</span>}
+      </td>
+      <td className={`td-num ${pnlCls}`}>
+        {unrealizedPnl != null
+          ? `${unrealizedPnl >= 0 ? '+' : ''}₹${unrealizedPnl.toFixed(2)}`
+          : '—'}
+      </td>
+      <td>
+        <button className="btn btn-ghost btn-sm" onClick={() => onClose(trade)}>
+          Close
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 export default function PaperTradingPanel() {
   const paperTrades = useAppStore((s) => s.paperTrades);
   const paperBalance = useAppStore((s) => s.paperBalance);
@@ -217,7 +296,7 @@ export default function PaperTradingPanel() {
         </div>
       </div>
 
-      {/* Active trades */}
+      {/* Active trades — live LTP and unrealized P&L per row */}
       {openTrades.length > 0 && (
         <div className="dash-section">
           <h3 className="section-title">Active Trades <span className="count-badge">{openTrades.length}</span></h3>
@@ -229,38 +308,18 @@ export default function PaperTradingPanel() {
                   <th>Action</th>
                   <th>Symbol</th>
                   <th>Entry</th>
+                  <th>LTP</th>
                   <th>Qty</th>
                   <th>SL</th>
                   <th>Target</th>
-                  <th>Pot. P&L</th>
+                  <th>Live P&amp;L</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
-                {openTrades.map((t) => {
-                  const potPnl = t.target
-                    ? (t.action === 'BUY' ? (t.target - t.entryPrice) : (t.entryPrice - t.target)) * t.quantity
-                    : null;
-                  return (
-                    <tr key={t.id}>
-                      <td className="td-mono">{fmt(t.ts)}</td>
-                      <td><span className={`pill ${t.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>{t.action}</span></td>
-                      <td className="td-symbol">{t.symbol}</td>
-                      <td className="td-num">{t.entryPrice || '—'}</td>
-                      <td className="td-num">{t.quantity}</td>
-                      <td className="td-num td-sl">{t.sl || '—'}</td>
-                      <td className="td-num td-tgt">{t.target || '—'}</td>
-                      <td className={`td-num ${potPnl !== null ? (potPnl >= 0 ? 'pnl-positive' : 'pnl-negative') : ''}`}>
-                        {potPnl !== null ? `${potPnl >= 0 ? '+' : ''}₹${potPnl.toFixed(0)}` : '—'}
-                      </td>
-                      <td>
-                        <button className="btn btn-ghost btn-sm" onClick={() => setClosingTrade(t)}>
-                          Close
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {openTrades.map((t) => (
+                  <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
+                ))}
               </tbody>
             </table>
           </div>

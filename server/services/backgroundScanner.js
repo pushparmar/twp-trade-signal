@@ -44,10 +44,9 @@ const { to4H }            = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
+const { isNseOpen, IST_OFFSET_MS }  = require('../utils/marketHours');
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // Intervals driven by this scanner; 4h is synthesised from 60minute.
 const INTERVALS = ['15minute', '60minute', '4h', 'day'];
@@ -59,10 +58,14 @@ const CLOSE_DELAY_MS = 45 * 1000;  // 45 seconds
 const MIN_BARS = 52;
 
 // Bar counts to request per interval (matches the /api/scan endpoint).
+// 1h: 300 gives ~65 calendar days → ~220 trading hours — well above the 52-bar
+//     Ichimoku minimum and safe against holiday-heavy weeks.
+//     4h synthesis (to4H) needs 52×4 = 208 1h bars at minimum; 300 adds headroom.
+// day: 150 gives ~300 calendar days → ~214 trading days — enough for all patterns.
 const SCAN_BARS = {
   '15minute': 100,
-  '60minute': 208,  // 4h synthesis needs 52×4 = 208 1h bars minimum
-  'day':      100,
+  '60minute': 300,
+  'day':      150,
 };
 
 const TF_LABEL = {
@@ -90,17 +93,6 @@ function _claimFire(key) {
   if (entry && entry.date === today && entry.fired) return false;
   _dedup.set(key, { fired: true, date: today });
   return true;
-}
-
-// ── Market-hours guard ───────────────────────────────────────────────────────
-
-function _isMarketHours(now = Date.now()) {
-  const ist = new Date(now + IST_OFFSET_MS);
-  const dow = ist.getUTCDay();
-  if (dow === 0 || dow === 6) return false;
-  const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-  // NSE 9:15–15:30 | MCX 9:00–23:30  →  combined window 9:00–23:30
-  return mins >= 540 && mins <= 1410;
 }
 
 // ── Next-candle-close calculator ──────────────────────────────────────────────
@@ -206,8 +198,12 @@ function _buildUniverse() {
  * Sends Telegram + SSE for every new match.
  */
 async function _runScanForInterval(interval) {
-  if (!_isMarketHours()) {
-    console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (market closed)`);
+  // Record the start time before the market-hours guard so diagnostics reflect
+  // every trigger attempt, not just the ones that proceeded past the guard.
+  _lastRunAt[interval] = Date.now();
+
+  if (!isNseOpen()) {
+    console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (NSE closed)`);
     return;
   }
 
@@ -337,6 +333,12 @@ async function _runScanForInterval(interval) {
   }
 }
 
+// ── Last-run tracking (for diagnostics) ──────────────────────────────────────
+
+// Records the UTC-ms timestamp of the start of each interval's most recent run.
+// Used by getDebugInfo() and visible via GET /api/scan/bg-status.
+const _lastRunAt = {};
+
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 
 let _timers  = {};
@@ -426,4 +428,31 @@ function clearDedup() {
   return count;
 }
 
-module.exports = { start, stop, getSchedule, clearDedup };
+/**
+ * Immediately trigger a scan for the given interval, bypassing the market-hours
+ * check. Useful for manual testing via POST /api/scan/trigger-bg-scan without
+ * waiting for a candle-close boundary.
+ *
+ * @param {string} [interval='15minute']
+ */
+async function triggerNow(interval = '15minute') {
+  await _runScanForInterval(interval);
+}
+
+/**
+ * Returns diagnostic info about the scanner's current state:
+ *   running   — whether the scheduler loop is active
+ *   dedupSize — number of entries in the dedup map (one per fired alert today)
+ *   lastRunAt — UTC-ms timestamp of the last run attempt per interval
+ *   schedule  — next fire time per interval
+ */
+function getDebugInfo() {
+  return {
+    running:   _running,
+    dedupSize: _dedup.size,
+    lastRunAt: { ..._lastRunAt },
+    schedule:  getSchedule(),
+  };
+}
+
+module.exports = { start, stop, getSchedule, clearDedup, triggerNow, getDebugInfo };

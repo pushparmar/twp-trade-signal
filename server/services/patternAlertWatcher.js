@@ -24,13 +24,12 @@ const store            = require('../store');
 const { broadcast }    = require('../sseHub');
 const { to4H }         = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
+const { isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 
 // Lazy-required to keep the same circular-dep pattern used in macroWatcher.
 const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // Native intervals we care about — '60minute' also triggers the synthetic 4h check.
 const WATCHED_INTERVALS = new Set(['15minute', '60minute', 'day']);
@@ -47,6 +46,10 @@ const TF_LABEL = {
 
 // token (number) → display label, e.g. 256265 → 'NIFTY 50'
 const _tokenLabel = new Map();
+
+// token (number) → exchange string — used to pick the right market-hours gate
+// 'NSE' / 'BSE' → isNseOpen()   |   'MCX' → isMcxOpen()
+const _exchangeMap = new Map();
 
 // Dedup: "token:interval:patternId:signal" → { fired: bool, date: string (IST) }
 const _dedup = new Map();
@@ -109,11 +112,21 @@ async function _runAndAlert(token, interval, candles) {
     const kind = (Number(token) === 256265 || Number(token) === 260105) ? 'index' : 'macro';
     const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind });
 
-    try {
-      await telegramNotifier.sendMessage(chatId, text);
-      console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
-    } catch (err) {
-      console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);
+    // Gate Telegram on the instrument's own exchange hours:
+    //   MCX (Crude/Gold/Silver) → isMcxOpen()  [09:00–23:30 IST]
+    //   NSE / VIX / CDS         → isNseOpen()  [09:00–15:30 IST]
+    // SSE broadcast below always fires so the Scanner UI stays live.
+    const exchange  = _exchangeMap.get(Number(token)) ?? 'NSE';
+    const mktOpen   = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
+    if (mktOpen) {
+      try {
+        await telegramNotifier.sendMessage(chatId, text);
+        console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
+      } catch (err) {
+        console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);
+      }
+    } else {
+      console.log(`[PatternAlert] ⏸ ${patternId} ${result.signal} — ${label} (${tfLabel}) — Telegram skipped (${exchange} closed)`);
     }
 
     // Broadcast to SSE clients so the Scanner tab updates in real time,
@@ -175,22 +188,22 @@ async function onCandleClose(token, interval) {
  * Must be called AFTER instrumentCache has loaded so getFrontMonthFutures works.
  */
 function start() {
-  // ── Index instruments ──────────────────────────────────────────────────
-  _tokenLabel.set(256265, 'NIFTY 50');
-  _tokenLabel.set(260105, 'NIFTY BANK');
+  // ── Index instruments (NSE) ───────────────────────────────────────────
+  _tokenLabel.set(256265, 'NIFTY 50');   _exchangeMap.set(256265, 'NSE');
+  _tokenLabel.set(260105, 'NIFTY BANK'); _exchangeMap.set(260105, 'NSE');
 
-  // ── Macro instruments ──────────────────────────────────────────────────
-  _tokenLabel.set(VIX_TOKEN, 'India VIX');
+  // ── Macro instruments ─────────────────────────────────────────────────
+  _tokenLabel.set(VIX_TOKEN, 'India VIX'); _exchangeMap.set(VIX_TOKEN, 'NSE');
 
   const crudeInst  = getFrontMonthFutures('CRUDEOIL', 'MCX');
   const goldInst   = getFrontMonthFutures('GOLD',     'MCX');
   const silverInst = getFrontMonthFutures('SILVER',   'MCX');
   const usdinrInst = getFrontMonthFutures('USDINR',   'CDS');
 
-  if (crudeInst)  _tokenLabel.set(crudeInst.instrumentToken,  `Crude Oil (${crudeInst.tradingsymbol})`);
-  if (goldInst)   _tokenLabel.set(goldInst.instrumentToken,   `Gold (${goldInst.tradingsymbol})`);
-  if (silverInst) _tokenLabel.set(silverInst.instrumentToken, `Silver (${silverInst.tradingsymbol})`);
-  if (usdinrInst) _tokenLabel.set(usdinrInst.instrumentToken, `USD/INR (${usdinrInst.tradingsymbol})`);
+  if (crudeInst)  { _tokenLabel.set(crudeInst.instrumentToken,  `Crude Oil (${crudeInst.tradingsymbol})`);   _exchangeMap.set(crudeInst.instrumentToken,  'MCX'); }
+  if (goldInst)   { _tokenLabel.set(goldInst.instrumentToken,   `Gold (${goldInst.tradingsymbol})`);         _exchangeMap.set(goldInst.instrumentToken,   'MCX'); }
+  if (silverInst) { _tokenLabel.set(silverInst.instrumentToken, `Silver (${silverInst.tradingsymbol})`);     _exchangeMap.set(silverInst.instrumentToken, 'MCX'); }
+  if (usdinrInst) { _tokenLabel.set(usdinrInst.instrumentToken, `USD/INR (${usdinrInst.tradingsymbol})`);    _exchangeMap.set(usdinrInst.instrumentToken, 'NSE'); }
 
   // ── Pre-seed candle buffers for every watched token × interval ─────────
   // Without this, getCandlesSync() always returns null for macro tokens and

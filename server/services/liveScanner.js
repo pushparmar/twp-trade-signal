@@ -21,10 +21,9 @@ const store            = require('../store');
 const { to4H }         = require('./ichimoku');
 const telegramNotifier = require('./telegramNotifier');
 const patternAlertMessage = require('./patternAlertMessage');
+const { isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 
 // ── Constants ────────────────────────────────────────────────────────────────
-
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // Only react to these native intervals; 4h is synthesised from 60minute.
 const WATCHED_INTERVALS = new Set(['15minute', '60minute', 'day']);
@@ -132,8 +131,8 @@ async function _runAndBroadcast(token, interval, candles) {
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
 
-    // ── Telegram: best-effort — chatId may be unset; send errors logged only ──
-    if (chatId) {
+    // ── Telegram: gated on market hours — chatId may be unset ────────────────
+    if (chatId && isNseOpen()) {
       const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind: 'stock' });
       try {
         await telegramNotifier.sendMessage(chatId, text);

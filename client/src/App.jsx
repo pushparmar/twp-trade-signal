@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import api from './api';
 import useAppStore from './store/appStore';
 import useSSE from './hooks/useSSE';
@@ -9,6 +9,57 @@ import MarketWatch from './components/Market/MarketWatch';
 import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import ToastContainer from './components/Toast/Toast';
 import './App.css';
+
+// ── Global paper-trade auto-close watcher ─────────────────────────────────────
+// Watches live ticks for every open scan-sourced paper trade and auto-closes
+// when SL or target is hit. Runs at the App level so it stays active regardless
+// of which tab (Dashboard / Scanner / Market) the user is on.
+function usePaperAutoClose() {
+  const paperTrades         = useAppStore((s) => s.paperTrades);
+  const ticks               = useAppStore((s) => s.ticks);
+  const closeScanPaperTrade = useAppStore((s) => s.closeScanPaperTrade);
+  const addToast            = useAppStore((s) => s.addToast);
+  // Ref prevents double-closing the same trade in React strict-mode double-effects
+  const closedIds = useRef(new Set());
+
+  useEffect(() => {
+    const openTrades = paperTrades.filter((t) => t.status === 'OPEN' && t.source === 'scan');
+    if (openTrades.length === 0) return;
+
+    for (const trade of openTrades) {
+      if (closedIds.current.has(trade.id)) continue;
+      const ltp = ticks[trade.token]?.lastPrice;
+      if (ltp == null) continue;
+
+      let closeAt  = null;
+      let msg      = '';
+
+      if (trade.action === 'BUY') {
+        if (trade.sl != null && ltp <= trade.sl) {
+          closeAt = trade.sl;
+          msg = `🛑 SL hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+        } else if (trade.target != null && ltp >= trade.target) {
+          closeAt = trade.target;
+          msg = `🎯 Target hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+        }
+      } else if (trade.action === 'SELL') {
+        if (trade.sl != null && ltp >= trade.sl) {
+          closeAt = trade.sl;
+          msg = `🛑 SL hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+        } else if (trade.target != null && ltp <= trade.target) {
+          closeAt = trade.target;
+          msg = `🎯 Target hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+        }
+      }
+
+      if (closeAt != null) {
+        closedIds.current.add(trade.id);
+        closeScanPaperTrade(trade.id, closeAt);
+        addToast({ type: 'info', message: msg });
+      }
+    }
+  }, [ticks, paperTrades, closeScanPaperTrade, addToast]);
+}
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
@@ -48,6 +99,7 @@ export default function App() {
   const { theme, toggle: toggleTheme } = useTheme();
 
   useSSE();
+  usePaperAutoClose();
 
   useEffect(() => {
     api.get('/kite/auth/status')

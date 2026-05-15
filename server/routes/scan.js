@@ -41,30 +41,33 @@ const store            = require('../store');
 const { to4H }         = require('../services/ichimoku');
 const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis');
 const instrumentCache  = require('../services/instrumentCache');
+const foStockRegistry  = require('../services/foStockRegistry');
 
 /**
- * Build the list of every active NFO front-month stock future (~200-250 names).
- * Reads from instrumentCache — returns [] if cache hasn't loaded yet.
+ * Return the scan universe of F&O-eligible stocks.
  *
- * Used as the default scan universe so the Screener button doesn't need
- * any manual subscription — every F&O-eligible stock is included automatically.
+ * Uses the persistent F&O stock registry (NSE EQ tokens) instead of resolving
+ * NFO front-month futures on every call. NSE equity tokens are PERMANENT —
+ * no monthly rollover, no "got 0 candles" from expired contracts.
+ *
+ * Falls back to the old live-derivation from instrumentCache if the registry
+ * hasn't been built yet (e.g. first boot before auth).
  *
  * Returns: [{ instrumentToken, tradingsymbol, exchange, name }]
  */
-function _allNfoFutures() {
-  if (!instrumentCache.isLoaded()) return [];
+function _allFoStocks() {
+  const fromRegistry = foStockRegistry.getAll();
+  if (fromRegistry.length > 0) return fromRegistry;
 
+  // Fallback: derive from instrumentCache directly (old behaviour).
+  // This path is hit only on the very first boot before the registry file exists.
+  if (!instrumentCache.isLoaded()) return [];
   const names = instrumentCache.getFutureNames();
   const out = [];
   for (const name of names) {
-    const inst = instrumentCache.getFrontMonthFuture(name, 'NFO');
-    if (!inst) continue;
-    out.push({
-      instrumentToken: inst.instrumentToken,
-      tradingsymbol:   inst.tradingsymbol,
-      exchange:        inst.exchange,
-      name:            inst.name,
-    });
+    const eq = instrumentCache.getNseEquity(name);
+    if (!eq) continue;
+    out.push({ instrumentToken: eq.instrumentToken, tradingsymbol: eq.tradingsymbol, exchange: 'NSE', name });
   }
   return out;
 }
@@ -119,8 +122,8 @@ const _to4H = to4H;
 // ranges → faster fetches + better cache hit rates on repeat scans.
 const SCAN_BARS = {
   '15minute': 100,
-  '60minute': 208,  // 4h synthesis needs 52×4 = 208 1h bars
-  'day':      100,
+  '60minute': 300,  // 4h synthesis needs 52×4=208 minimum; 300 adds headroom for holiday weeks
+  'day':      150,  // ~214 trading days — well above Ichimoku's 52-bar requirement
 };
 
 // Fetch candles for any interval, handling the synthetic 4h case.
@@ -146,7 +149,7 @@ router.get('/patterns', (_req, res) => {
 router.get('/universe', (_req, res) => {
   const macros   = _macroAndIndexInstruments();
   const watchlist = store.getWatchlist();
-  const futures  = _allNfoFutures();
+  const futures  = _allFoStocks();
   res.json({
     macros:    macros.length,
     watchlist: watchlist.length,
@@ -172,12 +175,66 @@ router.get('/scanner-status', (req, res) => {
   });
 });
 
+// ── GET /api/scan/fo-registry ─────────────────────────────────────────────────
+// Returns the current F&O stock registry stats (total stocks, build date).
+router.get('/fo-registry', (_req, res) => {
+  const stats = foStockRegistry.getStats();
+  res.json({
+    ...stats,
+    builtAtISO: stats.builtAt ? new Date(stats.builtAt).toISOString() : null,
+  });
+});
+
+// ── POST /api/scan/refresh-fo-registry ────────────────────────────────────────
+// Rebuilds the F&O stock registry from the live instrumentCache.
+// Run this once a month (or after NSE adds/removes F&O stocks) to keep the
+// stock list current. Returns a diff: added, removed, missing names.
+//
+// Requires Kite to be authenticated (instrumentCache must be loaded).
+router.post('/refresh-fo-registry', (_req, res) => {
+  try {
+    if (!instrumentCache.isLoaded()) {
+      return res.status(503).json({ error: 'InstrumentCache not loaded — re-login to Kite first' });
+    }
+    const result = foStockRegistry.build();
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/scan/clear-dedup ────────────────────────────────────────────────
 // Clears the background-scanner dedup map so every pattern will re-fire on the
 // next candle close. Use this when you want to re-receive today's alerts.
 router.post('/clear-dedup', (req, res) => {
   const count = backgroundScanner.clearDedup();
   res.json({ ok: true, clearedEntries: count });
+});
+
+// ── GET /api/scan/bg-status ───────────────────────────────────────────────────
+// Diagnostic info about the background scanner: running state, dedup map size,
+// per-interval last-run timestamps, and the next scheduled fire times.
+router.get('/bg-status', (req, res) => {
+  res.json(backgroundScanner.getDebugInfo());
+});
+
+// ── POST /api/scan/trigger-bg-scan ────────────────────────────────────────────
+// Immediately runs the background scan for the given interval without waiting
+// for the candle-close boundary.  Bypasses the market-hours guard so it works
+// during off-hours for testing.
+// Body: { interval?: string }  — defaults to '15minute'
+router.post('/trigger-bg-scan', async (req, res) => {
+  const interval = req.body?.interval || '15minute';
+  const valid = ['15minute', '60minute', '4h', 'day'];
+  if (!valid.includes(interval)) {
+    return res.status(400).json({ error: `interval must be one of: ${valid.join(', ')}` });
+  }
+  // Fire-and-forget — respond immediately so the client isn't blocked by the
+  // potentially long-running scan. Progress is visible in Railway / server logs.
+  backgroundScanner.triggerNow(interval).catch((err) =>
+    console.error('[ScanRoute] trigger-bg-scan error:', err.message),
+  );
+  res.json({ ok: true, interval, message: 'Scan triggered — check Telegram and Railway logs' });
 });
 
 // ── POST /api/scan/fire-test-alert ────────────────────────────────────────────
@@ -314,7 +371,7 @@ router.post('/', async (req, res) => {
   } else {
     const macros   = _macroAndIndexInstruments();
     const userList = (scope === 'macros') ? [] : store.getWatchlist();
-    const futures  = (scope === 'all' || scope === 'futures') ? _allNfoFutures() : [];
+    const futures  = (scope === 'all' || scope === 'futures') ? _allFoStocks() : [];
 
     // Merge in priority order — macros at the top, then user watchlist, then
     // the bulk NFO futures list. Dedup by instrumentToken.

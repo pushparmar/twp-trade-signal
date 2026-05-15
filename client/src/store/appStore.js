@@ -1,8 +1,11 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 const MAX_ITEMS = 100;
 
-const useAppStore = create((set) => ({
+const useAppStore = create(
+  persist(
+    (set) => ({
   signals: [],
   orders: [],
   pollingStatus: 'stopped',
@@ -52,7 +55,19 @@ const useAppStore = create((set) => ({
     })),
 
   addPaperTrade: (trade) =>
-    set((state) => ({ paperTrades: [trade, ...state.paperTrades].slice(0, MAX_ITEMS) })),
+    set((state) => {
+      // Deduct cost from available balance when opening a scan-sourced paper trade
+      const cost = (trade.entryPrice ?? 0) * (trade.quantity ?? 1);
+      const newBalance = {
+        ...state.paperBalance,
+        available: state.paperBalance.available - cost,
+        invested:  state.paperBalance.invested  + cost,
+      };
+      return {
+        paperTrades: [trade, ...state.paperTrades].slice(0, MAX_ITEMS),
+        paperBalance: newBalance,
+      };
+    }),
 
   updatePaperTrade: (updated) =>
     set((state) => ({
@@ -60,6 +75,34 @@ const useAppStore = create((set) => ({
     })),
 
   clearPaperTrades: () => set({ paperTrades: [] }),
+
+  // Close a paper trade opened from the scan alerts table.
+  // Calculates PnL, returns invested capital + pnl to available balance.
+  closeScanPaperTrade: (id, exitPrice) =>
+    set((state) => {
+      let investedReturn = 0;
+      let tradePnl       = 0;
+
+      const paperTrades = state.paperTrades.map((t) => {
+        if (t.id !== id) return t;
+        const pnl = t.action === 'BUY'
+          ? (exitPrice - t.entryPrice) * t.quantity
+          : (t.entryPrice - exitPrice) * t.quantity;
+        investedReturn = (t.entryPrice ?? 0) * (t.quantity ?? 1);
+        tradePnl = pnl;
+        return { ...t, status: 'CLOSED', exitPrice, closedTs: Date.now(), pnl };
+      });
+
+      // Return invested capital + realised profit/loss back to available balance
+      const newBalance = {
+        ...state.paperBalance,
+        available:   state.paperBalance.available + investedReturn + tradePnl,
+        invested:    Math.max(0, state.paperBalance.invested - investedReturn),
+        realizedPnl: state.paperBalance.realizedPnl + tradePnl,
+      };
+
+      return { paperTrades, paperBalance: newBalance };
+    }),
 
   addToast: (toast) =>
     set((state) => ({ toasts: [...state.toasts, { id: Date.now() + Math.random(), ...toast }] })),
@@ -99,11 +142,11 @@ const useAppStore = create((set) => ({
   setMacroPrices:        (macroPrices)        => set({ macroPrices }),
   setSelectedInstrument: (selectedInstrument) => set({ selectedInstrument }),
 
-  // Scanner tab — accumulated pattern alert events
+  // ── Scanner tab — accumulated pattern alert events ──────────────────────────
   // Each entry: { token, label, interval, tfLabel, patternId, patternLabel,
   //               signal, score, close, ts }
   // Keyed by "token:interval:patternId" so each combo shows only the latest firing.
-  // Stored as array sorted newest-first; capped at 200 entries.
+  // Stored as array sorted newest-first; capped at 500 entries.
   scanAlerts: [],
   addScanAlert: (alert) =>
     set((s) => ({
@@ -120,12 +163,10 @@ const useAppStore = create((set) => ({
       ].slice(0, 500),
     })),
 
-  // Wipe only the screener-sourced alerts. Live SSE alerts (source !== 'screener')
-  // are preserved so a new screener run doesn't erase the day's live signals.
-  clearScreenerAlerts: () =>
-    set((s) => ({
-      scanAlerts: s.scanAlerts.filter((a) => a.source !== 'screener'),
-    })),
+  // Wipe the entire scan table so a new manual scan starts with a clean slate.
+  // Live SSE alerts (background scanner) that arrive DURING or AFTER the new run
+  // will be added normally — nothing is permanently lost.
+  clearScreenerAlerts: () => set({ scanAlerts: [] }),
 
   // Timestamp (ms) of the last successful screener auto-run. Used by the
   // Scanner tab to decide whether to auto-rerun on mount or reuse the
@@ -149,6 +190,46 @@ const useAppStore = create((set) => ({
   screenerStatusKind: '',
   setScreenerStatus:     (status) => set({ screenerStatus: status }),
   setScreenerStatusKind: (kind)   => set({ screenerStatusKind: kind }),
-}));
+    }),
+    {
+      name: 'tdk-store',
+      // Only persist scanner / paper-trade fields that survive a hard refresh.
+      // Session-only fields (ticks, watchlist, orders, signals, toasts) are
+      // intentionally excluded — they are re-hydrated from the server / socket.
+      partialize: (state) => ({
+        scanAlerts:         state.scanAlerts,
+        screenerLastRunAt:  state.screenerLastRunAt,
+        screenerTfState:    state.screenerTfState,
+        screenerStatus:     state.screenerStatus,
+        screenerStatusKind: state.screenerStatusKind,
+        paperTrades:        state.paperTrades,
+        paperBalance:       state.paperBalance,
+      }),
+      // On rehydration from localStorage, drop scan alerts from previous IST
+      // trading days. Futures contracts roll over daily, so yesterday's tokens
+      // are stale and their charts will return "0 candles" from Kite.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+        state.scanAlerts = (state.scanAlerts || []).filter((a) => {
+          if (!a.ts) return false;
+          const alertDay = new Date(a.ts + IST_OFFSET_MS).toISOString().slice(0, 10);
+          return alertDay === todayIST;
+        });
+        // Also reset screener state if the last run was from a previous day
+        if (state.screenerLastRunAt) {
+          const lastRunDay = new Date(state.screenerLastRunAt + IST_OFFSET_MS).toISOString().slice(0, 10);
+          if (lastRunDay !== todayIST) {
+            state.screenerLastRunAt  = 0;
+            state.screenerTfState   = {};
+            state.screenerStatus    = '';
+            state.screenerStatusKind = '';
+          }
+        }
+      },
+    },
+  ),
+);
 
 export default useAppStore;

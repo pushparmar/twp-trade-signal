@@ -563,12 +563,13 @@ function _crossStrength(signal, cloudPosition) {
 // ── TK Cross ──────────────────────────────────────────────────────────────────
 
 /**
- * Tenkan-Kijun Cross — Tenkan (9-period) crossing Kijun (26-period).
+ * Tenkan-Kijun Cross — Tenkan (9-period, green/fast) crossing Kijun (26-period, red/slow).
  * The most widely traded Ichimoku signal.
  *
- * Strength follows classic Ichimoku doctrine:
- *   Above cloud → Strong  |  In cloud → Neutral  |  Below cloud → Weak
- *   (reversed for bearish: below cloud = strong)
+ * Directional filter (high-probability setups only):
+ *   Bullish: Tenkan (green) crossed ABOVE Kijun (red), price ABOVE cloud at cross bar.
+ *   Bearish: Tenkan (green) crossed BELOW Kijun (red), price BELOW cloud at cross bar.
+ *   Crosses inside the cloud or on the wrong side are filtered out — returns null.
  *
  * @param {Object[]} candles
  * @param {Object}   [opts]
@@ -600,12 +601,23 @@ function getTKCross(candles, { lookback = 5 } = {}) {
     if (r.tkCross === null) continue;
 
     const crossCloudPos = _cloudPos(r);
+
+    // ── Directional filter ────────────────────────────────────────────────────
+    // Bearish: Tenkan (green) crossed down through Kijun (red) → only valid
+    //   when price was BELOW the cloud at the cross bar (confirmed bear zone).
+    // Bullish: Tenkan (green) crossed up through Kijun (red) → only valid
+    //   when price was ABOVE the cloud at the cross bar (confirmed bull zone).
+    // Crosses inside the cloud or on the counter-trend side are skipped.
+    if (r.tkCross === 'bearish' && crossCloudPos !== 'below') continue;
+    if (r.tkCross === 'bullish' && crossCloudPos !== 'above') continue;
+    // ─────────────────────────────────────────────────────────────────────────
+
     return {
       signal:        r.tkCross,
       barsAgo:       offset,
       crossType:     'TK Cross',
-      strength:      _crossStrength(r.tkCross, crossCloudPos),
-      cloudPosition: _cloudPos(last), // current position (for context)
+      strength:      'strong', // always strong — filter ensures this
+      cloudPosition: _cloudPos(last), // current price position (context)
       close:         last.close,
       tenkan:        last.tenkan,
       kijun:         last.kijun,

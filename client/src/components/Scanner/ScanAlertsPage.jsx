@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import useAppStore from '../../store/appStore';
 import api from '../../api';
 import ScanChartModal from './ScanChartModal';
@@ -109,11 +109,20 @@ function StrengthBadge({ strength }) {
 
 // ── Single row ────────────────────────────────────────────────────────────────
 
-function ScanRow({ alert, onSelect }) {
-  const tick   = useAppStore((s) => s.ticks[alert.token]);
-  const ltp    = tick?.lastPrice ?? null;
-  const change = tick?.change    ?? null;
-  const chgCls = change > 0 ? 'mw-up' : change < 0 ? 'mw-down' : '';
+function ScanRow({ alert, onSelect, onBuy }) {
+  const tick     = useAppStore((s) => s.ticks[alert.token]);
+  const testMode = useAppStore((s) => s.testMode);
+  const ltp      = tick?.lastPrice ?? null;
+  const change   = tick?.change    ?? null;
+  const chgCls   = change > 0 ? 'mw-up' : change < 0 ? 'mw-down' : '';
+
+  // Action follows the signal direction: bullish → BUY, bearish → SELL
+  const action = alert.signal === 'bullish' ? 'BUY' : 'SELL';
+
+  function handleBuy(e) {
+    e.stopPropagation();
+    onBuy({ alert, entryPrice: ltp ?? alert.close, action });
+  }
 
   return (
     <tr className={`scan-row scan-row--${alert.signal}`} onClick={() => onSelect(alert)}>
@@ -151,6 +160,18 @@ function ScanRow({ alert, onSelect }) {
       </td>
       <td className="scan-cell scan-cell--price">{alert.close != null ? fmt(alert.close) : '—'}</td>
       <td className="scan-cell scan-cell--time">{relativeTime(alert.ts)}</td>
+      <td className="scan-cell scan-cell--action">
+        {/* Paper BUY / SELL only visible when Paper Mode is active */}
+        {testMode && (
+          <button
+            className={`scan-buy-btn ${action === 'SELL' ? 'scan-buy-btn--sell' : ''}`}
+            onClick={handleBuy}
+            title={`Paper ${action} @ ₹${ltp != null ? fmt(ltp) : alert.close ?? '?'}`}
+          >
+            Paper {action}
+          </button>
+        )}
+      </td>
     </tr>
   );
 }
@@ -235,9 +256,289 @@ function bestPerSymbol(alerts) {
   return Array.from(best.values());
 }
 
+// ── Paper Buy Modal ───────────────────────────────────────────────────────────
+// Shown when user clicks "Paper BUY" on a scan row. Lets them set entry price,
+// quantity, SL and target before confirming. Shows live LTP and balance impact.
+
+function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfirm }) {
+  const tick         = useAppStore((s) => s.ticks[alert.token]);
+  const paperBalance = useAppStore((s) => s.paperBalance);
+  const tradingDefaults = useAppStore((s) => s.tradingDefaults);
+
+  const ltp = tick?.lastPrice ?? null;
+
+  // Entry price — auto-follows LTP until user edits it
+  const [entryStr,  setEntryStr]  = useState(String(suggestedEntry ?? ltp ?? ''));
+  const [entryEdited, setEntryEdited] = useState(false);
+  const [qtyStr,    setQtyStr]    = useState(String(tradingDefaults.quantity || 1));
+  const [slStr,     setSlStr]     = useState('');
+  const [targetStr, setTargetStr] = useState('');
+
+  // Keep entry synced with live LTP until user touches the field
+  useEffect(() => {
+    if (!entryEdited && ltp != null) setEntryStr(String(ltp));
+  }, [ltp, entryEdited]);
+
+  const entry  = parseFloat(entryStr)  || 0;
+  const qty    = parseInt(qtyStr, 10)  || 1;
+  const sl     = parseFloat(slStr)     || null;
+  const target = parseFloat(targetStr) || null;
+
+  // Capital required for this trade
+  const cost = entry * qty;
+  const available = paperBalance?.available ?? 0;
+  const canAfford = cost <= available;
+
+  // Risk / reward preview — direction-aware (BUY vs SELL)
+  // BUY:  SL is below entry (price going down is loss), target is above (profit up)
+  // SELL: SL is above entry (price going up is loss),  target is below (profit down)
+  const maxRisk   = sl != null     ? Math.abs(entry - sl)     * qty : null;
+  const potProfit = target != null ? Math.abs(entry - target) * qty : null;
+  const rrRatio   = maxRisk && potProfit && maxRisk > 0
+    ? (potProfit / maxRisk).toFixed(1)
+    : null;
+
+  const valid = entry > 0 && qty > 0 && canAfford;
+
+  function handleConfirm() {
+    if (!valid) return;
+    onConfirm({ entryPrice: entry, quantity: qty, sl, target });
+  }
+
+  function handleOverlayClick(e) {
+    if (e.target === e.currentTarget) onClose();
+  }
+
+  return (
+    <div className="modal-overlay" onClick={handleOverlayClick}>
+      <div className="modal-card paper-buy-modal" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="modal-header">
+          <span>
+            Paper {action} — {alert.label}
+            <span className={`scan-signal-badge scan-signal-badge--${alert.signal}`} style={{ marginLeft: 8, fontSize: 11 }}>
+              {alert.signal === 'bullish' ? '🟢 Bullish' : '🔴 Bearish'}
+            </span>
+          </span>
+          <button className="modal-close" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="modal-body">
+          {/* Live LTP strip */}
+          <div className="pbm-ltp-row">
+            <span className="pbm-ltp-label">Live LTP</span>
+            <span className="pbm-ltp-val">{ltp != null ? `₹${fmt(ltp)}` : '—'}</span>
+            <span className="pbm-ltp-hint">(updates live · click entry to lock)</span>
+          </div>
+
+          {/* Entry + Quantity */}
+          <div className="pbm-fields">
+            <div className="pbm-field">
+              <label className="pbm-label">Entry Price ₹</label>
+              <input
+                className="pbm-input"
+                type="number"
+                value={entryStr}
+                step="0.05"
+                min="0"
+                onChange={(e) => { setEntryEdited(true); setEntryStr(e.target.value); }}
+                onFocus={() => setEntryEdited(true)}
+                autoFocus
+              />
+            </div>
+            <div className="pbm-field">
+              <label className="pbm-label">Quantity</label>
+              <input
+                className="pbm-input"
+                type="number"
+                value={qtyStr}
+                min="1"
+                step="1"
+                onChange={(e) => setQtyStr(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* SL + Target */}
+          <div className="pbm-fields">
+            <div className="pbm-field">
+              <label className="pbm-label">Stop Loss ₹ <span className="pbm-optional">(optional)</span></label>
+              <input
+                className="pbm-input pbm-input--sl"
+                type="number"
+                value={slStr}
+                step="0.05"
+                min="0"
+                placeholder="e.g. 21800"
+                onChange={(e) => setSlStr(e.target.value)}
+              />
+            </div>
+            <div className="pbm-field">
+              <label className="pbm-label">Target ₹ <span className="pbm-optional">(optional)</span></label>
+              <input
+                className="pbm-input pbm-input--target"
+                type="number"
+                value={targetStr}
+                step="0.05"
+                min="0"
+                placeholder="e.g. 22500"
+                onChange={(e) => setTargetStr(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* Balance / P&L preview */}
+          <div className="pbm-preview">
+            <div className="pbm-preview-row">
+              <span>Capital required</span>
+              <span className={canAfford ? 'pbm-val' : 'pbm-val pbm-val--danger'}>
+                ₹{cost.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </span>
+            </div>
+            <div className="pbm-preview-row">
+              <span>Available balance</span>
+              <span className="pbm-val">₹{available.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+            </div>
+            {maxRisk !== null && (
+              <div className="pbm-preview-row pbm-preview-row--loss">
+                <span>Max risk at SL</span>
+                <span className="pbm-val">−₹{Math.abs(maxRisk).toFixed(2)}</span>
+              </div>
+            )}
+            {potProfit !== null && (
+              <div className="pbm-preview-row pbm-preview-row--profit">
+                <span>Potential profit at target</span>
+                <span className="pbm-val">+₹{potProfit.toFixed(2)}</span>
+              </div>
+            )}
+            {rrRatio !== null && (
+              <div className="pbm-preview-row pbm-preview-row--rr">
+                <span>Risk : Reward</span>
+                <span className="pbm-val">1 : {rrRatio}</span>
+              </div>
+            )}
+          </div>
+
+          {!canAfford && (
+            <div className="pbm-warn">
+              ⚠ Insufficient balance — reduce quantity or increase starting balance in the Dashboard
+            </div>
+          )}
+        </div>
+
+        <div className="modal-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button
+            className={`btn ${action === 'SELL' ? 'btn-danger' : 'btn-primary'}`}
+            disabled={!valid}
+            onClick={handleConfirm}
+          >
+            Confirm {action}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Active paper trade row — shows live LTP and unrealized P&L ────────────────
+
+function ActiveTradeRow({ trade, onManualClose }) {
+  const tick = useAppStore((s) => s.ticks[trade.token]);
+  const ltp  = tick?.lastPrice ?? null;
+
+  const unrealizedPnl = ltp != null
+    ? (trade.action === 'BUY'
+        ? (ltp - trade.entryPrice)
+        : (trade.entryPrice - ltp)) * trade.quantity
+    : null;
+
+  // Visual flags when SL or target has been breached
+  const slHit     = ltp != null && trade.sl     != null && trade.action === 'BUY' && ltp <= trade.sl;
+  const targetHit = ltp != null && trade.target != null && trade.action === 'BUY' && ltp >= trade.target;
+  const rowMod    = slHit ? 'active-trade-row--sl' : targetHit ? 'active-trade-row--target' : '';
+
+  const pnlClass = unrealizedPnl == null ? '' : unrealizedPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
+
+  return (
+    <div className={`active-trade-row ${rowMod}`}>
+      <div className="active-trade-main">
+        <span className="active-trade-symbol">{trade.symbol}</span>
+        <span className="active-trade-meta">
+          Entry ₹{fmt(trade.entryPrice)} · Qty {trade.quantity}
+          {trade.sl     != null && <> · SL <span className="td-sl">₹{fmt(trade.sl)}</span></>}
+          {trade.target != null && <> · Tgt <span className="td-tgt">₹{fmt(trade.target)}</span></>}
+        </span>
+        {slHit     && <span className="active-trade-hit active-trade-hit--sl">🛑 SL Hit</span>}
+        {targetHit && <span className="active-trade-hit active-trade-hit--target">🎯 Target Hit</span>}
+      </div>
+      <div className="active-trade-right">
+        <span className="active-trade-ltp">
+          {ltp != null ? `₹${fmt(ltp)}` : '—'}
+        </span>
+        <span className={`active-trade-pnl ${pnlClass}`}>
+          {unrealizedPnl != null
+            ? `${unrealizedPnl >= 0 ? '+' : ''}₹${unrealizedPnl.toFixed(2)}`
+            : '—'}
+        </span>
+        <button
+          className="btn btn-ghost btn-sm active-trade-close-btn"
+          onClick={() => onManualClose(trade)}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Active paper trades panel ─────────────────────────────────────────────────
+// Shown above the alerts table whenever there are open scan-sourced trades.
+
+function ActivePaperTrades() {
+  const paperTrades          = useAppStore((s) => s.paperTrades);
+  const ticks                = useAppStore((s) => s.ticks);
+  const closeScanPaperTrade  = useAppStore((s) => s.closeScanPaperTrade);
+  const addToast             = useAppStore((s) => s.addToast);
+
+  const openTrades = paperTrades.filter((t) => t.status === 'OPEN' && t.source === 'scan');
+  if (openTrades.length === 0) return null;
+
+  function handleManualClose(trade) {
+    const ltp = ticks[trade.token]?.lastPrice ?? trade.entryPrice;
+    closeScanPaperTrade(trade.id, ltp);
+    addToast({ type: 'info', message: `Closed ${trade.symbol} @ ₹${fmt(ltp)}` });
+  }
+
+  // Total unrealized P&L across all open trades
+  const totalPnl = openTrades.reduce((sum, t) => {
+    const ltp = ticks[t.token]?.lastPrice;
+    if (ltp == null) return sum;
+    const pnl = t.action === 'BUY'
+      ? (ltp - t.entryPrice) * t.quantity
+      : (t.entryPrice - ltp) * t.quantity;
+    return sum + pnl;
+  }, 0);
+
+  return (
+    <div className="active-paper-panel">
+      <div className="active-paper-header">
+        <span className="active-paper-title">📝 Paper Trades</span>
+        <span className="count-badge">{openTrades.length} open</span>
+        <span className={`active-paper-total-pnl ${totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
+          {totalPnl >= 0 ? '+' : ''}₹{totalPnl.toFixed(2)} unrealized
+        </span>
+      </div>
+      {openTrades.map((t) => (
+        <ActiveTradeRow key={t.id} trade={t} onManualClose={handleManualClose} />
+      ))}
+    </div>
+  );
+}
+
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
-function FilterBar({ signal, onSignal, interval, onInterval, dedup, onDedup }) {
+function FilterBar({ signal, onSignal, interval, onInterval, pattern, onPattern, patternOptions, dedup, onDedup }) {
   const SIGNALS   = ['all', 'bullish', 'bearish'];
   const INTERVALS = ['all', '15minute', '60minute', '4h', 'day'];
   const TF_LABEL  = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
@@ -268,6 +569,20 @@ function FilterBar({ signal, onSignal, interval, onInterval, dedup, onDedup }) {
             {iv === 'all' ? 'All' : TF_LABEL[iv] || iv}
           </button>
         ))}
+      </div>
+
+      <div className="scan-filter-group">
+        <span className="scan-filter-label">Pattern</span>
+        <select
+          className={`scan-filter-select ${pattern !== 'all' ? 'scan-filter-select--active' : ''}`}
+          value={pattern}
+          onChange={(e) => onPattern(e.target.value)}
+        >
+          <option value="all">All patterns</option>
+          {patternOptions.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Best-per-symbol dedup toggle */}
@@ -521,80 +836,23 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     setRunning(false);
   }, [patternId, running, tfFilter, patterns, onTfResults, onClear, setScreenerLastRunAt]);
 
-  // Auto-run after patterns load — BUT only if the previous run is stale.
-  //
-  // Cache rule:
-  //   • During market hours (NSE 9:15-15:30 OR MCX 9:00-23:30 IST weekdays):
-  //       5-minute TTL — candles close every 15 min so stale results aren't useful.
-  //   • Off market hours (after MCX 23:30 close, nights, weekends, holidays):
-  //       Cache stays valid until the next market open. Candle data is frozen
-  //       so re-scanning during off-hours produces identical results — pointless.
-  //
-  // We persist `screenerLastRunAt` in the global store so switching tabs and
-  // coming back does NOT trigger a fresh scan and wipe the previous results.
-  //
-  // Two-phase strategy when a scan does fire:
-  //   1. Foreground: scan 15m × all patterns immediately (one TF, ~10-20 s)
-  //   2. Background: scan 1h + 4h + 1d × all patterns silently afterwards
-  const AUTO_RUN_TTL_MS = 5 * 60 * 1000; // 5 minutes during market hours
-  useEffect(() => {
-    if (!patternId) return;
-    if (patternId === 'all' && patterns.length === 0) return;
-
-    // Decide whether the previous run is still valid
-    const now      = Date.now();
-    const lastRun  = screenerLastRunAt || 0;
-    const isOpen   = isMarketHours(now);
-
-    let cacheValid = false;
-    if (lastRun) {
-      if (isOpen) {
-        // Standard TTL during live trading
-        cacheValid = (now - lastRun) < AUTO_RUN_TTL_MS;
-      } else {
-        // Off-hours: valid as long as the run happened AFTER the most recent
-        // market close (i.e. during the current frozen-data window).
-        cacheValid = lastRun >= lastMarketCloseMs(now);
-      }
-    }
-    if (cacheValid) return;
-
-    const t = setTimeout(async () => {
-      // Record the timestamp BEFORE the scan so a quick re-mount during the
-      // scan doesn't double-trigger.
-      setScreenerLastRunAt(Date.now());
-
-      // Phase 1 — 15m only, foreground (clears table, sets status line)
-      await runScan(['15minute']);
-
-      // Phase 2 — remaining TFs in background, keeping the 15m table intact.
-      runScan(['60minute', '4h', 'day'], { keep: true, silent: true });
-    }, 600);
-
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [patternId, patterns]);
-
   /**
-   * Manual "Run Screener" click handler — applies the same off-market cache
-   * logic as the auto-run so the user doesn't waste time re-scanning when
-   * candle data is frozen (nights / weekends / after MCX 23:30 IST close).
+   * Manual "Run Screener" click handler.
    *
-   * Off-market: skip if we already have a run from the current frozen-data
-   *   window (after the latest MCX close). Show an info message instead.
-   * Market hours: always run — data changes every candle close.
-   * Shift-click: bypass cache check and force a fresh scan.
+   * When the market is closed the candle data is frozen — results will be the
+   * same as the last run — but we still execute the scan so the user can see
+   * fresh output and verify the pipeline. An info banner is shown to make the
+   * context clear. Shift-click bypasses even that message.
    */
   const handleManualRunScan = useCallback((e) => {
-    const forceRun = e?.shiftKey;   // Shift+click overrides off-market cache
+    const forceRun = e?.shiftKey;
     if (!forceRun && screenerLastRunAt) {
       const now    = Date.now();
       const isOpen = isMarketHours(now);
-      if (!isOpen && screenerLastRunAt >= lastMarketCloseMs(now)) {
-        // Data is frozen and we already have results — nothing new to find.
-        setStatus('Market is closed — showing cached results (Shift+click to force re-scan)');
+      if (!isOpen) {
+        // Market is closed — data is from last close, but still allow the scan
+        setStatus('Market closed — scanning with last-close candle data');
         setStatusKind('info');
-        return;
       }
     }
     runScan();
@@ -696,14 +954,26 @@ function ScreenerToolbar({ onTfResults, onClear }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ScanAlertsPage() {
-  const scanAlerts            = useAppStore((s) => s.scanAlerts);
-  const addScanAlert          = useAppStore((s) => s.addScanAlert);
-  const setSelectedInstrument = useAppStore((s) => s.setSelectedInstrument);
+  const scanAlerts             = useAppStore((s) => s.scanAlerts);
+  const addScanAlert           = useAppStore((s) => s.addScanAlert);
+  const setSelectedInstrument  = useAppStore((s) => s.setSelectedInstrument);
+  const addPaperTrade          = useAppStore((s) => s.addPaperTrade);
+  const tradingDefaults        = useAppStore((s) => s.tradingDefaults);
+  const addToast               = useAppStore((s) => s.addToast);
+  const testMode               = useAppStore((s) => s.testMode);
+  const setTestMode            = useAppStore((s) => s.setTestMode);
 
   const [signalFilter,   setSignalFilter]   = useState('all');
   const [intervalFilter, setIntervalFilter] = useState('all');
+  const [patternFilter,  setPatternFilter]  = useState('all');
   // Dedup: ON by default — show the single strongest alert per symbol
   const [dedup, setDedup] = useState(true);
+
+  // Buy modal state — set to { alert, entryPrice, action } when user clicks Paper BUY/SELL
+  const [buyModalData, setBuyModalData] = useState(null);
+
+  // Auto-close watcher has been moved to App.jsx (usePaperAutoClose) so it
+  // remains active across all tabs — not just when the Scanner is mounted.
 
   // Column sort: { col: 'score'|'symbol'|..., dir: 'asc'|'desc' }
   // Default is 'rank' desc which preserves the "strongest first" ordering.
@@ -756,11 +1026,24 @@ export default function ScanAlertsPage() {
     clearScreenerAlerts();
   }, [clearScreenerAlerts]);
 
+  // Unique patterns present in current alerts — drives the pattern filter dropdown.
+  // Sorted by label so the list is stable and easy to scan.
+  const patternOptions = useMemo(() => {
+    const seen = new Map();
+    for (const a of scanAlerts) {
+      if (a.patternId && a.patternLabel && !seen.has(a.patternId)) {
+        seen.set(a.patternId, { id: a.patternId, label: a.patternLabel });
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [scanAlerts]);
+
   const filtered = useMemo(() => {
-    // 1. Apply signal + interval filters
+    // 1. Apply signal + interval + pattern filters
     let list = scanAlerts.filter((a) => {
-      if (signalFilter   !== 'all' && a.signal   !== signalFilter)   return false;
-      if (intervalFilter !== 'all' && a.interval !== intervalFilter) return false;
+      if (signalFilter   !== 'all' && a.signal    !== signalFilter)   return false;
+      if (intervalFilter !== 'all' && a.interval  !== intervalFilter) return false;
+      if (patternFilter  !== 'all' && a.patternId !== patternFilter)  return false;
       return true;
     });
 
@@ -784,7 +1067,7 @@ export default function ScanAlertsPage() {
     });
 
     return list;
-  }, [scanAlerts, signalFilter, intervalFilter, dedup, sort]);
+  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort]);
 
   // Modal: alert currently being shown in the chart popup (null = closed)
   const [chartAlert, setChartAlert] = useState(null);
@@ -793,6 +1076,42 @@ export default function ScanAlertsPage() {
     // Open the chart modal pre-loaded at the alert's timeframe
     setChartAlert(alert);
   }
+
+  // Opens the buy/sell modal — called when user clicks "Paper BUY/SELL" on a scan row.
+  const handleBuy = useCallback(({ alert, entryPrice, action }) => {
+    setBuyModalData({ alert, entryPrice, action });
+  }, []);
+
+  // Called when the modal's "Confirm BUY" button is clicked.
+  // Creates the paper trade with all user-specified fields.
+  const handleConfirmBuy = useCallback(({ entryPrice, quantity, sl, target }) => {
+    const alert = buyModalData?.alert;
+    if (!alert) return;
+
+    const action = buyModalData?.action ?? 'BUY';
+    const trade = {
+      id:         `scan-${Date.now()}-${alert.token}`,
+      ts:         Date.now(),
+      signalId:   null,
+      symbol:     alert.label,
+      token:      alert.token,
+      action,
+      entryPrice,
+      quantity,
+      sl,
+      target,
+      targets:    [],
+      status:     'OPEN',
+      exitPrice:  null,
+      pnl:        null,
+      closedTs:   null,
+      source:     'scan',
+    };
+
+    addPaperTrade(trade);
+    addToast({ type: 'buy', message: `Paper ${action} — ${alert.label} @ ₹${fmt(entryPrice)}` });
+    setBuyModalData(null);
+  }, [buyModalData, addPaperTrade, addToast]);
 
   const liveCount      = scanAlerts.filter((a) => a.source !== 'screener').length;
   const screenerCount  = scanAlerts.filter((a) => a.source === 'screener').length;
@@ -813,6 +1132,14 @@ export default function ScanAlertsPage() {
             )}
           </p>
         </div>
+        {/* Paper Mode toggle */}
+        <button
+          className={`paper-mode-toggle ${testMode ? 'paper-mode-toggle--on' : ''}`}
+          onClick={() => setTestMode(!testMode)}
+          title={testMode ? 'Paper Mode ON — click to turn off' : 'Turn on Paper Mode to simulate trades'}
+        >
+          📝 {testMode ? 'Paper Mode ON' : 'Paper Mode'}
+        </button>
       </div>
 
       {/* ── Screener toolbar ────────────────────────────────────────────── */}
@@ -822,8 +1149,13 @@ export default function ScanAlertsPage() {
       <FilterBar
         signal={signalFilter}     onSignal={setSignalFilter}
         interval={intervalFilter} onInterval={setIntervalFilter}
+        pattern={patternFilter}   onPattern={setPatternFilter}
+        patternOptions={patternOptions}
         dedup={dedup}             onDedup={setDedup}
       />
+
+      {/* ── Active paper trades (only in paper mode) ────────────────────── */}
+      {testMode && <ActivePaperTrades />}
 
       {/* ── Results table ───────────────────────────────────────────────── */}
       {filtered.length === 0 ? (
@@ -856,6 +1188,7 @@ export default function ScanAlertsPage() {
                 <SortHeader col="score"    label="Score"         sort={sort} onClick={toggleSort} />
                 <SortHeader col="price"    label="Price @ Alert" sort={sort} onClick={toggleSort} />
                 <SortHeader col="time"     label="Time"          sort={sort} onClick={toggleSort} />
+                <th className="scan-th">Trade</th>
               </tr>
             </thead>
             <tbody>
@@ -864,6 +1197,7 @@ export default function ScanAlertsPage() {
                   key={`${alert.token}:${alert.interval}:${alert.patternId}:${alert.source ?? 'live'}`}
                   alert={alert}
                   onSelect={handleSelect}
+                  onBuy={handleBuy}
                 />
               ))}
             </tbody>
@@ -874,6 +1208,17 @@ export default function ScanAlertsPage() {
       {/* ── Chart modal (opens on row click) ────────────────────────────── */}
       {chartAlert && (
         <ScanChartModal alert={chartAlert} onClose={() => setChartAlert(null)} />
+      )}
+
+      {/* ── Paper buy modal (opens on Paper BUY click in paper mode) ─────── */}
+      {buyModalData && (
+        <PaperBuyModal
+          alert={buyModalData.alert}
+          action={buyModalData.action ?? 'BUY'}
+          suggestedEntry={buyModalData.entryPrice}
+          onClose={() => setBuyModalData(null)}
+          onConfirm={handleConfirmBuy}
+        />
       )}
     </div>
   );

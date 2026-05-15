@@ -47,6 +47,11 @@ const _tokenIndex = new Map();
 const _seeding = new Map();
 // Map<"token:interval", number> — how many candles this key was seeded with
 const _seededWith = new Map();
+// Map<"token:interval", number> — timestamp of last empty-result from Kite.
+// When a fetch returns 0 candles (expired contract, invalid token, holiday gap)
+// we avoid hammering Kite by waiting EMPTY_RETRY_COOLDOWN_MS before trying again.
+const _emptyResultAt = new Map();
+const EMPTY_RETRY_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes between retries for dead tokens
 
 function _slotStart(tsMs, intervalMs) {
   return Math.floor(tsMs / intervalMs) * intervalMs;
@@ -138,9 +143,14 @@ async function getCandles(instrumentToken, interval, bars, priority = false) {
 
   // Re-seed if:
   //   a) buffer doesn't exist yet, OR
-  //   b) buffer exists but was seeded with fewer candles than now requested
-  const prevSeed   = _seededWith.get(key) ?? 0;
-  const needsReseed = nCandles > prevSeed;
+  //   b) buffer exists but was seeded with fewer candles than now requested, OR
+  //   c) the last fetch returned empty (expired token / holiday) and the cooldown has passed.
+  //      Without this check the empty buffer is treated as "seeded" permanently and
+  //      the caller always sees "got 0" until the server restarts.
+  const prevSeed     = _seededWith.get(key) ?? 0;
+  const lastEmptyAt  = _emptyResultAt.get(key) ?? 0;
+  const emptyExpired = lastEmptyAt > 0 && (Date.now() - lastEmptyAt) > EMPTY_RETRY_COOLDOWN_MS;
+  const needsReseed  = nCandles > prevSeed || emptyExpired;
 
   if (!_store.has(key) || (needsReseed && !_seeding.has(key))) {
     if (!_seeding.has(key)) {
@@ -175,7 +185,19 @@ async function getCandles(instrumentToken, interval, bars, priority = false) {
             currentSlot:   live?.currentSlot   ?? null,
             currentCandle: live?.currentCandle ?? null,
           });
-          _seededWith.set(key, nCandles);
+
+          if (candles.length > 0) {
+            // Successful seed — record count and clear any previous empty-result marker.
+            _seededWith.set(key, nCandles);
+            _emptyResultAt.delete(key);
+          } else {
+            // Kite returned no candles (expired contract, invalid token, holiday gap).
+            // Do NOT mark as seeded — leave _seededWith at its previous value so
+            // needsReseed stays true. Record the timestamp so the cooldown can throttle
+            // retries and avoid hammering Kite every single request.
+            _emptyResultAt.set(key, Date.now());
+            console.warn(`[candleStore] 0 candles from Kite for ${key} — will retry after ${EMPTY_RETRY_COOLDOWN_MS / 1000}s cooldown`);
+          }
         })
         .finally(() => _seeding.delete(key));
       _seeding.set(key, p);
@@ -203,6 +225,7 @@ function remove(instrumentToken) {
       const key = `${token}:${interval}`;
       _store.delete(key);
       _seededWith.delete(key);
+      _emptyResultAt.delete(key);
     }
     _tokenIndex.delete(token);
   }

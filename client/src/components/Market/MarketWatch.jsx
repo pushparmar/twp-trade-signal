@@ -359,6 +359,7 @@ function OhlcItem({ label, value, cls = "" }) {
 // ── InstrumentDetail — detail panel for a selected instrument ─────────────────
 function InstrumentDetail({ token, label, sublabel }) {
     const [chartInterval, setChartInterval] = useState("15minute");
+    const chartRef = useRef(null);
     const tick = useAppStore(s => (token ? s.ticks[token] : null));
     const ltp = tick?.lastPrice ?? null;
     const change = tick?.change ?? null;
@@ -424,7 +425,32 @@ function InstrumentDetail({ token, label, sublabel }) {
             )}
 
             {/* ── Ichimoku Cloud Chart — interval driven by selected TF card ── */}
-            {token && <IchimokuChart token={token} interval={chartInterval} />}
+            {token && (
+                <>
+                    {/* Zoom controls — mirrors ScanChartModal pattern */}
+                    <div className="chart-zoom-bar">
+                        <span className="chart-zoom-label">Zoom</span>
+                        {[50, 100, 200].map(n => (
+                            <button
+                                key={n}
+                                className="chart-zoom-btn"
+                                onClick={() => chartRef.current?.zoomToBars(n)}
+                                title={`Show last ${n} bars`}
+                            >
+                                {n}
+                            </button>
+                        ))}
+                        <button
+                            className="chart-zoom-btn chart-zoom-btn--all"
+                            onClick={() => chartRef.current?.fitAll()}
+                            title="Fit all bars"
+                        >
+                            All
+                        </button>
+                    </div>
+                    <IchimokuChart ref={chartRef} token={token} interval={chartInterval} />
+                </>
+            )}
         </>
     );
 }
