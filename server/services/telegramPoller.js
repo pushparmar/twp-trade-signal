@@ -121,7 +121,7 @@ async function handleUpdate(update) {
   if (lastMessages.length > 50) lastMessages.pop();
 
   if (!parsed) {
-    console.log(`[Telegram] ❌ Format mismatch. Message ignored: "${text.replace(/\n/g, ' | ')}"`);
+    // Not logged — format mismatches can be frequent (bot receives all group messages)
     return;
   }
 

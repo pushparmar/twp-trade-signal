@@ -29,7 +29,15 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(morgan('dev'));
+// Only log errors and slow requests — skip routine GET/POST noise and SSE heartbeats
+app.use(morgan('combined', {
+  skip: (req, res) => {
+    // Skip SSE stream (heartbeats every 30s = ~3000 lines/day per client)
+    if (req.path === '/api/stream') return true;
+    // Skip fast successful requests — only log errors or slow responses
+    return res.statusCode < 400;
+  },
+}));
 app.use(express.json());
 
 // SSE stream endpoint — clients connect once and receive all events

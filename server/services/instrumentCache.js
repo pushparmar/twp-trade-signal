@@ -118,9 +118,7 @@ function getFrontMonthFuture(name, exchange) {
   }
 
   futures.sort((a, b) => new Date(a.expiry) - new Date(b.expiry));
-  const result = futures[0];
-  console.log(`[InstrumentCache] getFrontMonthFuture: ${name}/${exchange} → ${result.tradingsymbol} (token ${result.instrumentToken})`);
-  return result;
+  return futures[0];
 }
 
 /**

@@ -163,9 +163,7 @@ function start() {
     silverInst ? 'Silver' : null,
     usdinrInst ? 'USDINR' : null,
   ].filter(Boolean).join(', ');
-  console.log(`[MacroWatcher] Ready — watching ${names} on 15m / 1h / 1d`);
-  console.log(`[MacroWatcher] Subscribed tokens:`, tokens);
-  console.log(`[MacroWatcher] Token→key map:`, Object.fromEntries(_tokenToKey));
+  console.log(`[MacroWatcher] Ready — watching ${names} on 15m / 1h / 1d (tokens: ${tokens.join(', ')})`);
   if (!crudeInst)  console.warn('[MacroWatcher] CRUDEOIL not found in instrument cache (MCX)');
   if (!goldInst)   console.warn('[MacroWatcher] GOLD not found in instrument cache (MCX)');
   if (!silverInst) console.warn('[MacroWatcher] SILVER not found in instrument cache (MCX)');
