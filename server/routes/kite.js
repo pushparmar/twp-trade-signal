@@ -1,9 +1,10 @@
 const express = require('express');
 const kiteService = require('../services/kiteService');
+const { requireApiKey } = require('../middleware/auth');
 
 const router = express.Router();
 
-router.post('/order', async (req, res) => {
+router.post('/order', requireApiKey, async (req, res) => {
   try {
     const result = await kiteService.placeOrder(req.body);
     res.json(result);
@@ -13,7 +14,7 @@ router.post('/order', async (req, res) => {
   }
 });
 
-router.post('/gtt', async (req, res) => {
+router.post('/gtt', requireApiKey, async (req, res) => {
   try {
     const result = await kiteService.placeGTT(req.body);
     res.json(result);

@@ -6,6 +6,13 @@ const baseURL = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
   : '/api';
 
-const api = axios.create({ baseURL });
+const api = axios.create({
+  baseURL,
+  headers: {
+    ...(import.meta.env.VITE_API_SECRET
+      ? { 'x-api-key': import.meta.env.VITE_API_SECRET }
+      : {}),
+  },
+});
 
 export default api;
