@@ -3249,3 +3249,130 @@ body {
   .scan-modal-chart { min-height: 360px; height: 55vh; }
   .scan-modal-symbol { font-size: 16px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCANNER — Mobile responsive overrides  (≤ 640 px, phones only)
+   Desktop layout is completely untouched. All rules here only activate on
+   narrow viewports.
+   ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px) {
+
+  /* ── Screener toolbar ──────────────────────────────────────────────────
+     Layout: pattern dropdown full-width on its own line, then TF dropdown
+     and Run button side-by-side on the next line.                         */
+  .screener-toolbar { gap: 8px 10px; padding: 10px 12px; }
+  .screener-toolbar__left { flex-wrap: wrap; gap: 8px; }
+
+  /* Pattern picker — own full row */
+  .screener-pattern-select { min-width: 0; flex: 1 1 100%; max-width: 100%; }
+
+  /* TF picker + run button share the second row */
+  .screener-tf-select { min-width: 0; flex: 1 1 0; }
+  .screener-run-btn   { flex: 0 0 auto; justify-content: center; }
+
+  /* Status line wraps instead of overflowing */
+  .screener-toolbar__right  { width: 100%; flex-basis: 100%; }
+  .screener-status          { white-space: normal; font-size: 11px; }
+  .screener-universe-hint   { white-space: normal; font-size: 11px; }
+
+  /* Tighten the section gap on phone so more content fits without scrolling */
+  .scanner-page { gap: 10px; }
+
+  /* ── Filter bar ────────────────────────────────────────────────────────
+     Reduce gaps; let the dedup toggle wrap onto its own line instead of
+     being pushed off screen by margin-left: auto.                         */
+  .scan-filters             { gap: 8px 12px; padding: 10px 12px; }
+  .scan-filter-group--right { margin-left: 0; }
+
+  /* ── Results table → card layout ──────────────────────────────────────
+     The 9-column table is completely replaced with a scrollable stack of
+     cards using CSS grid. No JSX changes — nth-child selectors map each
+     <td> to a named grid area.
+
+     Card grid:
+       ┌─────────────────────────────────────────────────┐
+       │ Symbol (1)          Signal badge (4)   TF (3)   │
+       │ Pattern name (5)                  Strength (6)  │
+       │ Score dots (7)      LTP (2)            Time (9) │
+       └─────────────────────────────────────────────────┘
+     Column 8 (Price @ Alert) is hidden — redundant with LTP on mobile.  */
+
+  .scan-table-wrap {
+    overflow-x: unset;
+    border: none;
+    background: transparent;
+    border-radius: 0;
+  }
+  .scan-table        { display: block; }
+  .scan-table thead  { display: none; }
+  .scan-table tbody  { display: flex; flex-direction: column; gap: 8px; }
+
+  /* Each <tr> becomes a standalone card */
+  .scan-row {
+    display: grid;
+    grid-template-areas:
+      "symbol  signal   tf"
+      "pattern pattern  strength"
+      "score   ltp      time";
+    grid-template-columns: 1fr auto auto;
+    grid-template-rows: auto auto auto;
+    gap: 5px 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border); /* overridden per signal below */
+    border-radius: 8px;
+    background: var(--card);
+    cursor: pointer;
+  }
+  /* Keep the directional left-border accent */
+  .scan-row--bullish { border-left-color: var(--green); }
+  .scan-row--bearish { border-left-color: var(--red);   }
+  /* Last row still needs border (no gap-based gap at bottom) */
+  .scan-row:last-child { border-bottom: 1px solid var(--border); }
+
+  /* Reset td defaults so the grid layout controls spacing */
+  .scan-row td {
+    padding: 0;
+    white-space: normal;
+    display: flex;
+    align-items: center;
+  }
+
+  /* Map each <td> to its grid area by position */
+  .scan-row td:nth-child(1) { grid-area: symbol;   }
+  .scan-row td:nth-child(2) { grid-area: ltp;      font-size: 12px; }
+  .scan-row td:nth-child(3) { grid-area: tf;       justify-content: flex-end; }
+  .scan-row td:nth-child(4) { grid-area: signal;   justify-content: flex-end; }
+  .scan-row td:nth-child(5) { grid-area: pattern;  font-size: 12px; }
+  .scan-row td:nth-child(6) { grid-area: strength; justify-content: flex-end; }
+  .scan-row td:nth-child(7) { grid-area: score;    }
+  .scan-row td:nth-child(8) { display: none; }     /* Price @ Alert — hidden on mobile */
+  .scan-row td:nth-child(9) {
+    grid-area: time;
+    justify-content: flex-end;
+    font-size: 11px;
+    color: var(--txt3);
+  }
+
+  /* Keep symbol text from wrapping mid-word */
+  .scan-symbol { font-size: 12px; }
+
+  /* Pattern cell can wrap freely inside its area */
+  .scan-cell--pattern { max-width: unset; }
+
+  /* ── Scanner chart modal ───────────────────────────────────────────────
+     Full-screen sheet on phones. TF chip row wraps: TF chips on line 1,
+     Zoom chips on line 2 (spacer hidden so they stay compact).            */
+  .scan-modal-card {
+    width: 100vw;
+    max-width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+    margin: 0;
+  }
+  .scan-modal-header   { padding: 10px 14px; }
+  .scan-modal-symbol   { font-size: 15px; margin-bottom: 4px; }
+  .scan-modal-tfs      { flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px; }
+  .scan-modal-zoom-spacer { display: none; } /* no spacer needed when wrapping */
+  .scan-modal-chart    { min-height: 280px; height: calc(100dvh - 160px); }
+}
