@@ -215,6 +215,28 @@ function removeFromWatchlist(instrumentToken) {
   return updated;
 }
 
+// ── Auto-trader settings (persisted) ────────────────────────────────────────
+
+/**
+ * Returns the current auto-trader configuration.
+ * enabled is false by default — the user must explicitly opt in.
+ */
+function getAutoTraderSettings() {
+  const config = readConfig();
+  return {
+    enabled:      config.autoTrader?.enabled      ?? false,
+    riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,
+    minProfit:    config.autoTrader?.minProfit     ?? 10_000,
+  };
+}
+
+function setAutoTraderSettings(updates) {
+  const config = readConfig();
+  config.autoTrader = { ...getAutoTraderSettings(), ...updates };
+  writeConfig(config);
+  return config.autoTrader;
+}
+
 module.exports = {
   getConfig, setAccessToken,
   getTradingDefaults, setTradingDefaults,
@@ -224,4 +246,5 @@ module.exports = {
   addPaperTrade, closePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
   getPaperBalance, setPaperInitialBalance, getPaperInitialBalance,
   getWatchlist, setWatchlist, addToWatchlist, removeFromWatchlist,
+  getAutoTraderSettings, setAutoTraderSettings,
 };

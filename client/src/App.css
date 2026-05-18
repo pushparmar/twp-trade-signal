@@ -3813,3 +3813,145 @@ body {
   background: var(--blue-dim);
   color: var(--blue);
 }
+
+/* ── Auto-Trader settings bar ─────────────────────────────────────────────── */
+.at-settings-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.at-settings-bar--on {
+  border-color: rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.06);
+}
+.at-settings-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.at-settings-icon { font-size: 16px; }
+.at-settings-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+}
+.at-settings-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 4px;
+  letter-spacing: .04em;
+}
+.at-settings-pill--on  { background: rgba(74,222,128,.18); color: #4ade80; }
+.at-settings-pill--off { background: var(--border);        color: var(--txt3); }
+
+.at-settings-risk {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--txt2);
+}
+.at-risk-val  { color: var(--txt); font-weight: 600; }
+.at-risk-sep  { color: var(--txt3); }
+.at-edit-btn {
+  background: none;
+  border: none;
+  color: var(--txt3);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+.at-edit-btn:hover { color: var(--blue); }
+
+.at-settings-edit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.at-edit-label { font-size: 12px; color: var(--txt2); }
+.at-edit-input {
+  width: 80px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--input-bg, var(--card));
+  color: var(--txt);
+  font-size: 12px;
+}
+
+.at-toggle-btn {
+  margin-left: auto;
+  padding: 5px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--sidebar-hover);
+  color: var(--txt2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.at-toggle-btn:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.at-toggle-btn--on {
+  border-color: rgba(248,113,113,.4);
+  color: #f87171;
+}
+.at-toggle-btn--on:hover:not(:disabled) {
+  background: rgba(248,113,113,.1);
+}
+.at-toggle-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── AUTO trade badge ─────────────────────────────────────────────────────── */
+.paper-auto-badge {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(59,130,246,.2);
+  color: #60a5fa;
+  vertical-align: middle;
+}
+
+/* ── TF group headers in open-trades section ──────────────────────────────── */
+.paper-tf-group { margin-bottom: 16px; }
+.paper-tf-group:last-child { margin-bottom: 0; }
+
+.paper-tf-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  margin-bottom: 4px;
+}
+.paper-tf-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--blue-dim, rgba(59,130,246,.15));
+  color: var(--blue);
+  letter-spacing: .04em;
+}
+.paper-tf-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt2);
+}
+.paper-tf-count {
+  font-size: 11px;
+  color: var(--txt3);
+  margin-left: auto;
+}

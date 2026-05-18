@@ -1,6 +1,23 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import api from '../../api';
 import useAppStore from '../../store/appStore';
+
+// ── Timeframe display order (most important first in the UI) ──────────────────
+const TF_ORDER = ['1d', '4h', '1h', '15m'];
+const TF_LABEL_MAP = { '1d': 'Daily', '4h': '4-Hour', '1h': '1-Hour', '15m': '15-Min' };
+
+/** Group an array of trades by their tfLabel, preserving TF_ORDER. */
+function groupByTF(trades) {
+  const groups = {};
+  for (const t of trades) {
+    const tf = t.tfLabel ?? 'Other';
+    if (!groups[tf]) groups[tf] = [];
+    groups[tf].push(t);
+  }
+  // Sort by TF_ORDER; unknown TFs go last
+  const ordered = [...TF_ORDER, 'Other'].filter((tf) => groups[tf]);
+  return ordered.map((tf) => ({ tf, label: TF_LABEL_MAP[tf] ?? tf, trades: groups[tf] }));
+}
 
 function fmt(ts) {
   return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -191,9 +208,14 @@ function OpenTradeRow({ trade, onClose }) {
     <tr className={slHit ? 'paper-row--sl' : targetHit ? 'paper-row--target' : ''}>
       <td className="td-mono">{fmt(trade.ts)}</td>
       <td>
-        <span className={`pill ${trade.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>
-          {trade.action}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span className={`pill ${trade.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>
+            {trade.action}
+          </span>
+          {trade.source === 'auto' && (
+            <span className="paper-auto-badge" title={`Auto-placed from ${trade.autoSource ?? 'scanner'}`}>AUTO</span>
+          )}
+        </div>
       </td>
       <td className="td-symbol">{trade.symbol}</td>
       <td className="td-num">{fmtPrice(trade.entryPrice)}</td>
@@ -226,6 +248,110 @@ function OpenTradeRow({ trade, onClose }) {
         </button>
       </td>
     </tr>
+  );
+}
+
+// ── Auto-trader settings strip ────────────────────────────────────────────────
+function AutoTraderSettings() {
+  const [settings, setSettings] = useState(null);
+  const [saving, setSaving]     = useState(false);
+  const [editing, setEditing]   = useState(false);
+  const [riskStr, setRiskStr]   = useState('');
+  const [minStr, setMinStr]     = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get('/auto-trader/settings');
+      setSettings(r.data);
+    } catch { /* server may not have this endpoint yet — ignore */ }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function toggle() {
+    if (!settings) return;
+    setSaving(true);
+    try {
+      const r = await api.post('/auto-trader/settings', { enabled: !settings.enabled });
+      setSettings(r.data);
+    } catch (err) {
+      console.error('[AutoTrader] toggle failed:', err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveRisk() {
+    const risk = Number(riskStr);
+    const min  = Number(minStr);
+    if (!risk || !min || risk <= 0 || min <= 0) { setEditing(false); return; }
+    setSaving(true);
+    try {
+      const r = await api.post('/auto-trader/settings', { riskPerTrade: risk, minProfit: min });
+      setSettings(r.data);
+    } catch (err) {
+      console.error('[AutoTrader] save risk failed:', err.message);
+    } finally {
+      setSaving(false);
+      setEditing(false);
+    }
+  }
+
+  function startEdit() {
+    if (!settings) return;
+    setRiskStr(String(settings.riskPerTrade));
+    setMinStr(String(settings.minProfit));
+    setEditing(true);
+  }
+
+  if (!settings) return null;
+
+  return (
+    <div className={`at-settings-bar ${settings.enabled ? 'at-settings-bar--on' : ''}`}>
+      <div className="at-settings-left">
+        <span className="at-settings-icon">🤖</span>
+        <span className="at-settings-label">Auto Trader</span>
+        <span className={`at-settings-pill ${settings.enabled ? 'at-settings-pill--on' : 'at-settings-pill--off'}`}>
+          {settings.enabled ? 'ON' : 'OFF'}
+        </span>
+      </div>
+
+      {settings.enabled && !editing && (
+        <div className="at-settings-risk">
+          <span className="at-risk-label">Risk / trade</span>
+          <span className="at-risk-val">₹{settings.riskPerTrade.toLocaleString('en-IN')}</span>
+          <span className="at-risk-sep">·</span>
+          <span className="at-risk-label">Min profit</span>
+          <span className="at-risk-val">₹{settings.minProfit.toLocaleString('en-IN')}</span>
+          <button className="at-edit-btn" onClick={startEdit} title="Edit risk settings">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {editing && (
+        <div className="at-settings-edit">
+          <label className="at-edit-label">Risk ₹</label>
+          <input className="at-edit-input" type="number" value={riskStr} onChange={(e) => setRiskStr(e.target.value)} placeholder="5000" />
+          <label className="at-edit-label">Min profit ₹</label>
+          <input className="at-edit-input" type="number" value={minStr}  onChange={(e) => setMinStr(e.target.value)}  placeholder="10000" />
+          <button className="btn btn-primary btn-sm" onClick={saveRisk} disabled={saving}>Save</button>
+          <button className="btn btn-ghost   btn-sm" onClick={() => setEditing(false)}>Cancel</button>
+        </div>
+      )}
+
+      <button
+        className={`at-toggle-btn ${settings.enabled ? 'at-toggle-btn--on' : ''}`}
+        onClick={toggle}
+        disabled={saving}
+        title={settings.enabled ? 'Disable auto-trader' : 'Enable auto-trader'}
+      >
+        {saving ? '…' : settings.enabled ? 'Disable' : 'Enable'}
+      </button>
+    </div>
   );
 }
 
@@ -276,8 +402,11 @@ export default function PaperTradingPanel() {
     clearPaperTrades();
   }
 
+  const openByTF = groupByTF(openTrades);
+
   return (
     <div className="paper-trading-panel">
+      <AutoTraderSettings />
       <BalanceCard balance={paperBalance} onUpdate={handleBalanceUpdate} />
 
       {/* Stats */}
@@ -304,33 +433,44 @@ export default function PaperTradingPanel() {
         </div>
       </div>
 
-      {/* Active trades — live LTP and unrealized P&L per row */}
+      {/* Active trades — grouped by timeframe, live LTP and unrealized P&L per row */}
       {openTrades.length > 0 && (
         <div className="dash-section">
-          <h3 className="section-title">Active Trades <span className="count-badge">{openTrades.length}</span></h3>
-          <div className="kite-table-wrap">
-            <table className="kite-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Action</th>
-                  <th>Symbol</th>
-                  <th>Entry</th>
-                  <th>LTP</th>
-                  <th>Qty</th>
-                  <th>SL</th>
-                  <th>Target</th>
-                  <th>Live P&amp;L</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {openTrades.map((t) => (
-                  <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <h3 className="section-title">
+            Active Trades <span className="count-badge">{openTrades.length}</span>
+          </h3>
+          {openByTF.map(({ tf, label, trades: tfTrades }) => (
+            <div key={tf} className="paper-tf-group">
+              <div className="paper-tf-header">
+                <span className="paper-tf-pill">{tf}</span>
+                <span className="paper-tf-name">{label}</span>
+                <span className="paper-tf-count">{tfTrades.length} trade{tfTrades.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="kite-table-wrap">
+                <table className="kite-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Action</th>
+                      <th>Symbol</th>
+                      <th>Entry</th>
+                      <th>LTP</th>
+                      <th>Qty</th>
+                      <th>SL</th>
+                      <th>Target</th>
+                      <th>Live P&amp;L</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tfTrades.map((t) => (
+                      <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

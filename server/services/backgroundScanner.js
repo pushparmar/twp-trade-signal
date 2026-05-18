@@ -46,6 +46,7 @@ const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
 const { isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db                  = require('../db');
+const alertBus            = require('./alertBus');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -344,6 +345,9 @@ async function _runScanForInterval(interval) {
 
       // ── MongoDB — fire-and-forget (never blocks the scan loop) ────────────
       db.alertRepo.insertAlert(alertPayload, 'background');
+
+      // ── Auto-trader — fire-and-forget internal event ──────────────────────
+      alertBus.emit('alert', alertPayload, 'background');
 
       const volTag = result.volumeConfirmed ? ' 📈vol' : '';
       const mtfTag = confluenceTfs.length   ? ` ⚡MTF(${confluenceTfs.join('+')})` : '';

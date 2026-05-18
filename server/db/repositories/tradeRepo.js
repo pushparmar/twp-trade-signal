@@ -131,7 +131,62 @@ function closeTrade(trade) {
     });
 }
 
-// ── Read helpers (for future analysis dashboard) ──────────────────────────────
+// ── Read helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch all OPEN trades from MongoDB.
+ *
+ * Used on server boot to restore the in-memory trade list when
+ * trades-current.json is missing (e.g. after a Railway redeploy without a
+ * persistent volume, or an accidental file deletion).
+ *
+ * Returns the documents re-shaped to match the plain JS trade object used by
+ * store.addPaperTrade() so the result can be dropped straight in.
+ *
+ * @returns {Promise<Array>}
+ */
+async function getOpenTrades() {
+  if (!mongo.isReady()) return [];
+  try {
+    const docs = await mongo.db().collection(COLLECTION)
+      .find({ status: 'OPEN' })
+      .sort({ openedAt: -1 })
+      .toArray();
+
+    return docs.map((doc) => ({
+      id:              doc.tradeId,
+      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
+      source:          doc.source          ?? 'auto',
+      autoSource:      doc.autoSource      ?? null,
+      symbol:          doc.symbol          ?? '',
+      token:           doc.token           ?? null,
+      exchange:        doc.exchange        ?? 'NSE',
+      action:          doc.action          ?? 'BUY',
+      quantity:        doc.quantity        ?? 1,
+      lots:            doc.lots            ?? 1,
+      lotSize:         doc.lotSize         ?? 1,
+      entryPrice:      doc.entryPrice      ?? 0,
+      exitPrice:       doc.exitPrice       ?? null,
+      sl:              doc.sl              ?? null,
+      target:          doc.target          ?? null,
+      status:          'OPEN',
+      pnl:             null,
+      closedTs:        null,
+      patternId:       doc.patternId       ?? null,
+      patternLabel:    doc.patternLabel    ?? null,
+      signal:          doc.signal          ?? null,
+      interval:        doc.interval        ?? null,
+      tfLabel:         doc.tfLabel         ?? null,
+      riskAmount:      doc.riskAmount      ?? null,
+      potentialProfit: doc.potentialProfit ?? null,
+    }));
+  } catch (err) {
+    console.warn('[tradeRepo] getOpenTrades failed:', err.message);
+    return [];
+  }
+}
+
+// ── Analytics helpers ─────────────────────────────────────────────────────────
 
 /**
  * Aggregate daily P&L grouped by IST date.
@@ -206,4 +261,4 @@ async function patternWinRate() {
   }
 }
 
-module.exports = { createIndexes, upsertTrade, closeTrade, dailyPnl, patternWinRate };
+module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, dailyPnl, patternWinRate };

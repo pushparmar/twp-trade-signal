@@ -15,7 +15,9 @@ const historicalRouter = require('./routes/historical');
 const ichimokuRouter = require('./routes/ichimoku');
 const macroRouter    = require('./routes/macro');
 const scanRouter      = require('./routes/scan');
-const analyticsRouter = require('./routes/analytics');
+const analyticsRouter    = require('./routes/analytics');
+const autoTraderRouter   = require('./routes/autoTrader');
+const autoTrader         = require('./services/autoTrader');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
@@ -91,15 +93,45 @@ app.use('/api/historical', historicalRouter);
 app.use('/api/ichimoku', ichimokuRouter);
 app.use('/api/macro',   macroRouter);
 app.use('/api/scan',      scanRouter);
-app.use('/api/analytics', analyticsRouter);
+app.use('/api/analytics',   analyticsRouter);
+app.use('/api/auto-trader', autoTraderRouter);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
 
-  // Connect to MongoDB — fire-and-forget (a DB outage must never block startup).
-  // All repo writes check mongo.isReady() so they silently skip if DB is down.
-  db.init().then((connected) => {
-    if (!connected) console.warn('[DB] MongoDB not connected — pattern analytics disabled');
+  // Connect to MongoDB and, if trades-current.json was missing on this boot,
+  // restore any OPEN trades from MongoDB so they survive Railway redeploys
+  // and accidental file deletions.  All repo writes are still fire-and-forget
+  // so a DB outage never blocks the rest of the startup sequence.
+  db.init().then(async (connected) => {
+    if (!connected) {
+      console.warn('[DB] MongoDB not connected — pattern analytics disabled');
+      return;
+    }
+
+    // If the in-memory store has no trades after the disk-load attempt, check
+    // MongoDB for open trades and restore them.  This covers the case where
+    // trades-current.json was wiped (e.g. no Railway persistent volume).
+    if (store.getPaperTrades().length === 0) {
+      try {
+        const openFromMongo = await db.tradeRepo.getOpenTrades();
+        if (openFromMongo.length > 0) {
+          // addPaperTrade writes through to trades-current.json, re-creating it
+          for (const trade of openFromMongo) {
+            store.addPaperTrade(trade);
+          }
+          console.log(`[DB] Restored ${openFromMongo.length} open trade(s) from MongoDB`);
+
+          // Re-subscribe tokens so live SL/target monitoring resumes
+          const tokens = [...new Set(openFromMongo.map((t) => t.token).filter(Boolean).map(Number))];
+          if (tokens.length > 0) {
+            try { kiteTicker.subscribe(tokens); } catch { /* ticker may not be connected yet */ }
+          }
+        }
+      } catch (err) {
+        console.warn('[DB] Could not restore open trades from MongoDB:', err.message);
+      }
+    }
   }).catch((err) => {
     console.warn('[DB] init() threw unexpectedly:', err.message);
   });
@@ -122,6 +154,14 @@ app.listen(PORT, async () => {
     tradeArchiver.start();
   } catch (err) {
     console.warn('[TradeArchiver] Could not start:', err.message);
+  }
+
+  // Auto-trader — listens for scan alerts and places paper trades automatically.
+  // Disabled by default; user must enable via Dashboard toggle or POST /api/auto-trader/settings.
+  try {
+    autoTrader.start();
+  } catch (err) {
+    console.warn('[AutoTrader] Could not start:', err.message);
   }
 
   // Load F&O stock registry from disk immediately — no auth needed.
@@ -223,6 +263,7 @@ function _gracefulShutdown(signal) {
   console.log(`[Server] ${signal} received — shutting down gracefully`);
   telegramPoller.stop();
   backgroundScanner.stop();
+  autoTrader.stop();
   // Close MongoDB connection so any in-flight writes complete before exit
   db.close().catch(() => {});
   // Give in-flight requests a moment to complete, then exit

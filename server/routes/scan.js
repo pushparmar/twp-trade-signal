@@ -44,6 +44,7 @@ const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis')
 const instrumentCache  = require('../services/instrumentCache');
 const foStockRegistry  = require('../services/foStockRegistry');
 const db               = require('../db');
+const alertBus         = require('../services/alertBus');
 
 /**
  * Return the scan universe of F&O-eligible stocks.
@@ -336,10 +337,13 @@ router.post('/trigger-close', async (req, res) => {
 // state after receiving a 200 response.
 router.post('/reset', (req, res) => {
   try {
-    const historicalCleared  = historicalCache.clearCache()  ?? 0;   // returns void; treat as 0
+    const historicalCleared  = historicalCache.clearCache()  ?? 0;
     const candleKeysCleared  = candleStore.clearAll();
     const bgDedupCleared     = backgroundScanner.clearDedup();
     const liveDedupCleared   = liveScanner.clearDedup();
+    // Also clear auto-trader dedup so trades can re-fire after a reset
+    const autoTraderSvc      = require('../services/autoTrader');
+    const atDedupCleared     = autoTraderSvc.clearDedup();
 
     const summary = {
       ok:                 true,
@@ -347,12 +351,13 @@ router.post('/reset', (req, res) => {
       candleStoreKeys:    candleKeysCleared,
       bgScannerDedup:     bgDedupCleared,
       liveScannerDedup:   liveDedupCleared,
+      autoTraderDedup:    atDedupCleared,
       note:               'Next scan will re-fetch candles from Kite and all patterns can re-fire.',
     };
 
     console.log(
       `[Reset] Full cache reset — candleStore: ${candleKeysCleared} keys,` +
-      ` bgDedup: ${bgDedupCleared}, liveDedup: ${liveDedupCleared}`
+      ` bgDedup: ${bgDedupCleared}, liveDedup: ${liveDedupCleared}, atDedup: ${atDedupCleared}`,
     );
 
     res.json(summary);
@@ -516,13 +521,15 @@ router.post('/', async (req, res) => {
               };
               matches.push(matchEntry);
 
-              // Mirror to MongoDB for pattern analytics — fire-and-forget
-              db.alertRepo.insertAlert({
+              // Mirror to MongoDB + notify auto-trader — both fire-and-forget
+              const _alertBusPayload = {
                 ...matchEntry,
-                label: matchEntry.name || matchEntry.tradingsymbol,
+                label:   matchEntry.name || matchEntry.tradingsymbol,
                 tfLabel: { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' }[interval] || interval,
-                ts: Date.now(),
-              }, 'manual');
+                ts:      Date.now(),
+              };
+              db.alertRepo.insertAlert(_alertBusPayload, 'manual');
+              alertBus.emit('alert', _alertBusPayload, 'manual');
             }
           } catch (err) {
             // Silence per-instrument errors — one bad token shouldn't abort the scan

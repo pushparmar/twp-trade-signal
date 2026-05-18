@@ -66,6 +66,22 @@ router.get('/', (req, res) => {
   res.json(getPaperTrades());
 });
 
+/**
+ * GET /api/paper/open-from-db
+ * Returns OPEN trades directly from MongoDB, bypassing the in-memory store.
+ * Used by the client on mount to sync state when localStorage was cleared
+ * or the user logs in from a new device.
+ * Returns [] (not an error) when MongoDB is not configured.
+ */
+router.get('/open-from-db', async (req, res) => {
+  try {
+    const trades = await db.tradeRepo.getOpenTrades();
+    res.json(trades);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create a new paper trade — called by the client after adding it locally so the
 // server's trades-current.json stays in sync for the daily 6 AM archive.
 // Also subscribes the instrument token to the Kite ticker so live ticks flow

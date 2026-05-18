@@ -23,6 +23,7 @@ const telegramNotifier = require('./telegramNotifier');
 const patternAlertMessage = require('./patternAlertMessage');
 const { isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db               = require('../db');
+const alertBus         = require('./alertBus');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,9 @@ async function _runAndBroadcast(token, interval, candles) {
 
     // ── MongoDB — fire-and-forget (never blocks the scan loop) ────────────
     db.alertRepo.insertAlert(alertPayload, 'live');
+
+    // ── Auto-trader — fire-and-forget internal event ──────────────────────
+    alertBus.emit('alert', alertPayload, 'live');
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
 

@@ -25,7 +25,10 @@ function usePaperAutoClose() {
   const closedIds = useRef(new Set());
 
   useEffect(() => {
-    const openTrades = paperTrades.filter((t) => t.status === 'OPEN' && t.source === 'scan');
+    // Monitor all scan-originated and auto-placed trades for SL / target hits
+    const openTrades = paperTrades.filter(
+      (t) => t.status === 'OPEN' && (t.source === 'scan' || t.source === 'auto'),
+    );
     if (openTrades.length === 0) return;
 
     for (const trade of openTrades) {
@@ -123,9 +126,27 @@ function AppShell() {
       .then((r) => setTestMode(r.data.testMode))
       .catch(() => {});
 
+    // Primary load: in-memory server store (fast, always works)
     api.get('/paper')
       .then((r) => setPaperTrades(r.data))
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        // Secondary sync: pull OPEN trades directly from MongoDB.
+        // Merges in any trades the client is missing (e.g. after localStorage
+        // was cleared or logging in from a new device).  No-op when MongoDB
+        // is not configured (server returns []).
+        api.get('/paper/open-from-db').then((r) => {
+          if (!r.data?.length) return;
+          // Merge MongoDB open trades into current state.
+          // useAppStore.getState() lets us read current trades without a hook.
+          const current = useAppStore.getState().paperTrades || [];
+          const existingIds = new Set(current.map((t) => t.id));
+          const missing = r.data.filter((t) => !existingIds.has(t.id));
+          if (missing.length) {
+            setPaperTrades([...missing, ...current]);
+          }
+        }).catch(() => {});
+      });
 
     api.get('/paper/balance')
       .then((r) => setPaperBalance(r.data))
