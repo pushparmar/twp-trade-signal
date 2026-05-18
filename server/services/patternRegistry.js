@@ -19,7 +19,7 @@
 const {
   getKumoBreakoutTwist, getKumoBreakout, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
-  getKijunBounce, getCloudSupport,
+  getKijunLevel, getCloudSupport,
 } = require('./ichimoku');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,18 +106,16 @@ const PATTERNS = {
 
   'kijun-bounce': {
     id:          'kijun-bounce',
-    label:       'Kijun Bounce',
-    description: 'Price pulled back to the Kijun-sen (base line) within the last 2–3 candles, the wick touched it, and price closed back above (bullish) or below (bearish) confirming the bounce.',
-    // lookback:3 — the touch must have occurred within the last 3 closed candles.
-    // tolerance:0.003 — the candle's wick must come within 0.3% of the Kijun.
-    // This captures both exact touches and very slight over-shoots (common with wicks).
+    label:       'Kijun Support / Resistance',
+    description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, no close confirmation required.',
+    // lookback:3 — the wick touch must have occurred within the last 3 closed candles.
+    // tolerance:0.003 — wick must come within 0.3% of the Kijun at that bar.
     defaultOpts: { lookback: 3, tolerance: 0.003 },
 
     run(candles, opts = {}) {
-      const result = getKijunBounce(candles, { ...this.defaultOpts, ...opts });
+      const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       // TK alignment: bullish → Tenkan above Kijun; bearish → Kijun above Tenkan.
-      // This ensures the bounce aligns with the prevailing Ichimoku trend direction.
       if (!_tkAligned(result)) return { matched: false };
       return { matched: true, ...result };
     },
