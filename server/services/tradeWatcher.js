@@ -1,83 +1,64 @@
 /**
  * tradeWatcher.js
  *
- * Authoritative server-side SL / Target / Trailing-SL handler.
+ * Server-side SL / Target / Trailing-SL handler.
  *
- * Runs inside the KiteTicker tick handler so trades close the instant a tick
- * breaches a level — no 250 ms SSE throttle, no dependence on a browser tab
- * being open, no race with the client's optimistic close.
- *
- * Responsibilities:
- *   • Trail the stop-loss favourably when TSL is enabled and triggered
- *   • Close the trade at SL when LTP (or current-day high/low) breaches it
- *   • Close the trade at Target when LTP (or current-day high/low) reaches it
- *
- * Why use ohlc.high/low (not just lastPrice)?
- *   Kite tick LTP is throttled in our hot path; a fast spike may print one
- *   tick at the post-spike price.  ohlc.high/low always reflects the day's
- *   true extreme so we catch gap-throughs that the LTP alone would miss.
+ * Simple rule: once a trade is placed and the token is subscribed to the live
+ * ticker, every tick's lastPrice is checked against SL and target.  That's it.
+ * No OHLC, no day high/low, no running-extreme map.  Live price is authoritative.
  *
  * Output:
- *   • broadcast('paper_trade_update', closedTrade)   — same shape as POST /:id/close
- *   • broadcast('paper_balance', balance)            — refreshed available cash
- *   • db.tradeRepo.closeTrade(trade)                 — MongoDB sync
- *   • kiteTicker unsubscribes the token if no other open trade or watchlist
- *     entry needs it (mirrors the manual /close route behaviour)
+ *   • broadcast('paper_trade_update', closedTrade)
+ *   • broadcast('paper_balance', balance)
+ *   • db.tradeRepo.closeTrade(trade)
+ *   • kiteTicker unsubscribes the token when no longer needed
  */
 
-const store        = require('../store');
+const store         = require('../store');
 const { broadcast } = require('../sseHub');
-const db           = require('../db');
+const db            = require('../db');
 
-// Lazy-require kiteTicker to avoid the circular dep when kiteTicker requires
-// THIS module via require() in its tick handler.
+// Lazy-require kiteTicker to avoid circular dep (kiteTicker requires this module).
 function _ticker() {
   return require('./kiteTicker');
 }
 
-// Per-trade close-claim guard — prevents the same trade from being closed twice
-// when multiple ticks arrive in the same JS event loop frame.
+// Per-trade close-claim guard — prevents double-close when multiple ticks
+// arrive in the same JS event loop frame.
 const _closing = new Set();
 
-// ── Per-trade running extreme (high / low since first tick after entry) ───────
-//
-// WHY THIS EXISTS:
-//   Kite's ohlc.high / ohlc.low represent the day's extreme since market open,
-//   NOT since the trade was entered.  If you SELL Gold at 14:00 with target 71500,
-//   but ohlc.low from the 09:00 session is already 71000, the check
-//   "dayLow <= target" fires TRUE on the very first tick → immediate false close.
-//
-//   Storing the per-trade extreme (seeded from LTP on the first tick after entry)
-//   means we only react to price moves that happen AFTER the trade is opened.
-//   Gap-through protection is preserved: if the first tick itself is already
-//   past the SL/target, it is caught by the LTP comparison in _checkExit.
-//
-// Map<tradeId (string), { high: number, low: number }>
-// Entries are removed in _closeTrade so the map stays small.
-const _extremes = new Map();
+// Throttle live-tick SSE broadcasts to once every 500 ms per trade so we
+// don't flood the SSE queue.  Map<tradeId, lastBroadcastMs>
+const _lastTickBroadcast = new Map();
 
 /**
- * Move the stop-loss favourably if the user has TSL enabled and the trade has
- * crossed the trigger threshold.  Mutates the trade in-place and persists.
+ * Move the stop-loss favourably when TSL is enabled and the profit threshold
+ * has been crossed.  Mutates trade in-place and persists to store + MongoDB.
  *
- * @returns true when the SL was moved
+ * @returns {boolean} true when SL was moved
  */
 function _maybeTrail(trade, ltp, settings) {
-  if (!settings.tslEnabled)                  return false;
+  if (!settings.tslEnabled) return false;
   if (trade.action !== 'BUY' && trade.action !== 'SELL') return false;
 
   const initialSl   = trade.initialSl ?? trade.sl;
   const riskPerUnit = Math.abs(trade.entryPrice - initialSl);
   if (riskPerUnit < 0.01) return false;
 
-  const profit = trade.action === 'BUY' ? ltp - trade.entryPrice : trade.entryPrice - ltp;
+  const profit = trade.action === 'BUY'
+    ? ltp - trade.entryPrice
+    : trade.entryPrice - ltp;
   if (profit < settings.tslTriggerR * riskPerUnit) return false;
 
   const prevPeak = trade.peakPrice ?? trade.entryPrice;
-  const newPeak  = trade.action === 'BUY' ? Math.max(prevPeak, ltp) : Math.min(prevPeak, ltp);
+  const newPeak  = trade.action === 'BUY'
+    ? Math.max(prevPeak, ltp)
+    : Math.min(prevPeak, ltp);
 
   const trailGap    = settings.tslDistanceR * riskPerUnit;
-  const candidateSl = trade.action === 'BUY' ? newPeak - trailGap : newPeak + trailGap;
+  const candidateSl = trade.action === 'BUY'
+    ? newPeak - trailGap
+    : newPeak + trailGap;
 
   const shouldMove = trade.action === 'BUY'
     ? candidateSl > (trade.sl ?? -Infinity)
@@ -91,9 +72,7 @@ function _maybeTrail(trade, ltp, settings) {
   trade.peakPrice    = newPeak;
   trade.tslActivated = true;
 
-  // Mirror to MongoDB so analytics see the trailed SL on close
   db.tradeRepo.upsertTrade(trade);
-  // Broadcast so clients re-render the SL cell immediately
   broadcast('paper_trade_update', trade);
 
   if (!wasArmed) {
@@ -103,48 +82,25 @@ function _maybeTrail(trade, ltp, settings) {
 }
 
 /**
- * Decide whether a hit fires and what exit price to record.
- * Uses the most adverse value between ltp and the day's high/low so a gap-
- * through that overshoots the level still records the level (not the over-
- * shoot price) for paper-trade fill realism.
+ * Check if the current live price hits SL or target.
+ * Uses lastPrice only — no OHLC, no day extremes.
  *
- * Returns null if no hit, otherwise { closeAt, reason }.
+ * @returns {{ closeAt: number, reason: string } | null}
  */
-function _checkExit(trade, ltp, ohlc) {
-  const dayHigh = ohlc?.high ?? ltp;
-  const dayLow  = ohlc?.low  ?? ltp;
-
+function _checkExit(trade, ltp) {
   if (trade.action === 'BUY') {
-    if (trade.sl != null) {
-      // SL hit when low pierced or current tick is at/under SL
-      if (dayLow <= trade.sl || ltp <= trade.sl) {
-        return { closeAt: trade.sl, reason: trade.tslActivated ? 'TSL' : 'SL' };
-      }
-    }
-    if (trade.target != null) {
-      if (dayHigh >= trade.target || ltp >= trade.target) {
-        return { closeAt: trade.target, reason: 'TARGET' };
-      }
-    }
+    if (trade.sl     != null && ltp <= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
+    if (trade.target != null && ltp >= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
   } else if (trade.action === 'SELL') {
-    if (trade.sl != null) {
-      if (dayHigh >= trade.sl || ltp >= trade.sl) {
-        return { closeAt: trade.sl, reason: trade.tslActivated ? 'TSL' : 'SL' };
-      }
-    }
-    if (trade.target != null) {
-      if (dayLow <= trade.target || ltp <= trade.target) {
-        return { closeAt: trade.target, reason: 'TARGET' };
-      }
-    }
+    if (trade.sl     != null && ltp >= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
+    if (trade.target != null && ltp <= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
   }
   return null;
 }
 
 /**
- * Close a trade and mirror the change everywhere.  Idempotent: a second call
- * for the same id is a no-op because closePaperTrade returns null when the
- * trade is already CLOSED.
+ * Close a trade and sync everywhere.  Idempotent — a second call for the same
+ * id is a no-op (closePaperTrade returns null when already CLOSED).
  */
 function _closeTrade(trade, closeAt, reason) {
   if (_closing.has(trade.id)) return;
@@ -153,92 +109,83 @@ function _closeTrade(trade, closeAt, reason) {
   const closed = store.closePaperTrade(trade.id, closeAt);
   if (!closed) { _closing.delete(trade.id); return; }
 
+  // Clean up per-trade tick-throttle entry so the Map doesn't grow forever.
+  _lastTickBroadcast.delete(trade.id);
+
   broadcast('paper_trade_update', closed);
   broadcast('paper_balance',      store.getPaperBalance());
   db.tradeRepo.closeTrade(closed);
 
-  // Unsubscribe token if no other open trade or watchlist entry needs it
+  // Unsubscribe token if no other open trade or watchlist entry still needs it
   try {
-    const numToken = Number(closed.token);
-    const stillOpen = store.getPaperTrades().some(
+    const numToken   = Number(closed.token);
+    const stillOpen  = store.getPaperTrades().some(
       (t) => t.status === 'OPEN' && Number(t.token) === numToken,
     );
     const inWatchlist = store.getWatchlist().some(
       (w) => Number(w.instrumentToken) === numToken,
     );
     if (!stillOpen && !inWatchlist) _ticker().unsubscribe([numToken]);
-  } catch { /* ticker may not be connected — safe to ignore */ }
+  } catch { /* ticker may not be connected */ }
 
   const emoji = reason === 'TARGET' ? '🎯' : reason === 'TSL' ? '🔒' : '🛑';
   console.log(
-    `[TradeWatcher] ${emoji} ${reason} hit — ${closed.symbol} ` +
+    `[TradeWatcher] ${emoji} ${reason} — ${closed.symbol} ` +
     `[${closed.tfLabel ?? closed.interval ?? '-'}] ${closed.action} ` +
-    `entry=₹${closed.entryPrice} exit=₹${closeAt} ` +
-    `pnl=₹${closed.pnl} (${closed.source}/${closed.patternId})`,
+    `entry=₹${closed.entryPrice} exit=₹${closeAt} pnl=₹${closed.pnl}`,
   );
 
-  // Release the close-claim after a short delay so out-of-order ticks don't
-  // try to close an already-closed id and produce spurious 404 logs.
   setTimeout(() => _closing.delete(trade.id), 1_000);
-
-  // Remove the per-trade extreme so memory doesn't grow unbounded.
-  _extremes.delete(trade.id);
 }
 
 /**
- * Called on every Kite tick from kiteTicker.js.  MUST stay synchronous and
- * fast — there can be hundreds of ticks per second across all subscriptions.
+ * Called on every Kite tick from kiteTicker.js.
+ * Synchronous and fast — hundreds of ticks/sec across all subscriptions.
  *
- * @param {number} token       Instrument token from the tick
- * @param {number} lastPrice   tick.last_price
- * @param {object} [ohlc]      tick.ohlc = { high, low, open, close }
+ * @param {number} token      Instrument token
+ * @param {number} lastPrice  Live price (tick.last_price)
  */
-function onTick(token, lastPrice, ohlc) {
+function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
-  const numToken = Number(token);
-  // Fast filter: skip if we have no open trades on this token at all
+  const numToken   = Number(token);
   const openTrades = store.getPaperTrades().filter(
     (t) =>
-      t.status === 'OPEN' &&
+      t.status   === 'OPEN' &&
       Number(t.token) === numToken &&
       (t.source === 'auto' || t.source === 'scan'),
   );
   if (openTrades.length === 0) return;
 
-  // Read TSL settings once per tick (cheap — single config.json read cached
-  // by Node's fs; could be cached further in store.js later if hot).
   const settings = store.getAutoTraderSettings();
+  const now      = Date.now();
 
   for (const trade of openTrades) {
-    // ── Build / update per-trade running extreme ──────────────────────────
-    // Seed on the FIRST tick after entry using LTP only — NOT the day's OHLC.
-    // Using ohlc.high/low from Kite as the seed would include the entire
-    // day's pre-entry range, which causes instant false closes when the
-    // day's extreme already breaches the SL or target.
-    let ext = _extremes.get(trade.id);
-    if (!ext) {
-      ext = { high: lastPrice, low: lastPrice };
-      _extremes.set(trade.id, ext);
-    } else {
-      // Expand the running extreme with each new tick.
-      // Incorporate Kite's reported dayHigh/dayLow ONLY when they improve on
-      // what we've already seen — this catches genuine intraday expansions
-      // (e.g. a fast candle whose high we missed in a sparse tick stream)
-      // while ignoring pre-entry OHLC values that arrive on the first tick.
-      const tickHigh = ohlc?.high ?? lastPrice;
-      const tickLow  = ohlc?.low  ?? lastPrice;
-      ext.high = Math.max(ext.high, lastPrice, tickHigh);
-      ext.low  = Math.min(ext.low,  lastPrice, tickLow);
-    }
-
-    // 1. Trailing stop loss — may move trade.sl favourably
     _maybeTrail(trade, lastPrice, settings);
 
-    // 2. SL or target hit — use per-trade extreme, NOT the raw day OHLC,
-    //    so pre-entry day extremes never trigger a spurious exit.
-    const exit = _checkExit(trade, lastPrice, { high: ext.high, low: ext.low });
-    if (exit) _closeTrade(trade, exit.closeAt, exit.reason);
+    const exit = _checkExit(trade, lastPrice);
+    if (exit) {
+      // SL or target hit — close and unsubscribe (see _closeTrade).
+      _closeTrade(trade, exit.closeAt, exit.reason);
+      continue; // trade is now closed; skip live-tick broadcast
+    }
+
+    // ── Throttled live-tick SSE (≤ once per 500 ms per trade) ────────────
+    // Lets the Dashboard update unrealised P&L in real time without flooding
+    // the SSE queue.
+    const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
+    if (now - lastBcast >= 500) {
+      _lastTickBroadcast.set(trade.id, now);
+      const unrealizedPnl = trade.action === 'BUY'
+        ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
+        : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
+      broadcast('paper_trade_tick', {
+        id:            trade.id,
+        token:         numToken,
+        ltp:           lastPrice,
+        unrealizedPnl: +unrealizedPnl.toFixed(2),
+      });
+    }
   }
 }
 

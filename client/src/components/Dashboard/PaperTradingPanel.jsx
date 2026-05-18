@@ -172,29 +172,39 @@ function BalanceCard({ balance, onUpdate }) {
 // Subscribes to the tick for this trade's token so LTP and unrealized P&L
 // update every second without re-rendering the whole panel.
 function OpenTradeRow({ trade, onClose }) {
-  const tick    = useAppStore((s) => s.ticks[trade.token]);
-  const ltp     = tick?.lastPrice ?? null;
+  // tradeTicks: per-trade server tick (ltp + server-calculated unrealizedPnl).
+  // ticks: market-wide tick stream — used as fallback for flash animation
+  // and in case the trade-specific tick hasn't arrived yet.
+  const tradeTick = useAppStore((s) => s.tradeTicks[trade.id]);
+  const tick      = useAppStore((s) => s.ticks[trade.token]);
+
+  // Prefer server-side trade tick LTP; fall back to market tick lastPrice.
+  const ltp = tradeTick?.ltp ?? tick?.lastPrice ?? null;
+
   const priceRef = useRef(null);
   const prevRef  = useRef(null);
 
-  // Flash animation when price changes
+  // Flash animation on any LTP change (source-agnostic).
   useEffect(() => {
-    if (!tick || !priceRef.current) return;
-    const curr = tick.lastPrice;
-    if (prevRef.current == null) { prevRef.current = curr; return; }
-    const dir = curr > prevRef.current ? 'flash-up' : curr < prevRef.current ? 'flash-down' : null;
-    prevRef.current = curr;
+    if (ltp == null || !priceRef.current) return;
+    if (prevRef.current == null) { prevRef.current = ltp; return; }
+    const dir = ltp > prevRef.current ? 'flash-up' : ltp < prevRef.current ? 'flash-down' : null;
+    prevRef.current = ltp;
     if (!dir) return;
     priceRef.current.classList.remove('flash-up', 'flash-down');
     void priceRef.current.offsetWidth;
     priceRef.current.classList.add(dir);
-  }, [tick?.lastPrice]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ltp]);
 
-  const unrealizedPnl = ltp != null
-    ? (trade.action === 'BUY'
-        ? (ltp - trade.entryPrice)
-        : (trade.entryPrice - ltp)) * trade.quantity
-    : null;
+  // Prefer server-calculated P&L (already accounts for quantity + direction);
+  // compute client-side only when the trade tick hasn't arrived yet.
+  const unrealizedPnl = tradeTick?.unrealizedPnl != null
+    ? tradeTick.unrealizedPnl
+    : ltp != null
+      ? (trade.action === 'BUY'
+          ? (ltp - trade.entryPrice)
+          : (trade.entryPrice - ltp)) * trade.quantity
+      : null;
 
   const pnlCls = unrealizedPnl == null ? '' : unrealizedPnl >= 0 ? 'pnl-positive' : 'pnl-negative';
 

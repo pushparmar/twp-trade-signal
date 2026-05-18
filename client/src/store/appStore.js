@@ -19,6 +19,7 @@ const useAppStore = create(
   // Market watch
   watchlist: [],       // [{ instrumentToken, tradingsymbol, exchange, name, lotSize, expiry }]
   ticks: {},           // { [instrumentToken]: { lastPrice, ohlc, volume, change, prevPrice } }
+  tradeTicks: {},      // { [tradeId]: { ltp, unrealizedPnl } } — per-trade live feed from tradeWatcher
   tickerConnected: false,
   ichiSignals: {},  // { [`${token}:${interval}`]: ichimokuSignals } — pushed by server on candle close
   macroData: null,         // { vix, crude, gold, silver, usdinr } — pushed by server on every macro candle close
@@ -70,8 +71,22 @@ const useAppStore = create(
     }),
 
   updatePaperTrade: (updated) =>
+    set((state) => {
+      // When a trade closes, remove its live-tick entry so the row stops updating.
+      const tradeTicks = updated.status === 'CLOSED'
+        ? Object.fromEntries(Object.entries(state.tradeTicks).filter(([k]) => k !== updated.id))
+        : state.tradeTicks;
+      return {
+        paperTrades: state.paperTrades.map((t) => t.id === updated.id ? updated : t),
+        tradeTicks,
+      };
+    }),
+
+  // Per-trade live tick from tradeWatcher (paper_trade_tick SSE event).
+  // Keyed by trade ID so two open trades on the same token stay independent.
+  updateTradeTick: ({ id, ltp, unrealizedPnl }) =>
     set((state) => ({
-      paperTrades: state.paperTrades.map((t) => t.id === updated.id ? updated : t),
+      tradeTicks: { ...state.tradeTicks, [id]: { ltp, unrealizedPnl } },
     })),
 
   clearPaperTrades: () => set({ paperTrades: [] }),

@@ -17,7 +17,8 @@ export default function useSSE() {
   const setTickerConnected = useAppStore((s) => s.setTickerConnected);
   const setIchiSignal = useAppStore((s) => s.setIchiSignal);
   const setMacroData = useAppStore((s) => s.setMacroData);
-  const addScanAlert = useAppStore((s) => s.addScanAlert);
+  const addScanAlert    = useAppStore((s) => s.addScanAlert);
+  const updateTradeTick = useAppStore((s) => s.updateTradeTick);
 
   useEffect(() => {
     // In production VITE_API_URL points to Railway — SSE cannot go through Vercel rewrites.
@@ -55,6 +56,11 @@ export default function useSSE() {
     es.addEventListener('macro_update', (e) => setMacroData(JSON.parse(e.data)));
     es.addEventListener('scan_alert', (e) => addScanAlert(JSON.parse(e.data)));
 
+    // Per-trade live tick — ltp + server-calculated unrealised P&L, throttled
+    // to 500 ms per trade by tradeWatcher.js. Only fires for OPEN trades whose
+    // token is subscribed to the Kite WebSocket.
+    es.addEventListener('paper_trade_tick', (e) => updateTradeTick(JSON.parse(e.data)));
+
     return () => es.close();
-  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData, addScanAlert]);
+  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData, addScanAlert, updateTradeTick]);
 }
