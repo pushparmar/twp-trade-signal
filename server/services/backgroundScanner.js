@@ -43,8 +43,8 @@ const store               = require('../store');
 const { to4H }            = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
-const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
-const { isNseOpen, IST_OFFSET_MS }  = require('../utils/marketHours');
+const foStockRegistry     = require('./foStockRegistry');
+const { isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -155,37 +155,43 @@ function _nextCloseMs(interval, now = Date.now()) {
 
 // ── Universe builder ──────────────────────────────────────────────────────────
 
-// Tokens managed by patternAlertWatcher — skip them here to avoid duplicate alerts.
-const MACRO_TOKENS = new Set();
-
+/**
+ * Build the list of F&O stocks to scan on each background run.
+ *
+ * Uses the persistent F&O stock registry (NSE equity tokens) instead of
+ * resolving NFO front-month futures on every call.  This matters for two
+ * reasons:
+ *
+ *   1. STABILITY — NSE equity tokens never expire.  NFO futures tokens roll
+ *      over every month; a fresh contract has only ~42 trading days of history,
+ *      which is BELOW the MIN_BARS = 52 threshold.  The daily-interval scan
+ *      was silently producing zero alerts because every front-month contract
+ *      was skipped for insufficient candle data.
+ *
+ *   2. CONSISTENCY — The manual /api/scan endpoint already uses foStockRegistry.
+ *      Using the same universe here ensures background and manual scans agree.
+ *
+ * Falls back to deriving from instrumentCache if the registry file hasn't been
+ * built yet (first boot before Kite auth completes the fo-registry build).
+ */
 function _buildUniverse() {
-  // Populate the macro-token exclusion set on first call once instrumentCache is ready
-  if (MACRO_TOKENS.size === 0 && instrumentCache.isLoaded()) {
-    MACRO_TOKENS.add(Number(VIX_TOKEN));
-    MACRO_TOKENS.add(256265); // NIFTY 50
-    MACRO_TOKENS.add(260105); // NIFTY BANK
-    for (const [sym, exch] of [
-      ['CRUDEOIL', 'MCX'], ['GOLD', 'MCX'], ['SILVER', 'MCX'], ['USDINR', 'CDS'],
-    ]) {
-      try {
-        const inst = getFrontMonthFutures(sym, exch);
-        if (inst) MACRO_TOKENS.add(Number(inst.instrumentToken));
-      } catch { /* not yet loaded — will be populated on next scan */ }
-    }
-  }
+  // Primary path: use the stable NSE equity token registry.
+  const fromRegistry = foStockRegistry.getAll();
+  if (fromRegistry.length > 0) return fromRegistry;
 
+  // Fallback: derive from instrumentCache the first time (before registry exists).
+  // Identical to the fallback in scan.js _allFoStocks().
   if (!instrumentCache.isLoaded()) return [];
-
+  const names = instrumentCache.getFutureNames();
   const universe = [];
-  for (const name of instrumentCache.getFutureNames()) {
-    const inst = instrumentCache.getFrontMonthFuture(name, 'NFO');
-    if (!inst) continue;
-    if (MACRO_TOKENS.has(Number(inst.instrumentToken))) continue; // handled by patternAlertWatcher
+  for (const name of names) {
+    const eq = instrumentCache.getNseEquity(name);
+    if (!eq) continue;
     universe.push({
-      instrumentToken: inst.instrumentToken,
-      tradingsymbol:   inst.tradingsymbol,
-      exchange:        inst.exchange,
-      name:            inst.name || inst.tradingsymbol,
+      instrumentToken: eq.instrumentToken,
+      tradingsymbol:   eq.tradingsymbol,
+      exchange:        'NSE',
+      name,
     });
   }
   return universe;
@@ -202,8 +208,8 @@ async function _runScanForInterval(interval) {
   // every trigger attempt, not just the ones that proceeded past the guard.
   _lastRunAt[interval] = Date.now();
 
-  if (!isNseOpen()) {
-    console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (NSE closed)`);
+  if (!isAnyMarketOpen()) {
+    console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (market closed)`);
     return;
   }
 

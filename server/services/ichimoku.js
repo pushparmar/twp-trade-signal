@@ -937,6 +937,184 @@ function getKumoBounce(candles, { lookback = 5, tolerance = 0.005 } = {}) {
   };
 }
 
+// ── Kijun Bounce ──────────────────────────────────────────────────────────────
+
+/**
+ * Kijun Bounce — price pulls back to the Kijun-sen (base line) and reverses
+ * within the last `lookback` candles.
+ *
+ * The Kijun acts as dynamic support in a bullish trend and dynamic resistance
+ * in a bearish trend.  A bounce off it is one of the highest-probability
+ * Ichimoku entries because the base line represents the 26-period equilibrium.
+ *
+ * Bullish Kijun Bounce (within `lookback` bars):
+ *   - Current close is ABOVE the current Kijun (bounce held on close).
+ *   - One of the last `lookback` candles has a LOW that dipped to or near the
+ *     Kijun level (within `tolerance`% of the kijun at that bar).
+ *   - That touch candle's CLOSE was at or above the Kijun (not a break-through).
+ *
+ * Bearish Kijun Bounce (mirror):
+ *   - Current close is BELOW the current Kijun.
+ *   - One of the last `lookback` candles has a HIGH that rose to or near the Kijun.
+ *   - That touch candle's CLOSE was at or below the Kijun.
+ *
+ * Score (1–4) — confirming factors in addition to the bounce itself:
+ *   +1 base  — touch + bounce pattern found
+ *   +1       — price is on the correct side of the cloud (above for bullish, below for bearish)
+ *   +1       — cloud colour agrees (green for bullish, red for bearish)
+ *   +1       — Chikou agrees (close > price 26 bars ago for bullish)
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.lookback=3]      — bars back to search for the Kijun touch (2–3 typical)
+ * @param {number}   [opts.tolerance=0.003] — how close the wick must get to Kijun (0.3% default)
+ *
+ * @returns {{
+ *   signal:        'bullish' | 'bearish' | null,
+ *   barsAgo:       number | null,
+ *   crossType:     string,
+ *   strength:      'strong' | 'neutral' | 'weak' | null,
+ *   cloudPosition: 'above' | 'in' | 'below',
+ *   score:         number,
+ *   close:         number,
+ *   kijunValue:    number | null,
+ *   tenkan:        number | null,
+ *   kijun:         number | null,
+ *   cloudTop:      number | null,
+ *   cloudBottom:   number | null,
+ * }}
+ */
+function getKijunBounce(candles, { lookback = 3, tolerance = 0.003 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+
+  if (last.kijun == null) {
+    return {
+      signal: null, barsAgo: null, crossType: 'Kijun Bounce',
+      strength: null, cloudPosition: _cloudPos(last), score: 0,
+      close: last.close, kijunValue: null, tenkan: null, kijun: null,
+      cloudTop: null, cloudBottom: null,
+    };
+  }
+
+  // Bounce requires current close to be cleanly on one side of the Kijun.
+  const currentlyAbove = last.close > last.kijun;
+  const currentlyBelow = last.close < last.kijun;
+
+  if (!currentlyAbove && !currentlyBelow) {
+    return {
+      signal: null, barsAgo: null, crossType: 'Kijun Bounce',
+      strength: null, cloudPosition: _cloudPos(last), score: 0,
+      close: last.close, kijunValue: round(last.kijun),
+      tenkan: last.tenkan != null ? round(last.tenkan) : null,
+      kijun:  last.kijun  != null ? round(last.kijun)  : null,
+      cloudTop:    last.cloudTop    != null ? round(last.cloudTop)    : null,
+      cloudBottom: last.cloudBottom != null ? round(last.cloudBottom) : null,
+    };
+  }
+
+  const signal = currentlyAbove ? 'bullish' : 'bearish';
+
+  // Reusable scorer: counts extra confirming conditions at the current bar.
+  const price26ago = n >= 27 ? candles[n - 1 - 26].close : null;
+  function _score() {
+    let s = 1; // base point — touch + bounce found
+    if (signal === 'bullish') {
+      if (last.aboveCloud) s++;
+      if (last.senkouA != null && last.senkouB != null && last.senkouA > last.senkouB) s++;
+      if (price26ago != null && last.close > price26ago) s++;
+    } else {
+      if (last.belowCloud) s++;
+      if (last.senkouA != null && last.senkouB != null && last.senkouB > last.senkouA) s++;
+      if (price26ago != null && last.close < price26ago) s++;
+    }
+    return s;
+  }
+
+  const cloudPosition = _cloudPos(last);
+
+  // Scan from offset=0 (current candle itself can be the bounce bar) back to `lookback`.
+  for (let offset = 0; offset <= lookback; offset++) {
+    const idx = n - 1 - offset;
+    if (idx < 0) break;
+
+    const r = results[idx]; // ichimoku result at the candidate bar
+    const c = candles[idx]; // raw OHLC (needed for actual high/low wicks)
+    if (r.kijun == null) continue;
+
+    const kijunAtBar = r.kijun;
+
+    if (signal === 'bullish') {
+      // Wick touched Kijun zone: low came within tolerance% of the Kijun from above.
+      // low <= kijun * (1 + tolerance) captures both exact touches and slight overshoots.
+      const wickTouchedKijun = c.low <= kijunAtBar * (1 + tolerance);
+      if (!wickTouchedKijun) continue;
+
+      // The touch candle must NOT have closed far below Kijun (would be a breakdown).
+      // Allow a tiny close below (noise) but reject clear bearish closes.
+      const closedAtOrAboveKijun = r.close >= kijunAtBar * (1 - 0.001);
+      if (!closedAtOrAboveKijun) continue;
+
+      return {
+        signal:        'bullish',
+        barsAgo:       offset,
+        crossType:     'Kijun Bounce',
+        strength:      _crossStrength('bullish', cloudPosition),
+        cloudPosition,
+        score:         _score(),
+        close:         last.close,
+        kijunValue:    round(last.kijun),
+        tenkan:        last.tenkan != null ? round(last.tenkan) : null,
+        kijun:         last.kijun  != null ? round(last.kijun)  : null,
+        cloudTop:      last.cloudTop    != null ? round(last.cloudTop)    : null,
+        cloudBottom:   last.cloudBottom != null ? round(last.cloudBottom) : null,
+        senkouA:       last.senkouA,
+        senkouB:       last.senkouB,
+      };
+    } else {
+      // Bearish: wick rose near the Kijun level from below.
+      const wickTouchedKijun = c.high >= kijunAtBar * (1 - tolerance);
+      if (!wickTouchedKijun) continue;
+
+      // Touch candle must not have closed far above Kijun (would be a breakout).
+      const closedAtOrBelowKijun = r.close <= kijunAtBar * (1 + 0.001);
+      if (!closedAtOrBelowKijun) continue;
+
+      return {
+        signal:        'bearish',
+        barsAgo:       offset,
+        crossType:     'Kijun Bounce',
+        strength:      _crossStrength('bearish', cloudPosition),
+        cloudPosition,
+        score:         _score(),
+        close:         last.close,
+        kijunValue:    round(last.kijun),
+        tenkan:        last.tenkan != null ? round(last.tenkan) : null,
+        kijun:         last.kijun  != null ? round(last.kijun)  : null,
+        cloudTop:      last.cloudTop    != null ? round(last.cloudTop)    : null,
+        cloudBottom:   last.cloudBottom != null ? round(last.cloudBottom) : null,
+        senkouA:       last.senkouA,
+        senkouB:       last.senkouB,
+      };
+    }
+  }
+
+  // No qualifying touch candle found within lookback bars.
+  return {
+    signal: null, barsAgo: null, crossType: 'Kijun Bounce',
+    strength: null, cloudPosition, score: 0,
+    close:       last.close,
+    kijunValue:  round(last.kijun),
+    tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+    kijun:       last.kijun  != null ? round(last.kijun)  : null,
+    cloudTop:    last.cloudTop    != null ? round(last.cloudTop)    : null,
+    cloudBottom: last.cloudBottom != null ? round(last.cloudBottom) : null,
+  };
+}
+
 // ── Shared 4h synthesis ───────────────────────────────────────────────────────
 
 /**
@@ -1104,6 +1282,7 @@ module.exports = {
   getChikouCross,
   getPerfectOrder,
   getKumoBounce,
+  getKijunBounce,
   getCloudSupport,
   to4H,
 };
