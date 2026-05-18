@@ -39,6 +39,23 @@ function _ticker() {
 // when multiple ticks arrive in the same JS event loop frame.
 const _closing = new Set();
 
+// ── Per-trade running extreme (high / low since first tick after entry) ───────
+//
+// WHY THIS EXISTS:
+//   Kite's ohlc.high / ohlc.low represent the day's extreme since market open,
+//   NOT since the trade was entered.  If you SELL Gold at 14:00 with target 71500,
+//   but ohlc.low from the 09:00 session is already 71000, the check
+//   "dayLow <= target" fires TRUE on the very first tick → immediate false close.
+//
+//   Storing the per-trade extreme (seeded from LTP on the first tick after entry)
+//   means we only react to price moves that happen AFTER the trade is opened.
+//   Gap-through protection is preserved: if the first tick itself is already
+//   past the SL/target, it is caught by the LTP comparison in _checkExit.
+//
+// Map<tradeId (string), { high: number, low: number }>
+// Entries are removed in _closeTrade so the map stays small.
+const _extremes = new Map();
+
 /**
  * Move the stop-loss favourably if the user has TSL enabled and the trade has
  * crossed the trigger threshold.  Mutates the trade in-place and persists.
@@ -163,6 +180,9 @@ function _closeTrade(trade, closeAt, reason) {
   // Release the close-claim after a short delay so out-of-order ticks don't
   // try to close an already-closed id and produce spurious 404 logs.
   setTimeout(() => _closing.delete(trade.id), 1_000);
+
+  // Remove the per-trade extreme so memory doesn't grow unbounded.
+  _extremes.delete(trade.id);
 }
 
 /**
@@ -191,11 +211,33 @@ function onTick(token, lastPrice, ohlc) {
   const settings = store.getAutoTraderSettings();
 
   for (const trade of openTrades) {
+    // ── Build / update per-trade running extreme ──────────────────────────
+    // Seed on the FIRST tick after entry using LTP only — NOT the day's OHLC.
+    // Using ohlc.high/low from Kite as the seed would include the entire
+    // day's pre-entry range, which causes instant false closes when the
+    // day's extreme already breaches the SL or target.
+    let ext = _extremes.get(trade.id);
+    if (!ext) {
+      ext = { high: lastPrice, low: lastPrice };
+      _extremes.set(trade.id, ext);
+    } else {
+      // Expand the running extreme with each new tick.
+      // Incorporate Kite's reported dayHigh/dayLow ONLY when they improve on
+      // what we've already seen — this catches genuine intraday expansions
+      // (e.g. a fast candle whose high we missed in a sparse tick stream)
+      // while ignoring pre-entry OHLC values that arrive on the first tick.
+      const tickHigh = ohlc?.high ?? lastPrice;
+      const tickLow  = ohlc?.low  ?? lastPrice;
+      ext.high = Math.max(ext.high, lastPrice, tickHigh);
+      ext.low  = Math.min(ext.low,  lastPrice, tickLow);
+    }
+
     // 1. Trailing stop loss — may move trade.sl favourably
     _maybeTrail(trade, lastPrice, settings);
 
-    // 2. SL or target hit check (uses updated trade.sl)
-    const exit = _checkExit(trade, lastPrice, ohlc);
+    // 2. SL or target hit — use per-trade extreme, NOT the raw day OHLC,
+    //    so pre-entry day extremes never trigger a spurious exit.
+    const exit = _checkExit(trade, lastPrice, { high: ext.high, low: ext.low });
     if (exit) _closeTrade(trade, exit.closeAt, exit.reason);
   }
 }

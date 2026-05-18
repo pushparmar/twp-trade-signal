@@ -44,7 +44,8 @@ const { to4H }            = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
-const { isAnyMarketOpen, isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const { isAnyMarketOpen, isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const { getFrontMonthFutures } = require('./macroAnalysis');
 const db                  = require('../db');
 const alertBus            = require('./alertBus');
 
@@ -242,25 +243,52 @@ function _nextCloseMs(interval, now = Date.now()) {
  * built yet (first boot before Kite auth completes the fo-registry build).
  */
 function _buildUniverse() {
+  const universe = [];
+
+  // ── NSE F&O equity stocks ─────────────────────────────────────────────────
   // Primary path: use the stable NSE equity token registry.
   const fromRegistry = foStockRegistry.getAll();
-  if (fromRegistry.length > 0) return fromRegistry;
-
-  // Fallback: derive from instrumentCache the first time (before registry exists).
-  // Identical to the fallback in scan.js _allFoStocks().
-  if (!instrumentCache.isLoaded()) return [];
-  const names = instrumentCache.getFutureNames();
-  const universe = [];
-  for (const name of names) {
-    const eq = instrumentCache.getNseEquity(name);
-    if (!eq) continue;
-    universe.push({
-      instrumentToken: eq.instrumentToken,
-      tradingsymbol:   eq.tradingsymbol,
-      exchange:        'NSE',
-      name,
-    });
+  if (fromRegistry.length > 0) {
+    universe.push(...fromRegistry);
+  } else if (instrumentCache.isLoaded()) {
+    // Fallback: derive from instrumentCache the first time (before registry exists).
+    // Identical to the fallback in scan.js _allFoStocks().
+    const names = instrumentCache.getFutureNames();
+    for (const name of names) {
+      const eq = instrumentCache.getNseEquity(name);
+      if (!eq) continue;
+      universe.push({
+        instrumentToken: eq.instrumentToken,
+        tradingsymbol:   eq.tradingsymbol,
+        exchange:        'NSE',
+        name,
+      });
+    }
   }
+
+  // ── MCX macro instruments ─────────────────────────────────────────────────
+  // Add Crude Oil, Gold, Silver so MCX alerts fire during MCX hours (09:00–23:30 IST).
+  // These are covered by patternAlertWatcher via live KiteTicker ticks, but adding
+  // them here ensures the scheduled bg scan also catches candle-close setups.
+  const MCX_MACROS = [
+    ['CRUDEOIL', 'Crude Oil'],
+    ['GOLD',     'Gold'],
+    ['SILVER',   'Silver'],
+  ];
+  for (const [symbol, label] of MCX_MACROS) {
+    try {
+      const inst = getFrontMonthFutures(symbol, 'MCX');
+      if (inst) {
+        universe.push({
+          instrumentToken: inst.instrumentToken,
+          tradingsymbol:   inst.tradingsymbol,
+          exchange:        'MCX',
+          name:            label,
+        });
+      }
+    } catch { /* instrumentCache not ready yet — skip silently */ }
+  }
+
   return universe;
 }
 
@@ -408,16 +436,23 @@ async function _runScanForInterval(interval) {
       const mtfTag = alignedTfs.length      ? ` ⚡MTF(${alignedTfs.join('+')})` : '';
       console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}`);
 
-      // ── Telegram ──────────────────────────────────────────────────────────
-      if (chatId) {
+      // ── Telegram — gated on the instrument's own exchange hours ─────────
+      // NSE / CDS stocks  → only alert during NSE session  (09:15–15:30 IST)
+      // MCX commodities   → only alert during MCX session  (09:00–23:30 IST)
+      // SSE broadcast above always fires so the Scanner UI stays live.
+      const mktOpen = inst.exchange === 'MCX' ? isMcxOpen() : isNseOpen();
+      if (chatId && mktOpen) {
         const text = patternAlertMessage.build({
-          label, tfLabel, patternLabel, result, kind: 'stock', confluenceTfs: alignedTfs,
+          label, tfLabel, patternLabel, result, kind: inst.exchange === 'MCX' ? 'macro' : 'stock',
+          confluenceTfs: alignedTfs,
         });
         try {
           await telegramNotifier.sendMessage(chatId, text);
         } catch (err) {
           console.warn(`[BgScanner] Telegram failed for ${label}:`, err.message);
         }
+      } else if (chatId && !mktOpen) {
+        console.log(`[BgScanner] ⏸ Telegram skipped — ${label} (${inst.exchange} closed)`);
       }
     }
   }
@@ -455,33 +490,36 @@ let _timers  = {};
 let _running = false;
 
 /**
- * Return the UTC-ms timestamp of the next NSE open (09:15 IST weekday) at or
- * after the supplied reference time.  Used by the scheduler to put the
- * scanner to sleep outside market hours instead of firing skipped scans
- * every 15 minutes overnight.
+ * Return the UTC-ms timestamp of the next market open (MCX 09:00 IST or NSE 09:15 IST,
+ * whichever comes first on the next available weekday) at or after `from`.
+ *
+ * MCX opens at 09:00 IST — earlier than NSE (09:15) — so waking at 09:00 covers both.
+ * Used by the scheduler to sleep outside ALL market hours instead of burning timers
+ * overnight when neither NSE nor MCX is open.
  */
-function _nextNseOpenMs(from = Date.now()) {
-  // Add 1 min to "now" so we don't return the current second if we just opened
+function _nextMarketOpenMs(from = Date.now()) {
+  // Add 1 min to avoid returning "now" when we just opened
   let ist = new Date(from + IST_OFFSET_MS + 60_000);
-  // Loop forward day-by-day until we hit a weekday at 09:15
+  // MCX opens at 09:00 IST (minute 540); use 30s buffer → 09:00:30
+  const MCX_OPEN_MIN = 540;
   for (let i = 0; i < 8; i++) {
     const dow = ist.getUTCDay();
     const min = ist.getUTCHours() * 60 + ist.getUTCMinutes();
     const isWeekend = dow === 0 || dow === 6;
-    if (!isWeekend && min < 555) {
-      // Same day — set to 09:15 IST
-      ist.setUTCHours(9, 15, 30, 0);  // 30 s buffer so the first scan lands cleanly inside
+    if (!isWeekend && min < MCX_OPEN_MIN) {
+      // Same day — wake at MCX open 09:00:30 IST
+      ist.setUTCHours(9, 0, 30, 0);
       return ist.getTime() - IST_OFFSET_MS;
     }
-    // Roll to next day at 09:15
+    // Roll to next calendar day at 09:00:30 IST
     ist.setUTCDate(ist.getUTCDate() + 1);
-    ist.setUTCHours(9, 15, 30, 0);
+    ist.setUTCHours(9, 0, 30, 0);
     const newDow = ist.getUTCDay();
     if (newDow !== 0 && newDow !== 6) {
       return ist.getTime() - IST_OFFSET_MS;
     }
   }
-  // Shouldn't reach here — fall back to "tomorrow"
+  // Fallback — shouldn't reach here
   return from + 24 * 60 * 60 * 1000;
 }
 
@@ -492,14 +530,14 @@ function _scheduleNext(interval) {
   let   fireAt = _nextCloseMs(interval, now);
 
   // ── Off-hours guard ──────────────────────────────────────────────────────
-  // The background scanner only screens NSE F&O stocks, so off-NSE-hours we
-  // suspend the scheduler entirely instead of firing skipped scans every
-  // 15 minutes through the night.  Resume at the next 09:15 IST weekday open.
-  if (!isNseOpen(fireAt)) {
-    const wakeAt = _nextNseOpenMs(now);
+  // Now that the universe includes MCX instruments (open 09:00–23:30 IST) as well
+  // as NSE stocks (09:15–15:30 IST), we sleep only when BOTH markets are closed —
+  // i.e. outside 09:00–23:30 IST on weekdays.  Resume at 09:00 IST (MCX open).
+  if (!isAnyMarketOpen(fireAt)) {
+    const wakeAt = _nextMarketOpenMs(now);
     if (wakeAt > fireAt) {
       const wakeIST = new Date(wakeAt + IST_OFFSET_MS).toISOString().replace('T', ' ').slice(0, 16);
-      console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — market closed, sleeping until NSE open ${wakeIST} IST`);
+      console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — all markets closed, sleeping until ${wakeIST} IST`);
       fireAt = wakeAt;
     }
   }

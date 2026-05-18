@@ -21,7 +21,7 @@ const store            = require('../store');
 const { to4H }         = require('./ichimoku');
 const telegramNotifier = require('./telegramNotifier');
 const patternAlertMessage = require('./patternAlertMessage');
-const { isNseOpen, isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const { isNseOpen, isMcxOpen, isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db               = require('../db');
 const alertBus         = require('./alertBus');
 
@@ -201,10 +201,17 @@ async function _runAndBroadcast(token, interval, candles) {
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
 
-    // ── Telegram: gated on market hours — chatId may be unset ────────────────
+    // ── Telegram: gated on the instrument's own exchange hours ───────────────
     // Fire-and-forget so a slow Telegram round-trip can't block the tick handler
     // or starve later pattern checks in this loop.
-    if (chatId && isNseOpen()) {
+    // Gate on the correct exchange: MCX symbols use isMcxOpen(), everything
+    // else (NSE equities, indices, futures) uses isNseOpen().  This mirrors
+    // the logic in patternAlertWatcher.js and prevents NSE stock alerts from
+    // firing during MCX-only hours (15:30–23:30 IST).
+    const _mcxHint  = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
+    const _isMcxSym = _mcxHint.test(String(label ?? ''));
+    const _mktOpen  = _isMcxSym ? isMcxOpen() : isNseOpen();
+    if (chatId && _mktOpen) {
       const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind: 'stock' });
       telegramNotifier.sendMessage(chatId, text).catch((err) => {
         console.warn(`[LiveScanner] Telegram send failed for ${label} (${tfLabel}):`, err.message);
