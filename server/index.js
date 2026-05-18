@@ -146,6 +146,18 @@ app.listen(PORT, async () => {
       // This also prevents stale/expired option strikes from persisting day-to-day.
       store.setWatchlist([]);
       console.log('[KiteTicker] Watchlist cleared on boot — client will re-subscribe on connect');
+
+      // Re-subscribe tokens for any open paper trades loaded from trades-current.json.
+      // Without this, server restarts would stop live-tick monitoring for those trades
+      // until the client manually re-places them.
+      const openTradeTokens = store.getPaperTrades()
+        .filter((t) => t.status === 'OPEN' && t.token)
+        .map((t) => Number(t.token));
+      const uniqueTokens = [...new Set(openTradeTokens)];
+      if (uniqueTokens.length > 0) {
+        kiteTicker.subscribe(uniqueTokens);
+        console.log(`[KiteTicker] Re-subscribed ${uniqueTokens.length} open paper trade token(s) from disk`);
+      }
     } catch (err) {
       console.warn('[KiteTicker] Could not connect on boot:', err.message);
     }

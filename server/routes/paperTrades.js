@@ -1,8 +1,47 @@
-const express = require('express');
-const fs      = require('fs');
-const path    = require('path');
-const { addPaperTrade, getPaperTrades, closePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance } = require('../store');
-const { broadcast } = require('../sseHub');
+const express     = require('express');
+const fs          = require('fs');
+const path        = require('path');
+const { addPaperTrade, getPaperTrades, closePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
+const { broadcast }   = require('../sseHub');
+const kiteTicker  = require('../services/kiteTicker');
+
+// ── Ticker subscription helpers ───────────────────────────────────────────────
+
+/**
+ * Subscribe a paper trade token to the Kite ticker so live ticks flow in and
+ * the client's usePaperAutoClose hook can evaluate SL / target hits.
+ */
+function _subscribeTradeToken(token) {
+  if (!token) return;
+  try {
+    kiteTicker.subscribe([Number(token)]);
+  } catch (err) {
+    console.warn(`[Paper] Could not subscribe token ${token}:`, err.message);
+  }
+}
+
+/**
+ * Unsubscribe a token ONLY when it is no longer needed by any open paper trade
+ * AND is not present in the user's watchlist.  Calling this after a trade closes
+ * keeps the ticker lean without disrupting watchlist live-price display.
+ */
+function _unsubscribeIfUnneeded(token) {
+  if (!token) return;
+  const num = Number(token);
+  const stillOpen = getPaperTrades().some(
+    (t) => t.status === 'OPEN' && Number(t.token) === num,
+  );
+  if (stillOpen) return; // another open trade still needs this token
+
+  const inWatchlist = getWatchlist().some((w) => Number(w.instrumentToken) === num);
+  if (inWatchlist) return; // watchlist display needs it
+
+  try {
+    kiteTicker.unsubscribe([num]);
+  } catch (err) {
+    console.warn(`[Paper] Could not unsubscribe token ${num}:`, err.message);
+  }
+}
 
 const router = express.Router();
 
@@ -28,12 +67,15 @@ router.get('/', (req, res) => {
 
 // Create a new paper trade — called by the client after adding it locally so the
 // server's trades-current.json stays in sync for the daily 6 AM archive.
+// Also subscribes the instrument token to the Kite ticker so live ticks flow
+// in for this trade immediately, enabling real-time SL / target monitoring.
 router.post('/', (req, res) => {
   const trade = req.body;
   if (!trade || !trade.id || !trade.symbol || !trade.entryPrice) {
     return res.status(400).json({ error: 'Invalid trade — id, symbol and entryPrice are required' });
   }
   addPaperTrade(trade); // writes through to trades-current.json
+  _subscribeTradeToken(trade.token);
   res.status(201).json(trade);
 });
 
@@ -46,6 +88,8 @@ router.post('/:id/close', (req, res) => {
   if (!trade) return res.status(404).json({ error: 'Trade not found or already closed' });
   broadcast('paper_trade_update', trade);
   broadcast('paper_balance', getPaperBalance());
+  // Unsubscribe the token if no other open trade or watchlist entry needs it
+  _unsubscribeIfUnneeded(trade.token);
   res.json(trade);
 });
 

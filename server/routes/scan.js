@@ -123,7 +123,10 @@ const _to4H = to4H;
 // ranges → faster fetches + better cache hit rates on repeat scans.
 const SCAN_BARS = {
   '15minute': 100,
-  '60minute': 300,  // 4h synthesis needs 52×4=208 minimum; 300 adds headroom for holiday weeks
+  // 4h synthesis: NSE produces exactly 1 4h candle per trading day (6 1h bars/day, only 4
+  // form a complete group). To get the 52 bars required by Ichimoku, we need ≥ 52 × 6 = 312
+  // 1h bars; 450 gives 75 4h candles with room for holiday-heavy weeks.
+  '60minute': 450,
   'day':      150,  // ~214 trading days — well above Ichimoku's 52-bar requirement
 };
 

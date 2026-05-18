@@ -58,13 +58,17 @@ const CLOSE_DELAY_MS = 45 * 1000;  // 45 seconds
 const MIN_BARS = 52;
 
 // Bar counts to request per interval (matches the /api/scan endpoint).
-// 1h: 300 gives ~65 calendar days → ~220 trading hours — well above the 52-bar
-//     Ichimoku minimum and safe against holiday-heavy weeks.
-//     4h synthesis (to4H) needs 52×4 = 208 1h bars at minimum; 300 adds headroom.
+// 1h:  NSE produces 6 1h bars per trading day. 450 bars = ~75 trading days, giving
+//      adequate Ichimoku history for direct 1h scans.
+// 4h:  Synthesised from 60minute bars via to4H().  NSE gives exactly 1 4h candle per
+//      trading day (first 4 of 6 1h bars form a complete group; last 2 are dropped).
+//      Ichimoku requires ≥ 52 bars → need ≥ 52 × 6 = 312 1h bars → use 450 for buffer.
+//      FIX: the old value of 300 gave only 50 4h candles (<52) → all patterns returned
+//      null → zero 4h alerts.
 // day: 150 gives ~300 calendar days → ~214 trading days — enough for all patterns.
 const SCAN_BARS = {
   '15minute': 100,
-  '60minute': 300,
+  '60minute': 450,
   'day':      150,
 };
 
