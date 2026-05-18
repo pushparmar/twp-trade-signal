@@ -4,6 +4,7 @@ const store = require('../store');
 const signalParser = require('./signalParser');
 const kiteService = require('./kiteService');
 const { broadcast } = require('../sseHub');
+const { isAnyMarketOpen } = require('../utils/marketHours');
 
 let offset     = 0;
 let isPolling  = false;
@@ -119,6 +120,22 @@ async function handleUpdate(update) {
   }
 
   const parsed = signalParser.parse(text);
+
+  // Market-hours gate — drop signals outside live session (NSE 09:15–15:30,
+  // MCX 09:00–23:30, weekdays only).  We still record the message in
+  // lastMessages so the dashboard shows it, but tagged NO_MATCH_OFF_HOURS.
+  if (parsed && !isAnyMarketOpen()) {
+    console.log(`[Telegram] ⏰ Signal ignored — market closed: ${parsed.action} ${parsed.symbol}`);
+    lastMessages.unshift({
+      ts:     new Date().toISOString(),
+      text,
+      chatId,
+      parsed,
+      status: 'OFF_HOURS',
+    });
+    if (lastMessages.length > 50) lastMessages.pop();
+    return;
+  }
 
   lastMessages.unshift({
     ts: new Date().toISOString(),

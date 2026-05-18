@@ -95,6 +95,7 @@ function insertAlert(alert, source = 'background') {
     // Trade levels
     sl:             alert.sl                      ?? null,
     target:         alert.target                  ?? null,
+    targetSource:   alert.targetSource            ?? null,
     // Volume
     volumeRatio:    alert.volumeRatio             ?? null,
     volumeConfirmed:alert.volumeConfirmed         ?? null,

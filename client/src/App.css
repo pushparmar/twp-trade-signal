@@ -4107,3 +4107,15 @@ body {
 .hdr-mkt--open    { background: rgba(74,222,128,.18); color: #4ade80; }
 .hdr-mkt--preopen { background: rgba(251,191,36,.18); color: #fbbf24; }
 .hdr-mkt--closed  { background: rgba(148,163,184,.18); color: #94a3b8; }
+
+/* ── Numeric column headers — right-aligned to match td.td-num data ───────── */
+.kite-table th.th-num {
+  text-align: right;
+}
+
+/* Swing-target indicator inside R:R badge */
+.scan-rr-swing {
+  margin-left: 3px;
+  font-size: 9px;
+  opacity: .85;
+}

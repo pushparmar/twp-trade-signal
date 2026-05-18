@@ -513,9 +513,10 @@ router.post('/', async (req, res) => {
                 senkouB:         result.senkouB         ?? null,
                 price26ago:      result.price26ago      ?? null,
                 twistBarsAgo:    result.twistBarsAgo    ?? null,
-                // Risk management — Ichimoku natural SL + 2:1 R:R target
+                // Risk management — Ichimoku natural SL, target = max(2×risk, swing)
                 sl:              result.sl              ?? null,
                 target:          result.target          ?? null,
+                targetSource:    result.targetSource    ?? null,
                 // Volume context — ratio vs 20-bar avg; confirmed when ≥ 1.2×
                 volumeRatio:     result.volumeRatio     ?? null,
                 volumeConfirmed: result.volumeConfirmed ?? null,

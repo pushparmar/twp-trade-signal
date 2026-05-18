@@ -27,43 +27,100 @@ const {
 // natural Kijun/cloud SL is preserved when it's already sensible.
 const MIN_SL_ATR_MULT = 0.5;
 
+// Natural-target search window — how many recent bars to scan for swing high/low.
+// 30 bars is enough to catch the most recent meaningful structure on any TF
+// without reaching back to stale levels from a previous trend.
+const NATURAL_TARGET_LOOKBACK = 30;
+
+/**
+ * Find a natural resistance (bullish) or support (bearish) level the trade
+ * could realistically extend to.  We use the highest high (bullish) or lowest
+ * low (bearish) in the last NATURAL_TARGET_LOOKBACK closed bars — a simple but
+ * effective proxy for the "next significant level" a trend trader would target.
+ *
+ * Returns null when:
+ *   • candles[] is too short
+ *   • the swing level is on the wrong side of entry (e.g. for BUY, swing high
+ *     is already below entry — meaning we're already in price discovery)
+ *
+ * @param {object[]} candles  full candle array (includes current)
+ * @param {'bullish'|'bearish'} signal
+ * @param {number}   entry    typically the pattern's close price
+ * @returns {number|null}
+ */
+function _naturalTarget(candles, signal, entry) {
+  if (!Array.isArray(candles) || candles.length < NATURAL_TARGET_LOOKBACK + 2) return null;
+
+  // Exclude the current bar so live ticks during pattern formation don't pin
+  // the swing to the entry itself.
+  const end   = candles.length - 1;
+  const start = Math.max(0, end - NATURAL_TARGET_LOOKBACK);
+
+  if (signal === 'bullish') {
+    let hi = -Infinity;
+    for (let i = start; i < end; i++) {
+      if (candles[i]?.high > hi) hi = candles[i].high;
+    }
+    return hi > entry ? hi : null;
+  } else {
+    let lo = Infinity;
+    for (let i = start; i < end; i++) {
+      if (candles[i]?.low < lo) lo = candles[i].low;
+    }
+    return lo < entry ? lo : null;
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Compute a suggested SL and 2:1 R:R target from a pattern result.
+ * Compute a suggested SL and target from a pattern result.
  *
- * SL anchor per pattern:
- *   kijun-bounce  → Kijun itself  (close through it = setup failed)
- *   cloud patterns → cloud edge   (re-entering the cloud = setup failed)
+ * ── SL ─────────────────────────────────────────────────────────────────────
+ *   Anchor per pattern:
+ *     kijun-bounce  → Kijun itself  (close through it = setup failed)
+ *     cloud patterns → cloud edge   (re-entering the cloud = setup failed)
  *
- * ATR floor:
- *   When the natural SL sits closer than MIN_SL_ATR_MULT × ATR14, it gets
- *   widened to that floor.  This prevents 1-rupee-stop pathologies on tight
- *   Kijun touches and stops getting wicked out by normal noise.  Skipped
- *   when candles are unavailable or there aren't enough bars for ATR14.
+ *   ATR floor: when the natural SL sits closer than MIN_SL_ATR_MULT × ATR14
+ *   it gets widened to that floor.  Prevents 1-rupee-stop pathologies on
+ *   tight Kijun touches and stops getting wicked out by normal noise.
  *
- * Fallback when the natural level is missing or on the wrong side of close:
- *   max(0.5% × close, 0.5 × ATR14) — always returns a valid pair.
+ *   Fallback when no natural level is available or it's on the wrong side
+ *   of close:  max(0.5% × close, 0.5 × ATR14).
  *
- * Target = entry ± 2 × risk  (fixed 2:1 R:R minimum; max uncapped).
+ * ── Target (option A — "1:2 minimum, max anything") ────────────────────────
+ *   We compute TWO candidates and pick whichever is FURTHER from entry:
  *
- * @param {string} patternId  — one of the PATTERNS keys
+ *     a) Fixed 2× risk target           — guaranteed 1:2 R:R floor
+ *     b) Natural swing high/low target  — highest high (bullish) or lowest
+ *                                          low (bearish) in the last 30 bars
+ *
+ *   If the natural level is closer than 2× risk it's ignored — we never go
+ *   below 1:2.  When the natural level is further (e.g. trend has more room
+ *   to run), we use it directly so winners ride to real resistance.
+ *
+ *   targetSource indicates which candidate won: 'fixed' or 'swing'.
+ *
+ * @param {string} patternId
  * @param {'bullish'|'bearish'} signal
- * @param {object} result     — the raw return from the ichimoku detector
- * @param {object[]} [candles] — optional candle array used to derive ATR
- * @returns {{ sl: number|null, target: number|null, atr?: number|null }}
+ * @param {object} result      raw return from the ichimoku detector
+ * @param {object[]} [candles] optional candle array used for ATR + swing scan
+ * @returns {{
+ *   sl: number|null, target: number|null,
+ *   atr: number|null, targetSource: 'fixed'|'swing'|null
+ * }}
  */
 function computeSLTarget(patternId, signal, result, candles) {
   const { close, cloudBottom, cloudTop, kijun, kijunValue } = result;
-  if (!close || !signal) return { sl: null, target: null };
+  if (!close || !signal) return { sl: null, target: null, atr: null, targetSource: null };
 
   const kijunLevel = kijun ?? kijunValue ?? null;
-  // ATR14 — used both as a floor for the natural SL and as a richer fallback
   const atr = candles ? getATR(candles, 14) : null;
   const atrFloor = atr != null ? MIN_SL_ATR_MULT * atr : null;
 
+  // ── SL anchor ──────────────────────────────────────────────────────────────
   let sl;
   if (patternId === 'kijun-bounce') {
     sl = kijunLevel;
@@ -73,9 +130,9 @@ function computeSLTarget(patternId, signal, result, candles) {
       : (cloudTop    ?? kijunLevel);
   }
 
-  // Fallback when no natural level was found — use the bigger of 0.5% and 0.5·ATR
+  // Fallback when no natural level was found
   if (sl == null) {
-    const pctSl = signal === 'bullish' ? close * 0.005 : close * 0.005;
+    const pctSl     = close * 0.005;
     const slDistance = atrFloor != null ? Math.max(pctSl, atrFloor) : pctSl;
     sl = signal === 'bullish' ? close - slDistance : close + slDistance;
   }
@@ -92,13 +149,28 @@ function computeSLTarget(patternId, signal, result, candles) {
     }
   }
 
-  const risk   = Math.abs(close - sl);
-  const target = signal === 'bullish' ? close + 2 * risk : close - 2 * risk;
+  // ── Target — option A: max(2×risk, recentSwing) in the favourable direction ─
+  const risk        = Math.abs(close - sl);
+  const fixedTarget = signal === 'bullish' ? close + 2 * risk : close - 2 * risk;
+
+  let target       = fixedTarget;
+  let targetSource = 'fixed';
+  const swing      = candles ? _naturalTarget(candles, signal, close) : null;
+  if (swing != null) {
+    if (signal === 'bullish' && swing > fixedTarget) {
+      target       = swing;
+      targetSource = 'swing';
+    } else if (signal === 'bearish' && swing < fixedTarget) {
+      target       = swing;
+      targetSource = 'swing';
+    }
+  }
 
   return {
-    sl:     Math.round(sl     * 100) / 100,
-    target: Math.round(target * 100) / 100,
-    atr:    atr != null ? Math.round(atr * 100) / 100 : null,
+    sl:           Math.round(sl     * 100) / 100,
+    target:       Math.round(target * 100) / 100,
+    atr:          atr != null ? Math.round(atr * 100) / 100 : null,
+    targetSource,
   };
 }
 
@@ -151,8 +223,8 @@ const PATTERNS = {
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
     },
   },
 
@@ -166,8 +238,8 @@ const PATTERNS = {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
     },
   },
 
@@ -184,8 +256,8 @@ const PATTERNS = {
       if (!_tkAligned(result)) return { matched: false };
       if (result.consecutiveBars > maxBars) return { matched: false };
       if (result.score < 3) return { matched: false };
-      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
     },
   },
 
@@ -199,8 +271,8 @@ const PATTERNS = {
       const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
     },
   },
 

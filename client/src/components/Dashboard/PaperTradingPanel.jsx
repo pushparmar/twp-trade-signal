@@ -475,12 +475,12 @@ export default function PaperTradingPanel() {
                       <th>Time</th>
                       <th>Action</th>
                       <th>Symbol</th>
-                      <th>Entry</th>
-                      <th>LTP</th>
-                      <th>Qty</th>
-                      <th>SL</th>
-                      <th>Target</th>
-                      <th>Live P&amp;L</th>
+                      <th className="th-num">Entry</th>
+                      <th className="th-num">LTP</th>
+                      <th className="th-num">Qty</th>
+                      <th className="th-num">SL</th>
+                      <th className="th-num">Target</th>
+                      <th className="th-num">Live P&amp;L</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -510,10 +510,10 @@ export default function PaperTradingPanel() {
                   <th>Closed</th>
                   <th>Action</th>
                   <th>Symbol</th>
-                  <th>Entry</th>
-                  <th>Exit</th>
-                  <th>Qty</th>
-                  <th>P&L</th>
+                  <th className="th-num">Entry</th>
+                  <th className="th-num">Exit</th>
+                  <th className="th-num">Qty</th>
+                  <th className="th-num">P&L</th>
                 </tr>
               </thead>
               <tbody>

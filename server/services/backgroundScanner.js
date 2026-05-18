@@ -44,7 +44,7 @@ const { to4H }            = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
-const { isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const { isAnyMarketOpen, isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db                  = require('../db');
 const alertBus            = require('./alertBus');
 
@@ -331,9 +331,10 @@ async function _runScanForInterval(interval) {
         barsAgo:           result.barsAgo          ?? null,
         consecutiveBars:   result.consecutiveBars  ?? null,
         cloudThickness:    result.cloudThickness   ?? null,
-        // SL / Target
+        // SL / Target — targetSource = 'fixed' (2× risk) or 'swing' (recent high/low)
         sl:                result.sl               ?? null,
         target:            result.target           ?? null,
+        targetSource:      result.targetSource     ?? null,
         // Volume
         volumeRatio:       result.volumeRatio      ?? null,
         volumeConfirmed:   result.volumeConfirmed  ?? null,
@@ -400,16 +401,58 @@ const _lastRunAt = {};
 let _timers  = {};
 let _running = false;
 
+/**
+ * Return the UTC-ms timestamp of the next NSE open (09:15 IST weekday) at or
+ * after the supplied reference time.  Used by the scheduler to put the
+ * scanner to sleep outside market hours instead of firing skipped scans
+ * every 15 minutes overnight.
+ */
+function _nextNseOpenMs(from = Date.now()) {
+  // Add 1 min to "now" so we don't return the current second if we just opened
+  let ist = new Date(from + IST_OFFSET_MS + 60_000);
+  // Loop forward day-by-day until we hit a weekday at 09:15
+  for (let i = 0; i < 8; i++) {
+    const dow = ist.getUTCDay();
+    const min = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+    const isWeekend = dow === 0 || dow === 6;
+    if (!isWeekend && min < 555) {
+      // Same day — set to 09:15 IST
+      ist.setUTCHours(9, 15, 30, 0);  // 30 s buffer so the first scan lands cleanly inside
+      return ist.getTime() - IST_OFFSET_MS;
+    }
+    // Roll to next day at 09:15
+    ist.setUTCDate(ist.getUTCDate() + 1);
+    ist.setUTCHours(9, 15, 30, 0);
+    const newDow = ist.getUTCDay();
+    if (newDow !== 0 && newDow !== 6) {
+      return ist.getTime() - IST_OFFSET_MS;
+    }
+  }
+  // Shouldn't reach here — fall back to "tomorrow"
+  return from + 24 * 60 * 60 * 1000;
+}
+
 function _scheduleNext(interval) {
   if (!_running) return;
 
   const now    = Date.now();
-  const fireAt = _nextCloseMs(interval, now);
+  let   fireAt = _nextCloseMs(interval, now);
+
+  // ── Off-hours guard ──────────────────────────────────────────────────────
+  // The background scanner only screens NSE F&O stocks, so off-NSE-hours we
+  // suspend the scheduler entirely instead of firing skipped scans every
+  // 15 minutes through the night.  Resume at the next 09:15 IST weekday open.
+  if (!isNseOpen(fireAt)) {
+    const wakeAt = _nextNseOpenMs(now);
+    if (wakeAt > fireAt) {
+      const wakeIST = new Date(wakeAt + IST_OFFSET_MS).toISOString().replace('T', ' ').slice(0, 16);
+      console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — market closed, sleeping until NSE open ${wakeIST} IST`);
+      fireAt = wakeAt;
+    }
+  }
+
   const delay  = fireAt - now;
-
-  const fireIST = new Date(fireAt + IST_OFFSET_MS)
-    .toISOString().replace('T', ' ').slice(0, 16);
-
+  const fireIST = new Date(fireAt + IST_OFFSET_MS).toISOString().replace('T', ' ').slice(0, 16);
   console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — next scan at ${fireIST} IST (in ${Math.round(delay / 60000)} min)`);
 
   _timers[interval] = setTimeout(async () => {

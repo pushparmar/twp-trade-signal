@@ -28,7 +28,7 @@ const { broadcast }     = require('../sseHub');
 const alertBus          = require('./alertBus');
 const kiteTicker        = require('./kiteTicker');
 const db                = require('../db');
-const { IST_OFFSET_MS } = require('../utils/marketHours');
+const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
@@ -88,6 +88,19 @@ function _onAlert(alert, source) {
 
   if (!entry || !sl || !target || !token || !signal) return;
 
+  // ── 2.5  Market-hours gate ────────────────────────────────────────────────
+  // Auto trades go in ONLY during live trading sessions:
+  //   NSE: 09:15–15:30 IST  · MCX: 09:00–23:30 IST  · weekdays only
+  //
+  // We don't know the exchange from the alert payload, so the safe rule is:
+  //   – If NEITHER market is open, never fire.
+  //   – If only MCX is open (after 15:30), only fire when the symbol looks like
+  //     an MCX instrument.  Otherwise it's an NSE stock that already closed.
+  const mcxSymbolHint = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
+  const isMcxSymbol   = mcxSymbolHint.test(String(alert.label ?? ''));
+  if (!isNseOpen() && !isMcxOpen()) return;                          // both closed
+  if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;           // NSE closed, MCX open, NSE stock — skip
+
   const numToken = Number(token);
 
   // ── 3. Dedup — once per (token, interval, patternId, signal) per IST day ─
@@ -96,15 +109,21 @@ function _onAlert(alert, source) {
   const lastFired = _dedup.get(dedupKey);
   if (lastFired && lastFired === today) return;
 
-  // ── 4. No stacking — skip if OPEN auto-trade already exists for this slot ─
+  // ── 4. No stacking — skip if ANY OPEN trade already exists for this
+  //       (token, interval) slot, regardless of source.  Re-entries fired
+  //       by the scanner while a previous trade is still working must NOT
+  //       create a duplicate order — we wait for the existing one to close
+  //       (SL, target, TSL, or manual) before opening another.
   const alreadyOpen = store.getPaperTrades().some(
     (t) =>
       t.status   === 'OPEN'  &&
-      t.source   === 'auto'  &&
       Number(t.token) === numToken &&
       t.interval === interval,
   );
-  if (alreadyOpen) return;
+  if (alreadyOpen) {
+    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open trade already exists on this TF`);
+    return;
+  }
 
   // ── 5. Qualify the trade (testing mode: quantity=1, R:R ≥ minRR) ─────────
   const pos = _qualifyTrade(entry, sl, target, settings.minRR);
@@ -160,6 +179,7 @@ function _onAlert(alert, source) {
     riskPerUnit:     pos.riskPerUnit,
     rrRatio:         pos.rrRatio,
     potentialProfit: pos.potentialProfit,
+    targetSource:    alert.targetSource ?? null,
   };
 
   // ── 8. Persist + broadcast ────────────────────────────────────────────────

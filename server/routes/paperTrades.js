@@ -82,6 +82,86 @@ router.get('/open-from-db', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/paper/db-stats
+ * Quick diagnostic — counts trades + open/closed split in MongoDB so the user
+ * can verify writes are actually landing without opening Atlas.
+ */
+/**
+ * GET /api/paper/db-test
+ * SYNCHRONOUS write+read diagnostic — surfaces the exact reason a paper_trade
+ * write would fail (auth, permission, validation, schema, etc.) by doing the
+ * call awaited instead of fire-and-forget.  Inserts a throwaway doc, reads it
+ * back, deletes it, and returns the result.
+ *
+ * The fire-and-forget upserts in production swallow errors so they never
+ * affect the trading hot path — this endpoint exists purely to find out WHY.
+ */
+router.get('/db-test', async (req, res) => {
+  const mongo = require('../services/mongoClient');
+  const result = { mongoReady: mongo.isReady(), steps: [] };
+
+  if (!mongo.isReady()) {
+    return res.status(500).json({ ...result, error: 'mongo.isReady() === false' });
+  }
+
+  const testId = `db-test-${Date.now()}`;
+  try {
+    // 1. Count before
+    const before = await mongo.db().collection('paper_trades').countDocuments({});
+    result.steps.push({ step: 'count_before', value: before });
+
+    // 2. Insert with full schema matching upsertTrade
+    const insertResult = await mongo.db().collection('paper_trades').insertOne({
+      tradeId:     testId,
+      symbol:      'DB-TEST',
+      token:       0,
+      action:      'BUY',
+      entryPrice:  1,
+      status:      'OPEN',
+      openedAt:    new Date(),
+      createdAt:   new Date(),
+      updatedAt:   new Date(),
+    });
+    result.steps.push({ step: 'insert', acknowledged: insertResult.acknowledged, insertedId: String(insertResult.insertedId) });
+
+    // 3. Read it back
+    const doc = await mongo.db().collection('paper_trades').findOne({ tradeId: testId });
+    result.steps.push({ step: 'readback', found: doc !== null, status: doc?.status });
+
+    // 4. Count after
+    const after = await mongo.db().collection('paper_trades').countDocuments({});
+    result.steps.push({ step: 'count_after', value: after });
+
+    // 5. Clean up
+    const del = await mongo.db().collection('paper_trades').deleteOne({ tradeId: testId });
+    result.steps.push({ step: 'cleanup', deletedCount: del.deletedCount });
+
+    result.ok = insertResult.acknowledged && doc !== null;
+    res.json(result);
+  } catch (err) {
+    result.error = err.message;
+    result.stack = err.stack?.split('\n').slice(0, 4);
+    res.status(500).json(result);
+  }
+});
+
+router.get('/db-stats', async (req, res) => {
+  try {
+    const opens = await db.tradeRepo.getOpenTrades();
+    res.json({
+      mongoConnected: opens != null,
+      openInDb:       opens.length,
+      memoryTrades:   getPaperTrades().length,
+      message:        opens.length === 0
+        ? 'No open trades in MongoDB yet. Place a trade or wait for an auto-fire.'
+        : `${opens.length} open trade(s) persisted in MongoDB.`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Create a new paper trade — called by the client after adding it locally so the
 // server's trades-current.json stays in sync for the daily 6 AM archive.
 // Also subscribes the instrument token to the Kite ticker so live ticks flow

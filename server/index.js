@@ -111,20 +111,14 @@ app.listen(PORT, async () => {
       return;
     }
 
-    // If the in-memory store has no trades after the disk-load attempt, check
-    // MongoDB for open trades and restore them.  This covers the case where
-    // trades-current.json was wiped (e.g. no Railway persistent volume).
+    // ── Restore OPEN trades from MongoDB if disk file was missing ───────────
     if (store.getPaperTrades().length === 0) {
       try {
         const openFromMongo = await db.tradeRepo.getOpenTrades();
         if (openFromMongo.length > 0) {
-          // addPaperTrade writes through to trades-current.json, re-creating it
-          for (const trade of openFromMongo) {
-            store.addPaperTrade(trade);
-          }
+          for (const trade of openFromMongo) store.addPaperTrade(trade);
           console.log(`[DB] Restored ${openFromMongo.length} open trade(s) from MongoDB`);
 
-          // Re-subscribe tokens so live SL/target monitoring resumes
           const tokens = [...new Set(openFromMongo.map((t) => t.token).filter(Boolean).map(Number))];
           if (tokens.length > 0) {
             try { kiteTicker.subscribe(tokens); } catch { /* ticker may not be connected yet */ }
@@ -132,6 +126,17 @@ app.listen(PORT, async () => {
         }
       } catch (err) {
         console.warn('[DB] Could not restore open trades from MongoDB:', err.message);
+      }
+    }
+
+    // ── Backfill: any trades already in memory but not yet in MongoDB ───────
+    // Covers the race where a trade was placed during the brief window
+    // BEFORE db.init() completed (mongo.isReady() was false at write time).
+    const memTrades = store.getPaperTrades();
+    if (memTrades.length > 0) {
+      console.log(`[DB] Backfilling ${memTrades.length} in-memory trade(s) to MongoDB`);
+      for (const trade of memTrades) {
+        db.tradeRepo.upsertTrade(trade);
       }
     }
   }).catch((err) => {

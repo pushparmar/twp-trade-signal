@@ -10,6 +10,26 @@ function fmt(n) {
   return Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// MCX commodity prefixes — used as a fallback when alert.exchange is missing.
+// Covers everything that trades on MCX in India (Energy + Metals + Agri).
+const MCX_SYMBOL_RE = /^(CRUDE|NATURAL|BRENT|GOLD|SILVER|COPPER|ZINC|LEAD|NICKEL|ALUMIN|MENTHA|CASTOR|COTTON|CARDAM)/i;
+
+/**
+ * Determine the exchange an alert belongs to for filtering purposes.
+ * Prefers alert.exchange when present; falls back to a label regex.
+ * Anything that matches MCX_SYMBOL_RE is treated as MCX; everything else NSE.
+ */
+function alertExchange(alert) {
+  if (alert?.exchange) {
+    const e = String(alert.exchange).toUpperCase();
+    if (e === 'MCX') return 'MCX';
+    if (e === 'NSE' || e === 'NFO' || e === 'BSE' || e === 'BFO') return 'NSE';
+    // CDS / unknown → treat as NSE for now (filter is binary in the UI)
+    return 'NSE';
+  }
+  return MCX_SYMBOL_RE.test(String(alert?.label ?? alert?.tradingsymbol ?? '')) ? 'MCX' : 'NSE';
+}
+
 function relativeTime(ts) {
   if (!ts) return '—';
   const diffSec = Math.floor((Date.now() - ts) / 1000);
@@ -131,20 +151,25 @@ function ScoreDots({ score, signal, patternId }) {
 /**
  * R:R ratio badge — shown next to score so traders see actual reward:risk
  * at a glance.  Uses entry/sl/target from the alert; colors green for ≥3.0.
+ *
+ * When `targetSource === 'swing'` we suffix a small 📐 indicator so traders
+ * know the target was extended to a recent swing high/low (instead of the
+ * fixed 2× risk floor).  Hover for full context.
  */
-function RRBadge({ entry, sl, target }) {
+function RRBadge({ entry, sl, target, targetSource }) {
   if (!entry || !sl || !target) return null;
   const risk   = Math.abs(entry - sl);
   if (risk < 0.01) return null;
   const reward = Math.abs(target - entry);
   const rr     = reward / risk;
   const cls    = rr >= 3 ? 'scan-rr-badge--big' : rr >= 2 ? 'scan-rr-badge--ok' : 'scan-rr-badge--low';
+  const swing  = targetSource === 'swing';
+  const tip    = swing
+    ? `Reward:Risk = ${rr.toFixed(2)} · Target lifted to recent swing high/low ₹${target} · SL ₹${sl}`
+    : `Reward:Risk = ${rr.toFixed(2)} · Fixed 2× risk target ₹${target} · SL ₹${sl}`;
   return (
-    <span
-      className={`scan-rr-badge ${cls}`}
-      title={`Reward:Risk = ${rr.toFixed(2)} · SL ₹${sl} · Target ₹${target}`}
-    >
-      1:{rr.toFixed(1)}
+    <span className={`scan-rr-badge ${cls}`} title={tip}>
+      1:{rr.toFixed(1)}{swing && <span className="scan-rr-swing">📐</span>}
     </span>
   );
 }
@@ -227,7 +252,7 @@ function ScanRow({ alert, onSelect, onBuy }) {
       </td>
       <td className="scan-cell scan-cell--score">
         <ScoreDots score={alert.score} signal={alert.signal} patternId={alert.patternId} />
-        <RRBadge entry={alert.close} sl={alert.sl} target={alert.target} />
+        <RRBadge entry={alert.close} sl={alert.sl} target={alert.target} targetSource={alert.targetSource} />
       </td>
       <td className="scan-cell scan-cell--price">{alert.close != null ? fmt(alert.close) : '—'}</td>
       <td className="scan-cell scan-cell--time">{relativeTime(alert.ts)}</td>
@@ -652,10 +677,16 @@ function FilterBar({
   signal, onSignal, interval, onInterval, pattern, onPattern, patternOptions,
   dedup, onDedup,
   volOnly, onVolOnly, mtfOnly, onMtfOnly, minRR, onMinRR,
+  exchange, onExchange,
 }) {
-  const SIGNALS   = ['all', 'bullish', 'bearish'];
-  const INTERVALS = ['all', '15minute', '60minute', '4h', 'day'];
-  const TF_LABEL  = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+  const SIGNALS    = ['all', 'bullish', 'bearish'];
+  const INTERVALS  = ['all', '15minute', '60minute', '4h', 'day'];
+  const TF_LABEL   = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+  const EXCHANGES  = [
+    { id: 'all', label: 'All' },
+    { id: 'NSE', label: 'NSE' },
+    { id: 'MCX', label: 'MCX' },
+  ];
   const MIN_RR_OPTIONS = [
     { value: 0,   label: 'Any' },
     { value: 1.5, label: '≥ 1:1.5' },
@@ -688,6 +719,21 @@ function FilterBar({
             onClick={() => onInterval(iv)}
           >
             {iv === 'all' ? 'All' : TF_LABEL[iv] || iv}
+          </button>
+        ))}
+      </div>
+
+      {/* Exchange filter — derived from alert.exchange (or inferred from label) */}
+      <div className="scan-filter-group">
+        <span className="scan-filter-label">Exchange</span>
+        {EXCHANGES.map((ex) => (
+          <button
+            key={ex.id}
+            className={`scan-filter-btn ${exchange === ex.id ? 'scan-filter-btn--active' : ''}`}
+            onClick={() => onExchange(ex.id)}
+            title={ex.id === 'MCX' ? 'Commodities — Crude / Gold / Silver / Copper / etc.' : ex.id === 'NSE' ? 'NSE equities, F&O, indices' : 'Show all exchanges'}
+          >
+            {ex.label}
           </button>
         ))}
       </div>
@@ -784,6 +830,12 @@ function ScreenerToolbar({ onTfResults, onClear }) {
   const [universe,   setUniverse]   = useState(null);   // { macros, watchlist, futures, all }
   const [tfFilter,   setTfFilter]   = useState('all');  // 'all' | interval id
   const [running,    setRunning]    = useState(false);
+  // Strictness — how many bars back the pattern is allowed to have fired.
+  // 1 = "current closed candle only" (very strict, fewest false positives).
+  // 3 = default (matches each pattern's original defaultOpts.lookback).
+  // Higher = more permissive, catches setups that triggered a few bars ago.
+  // The server passes this as opts.lookback which overrides the pattern's default.
+  const [strictness, setStrictness] = useState(1);
 
   // Reset button: two-step guard — first click arms it, second click within 3 s fires.
   // confirmReset=true means the button is in the "Confirm?" red state.
@@ -957,6 +1009,9 @@ function ScreenerToolbar({ onTfResults, onClear }) {
             scope:          'all',
             interTfDelayMs: 0,
             batchSize:      12,
+            // Override per-pattern defaultOpts.lookback with the user's
+            // chosen strictness.  1 = current closed candle only.
+            opts:           { lookback: Number(strictness) },
           }, { timeout: 90_000 })
         );
 
@@ -1035,7 +1090,7 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     setScreenerLastRunAt(Date.now());
 
     setRunning(false);
-  }, [patternId, running, tfFilter, patterns, onTfResults, onClear, setScreenerLastRunAt]);
+  }, [patternId, running, tfFilter, patterns, strictness, onTfResults, onClear, setScreenerLastRunAt, setTfState, setStatus, setStatusKind]);
 
   /**
    * Manual "Run Screener" click handler.
@@ -1093,6 +1148,22 @@ function ScreenerToolbar({ onTfResults, onClear }) {
           {ALL_INTERVALS.map((iv) => (
             <option key={iv} value={iv}>{TF_LABEL[iv]}</option>
           ))}
+        </select>
+
+        {/* Strictness — how many bars back the pattern is allowed to have fired.
+            Lower = fewer false positives, only the freshest setups. */}
+        <select
+          className="screener-tf-select"
+          value={strictness}
+          onChange={(e) => setStrictness(Number(e.target.value))}
+          disabled={running}
+          title="Lookback — how recently the pattern must have triggered. Strict = current candle only."
+        >
+          <option value={1}>🎯 Strict (current candle)</option>
+          <option value={2}>Last 2 bars</option>
+          <option value={3}>Last 3 bars</option>
+          <option value={5}>Last 5 bars</option>
+          <option value={10}>Last 10 bars (wide)</option>
         </select>
 
         <button
@@ -1199,6 +1270,9 @@ export default function ScanAlertsPage() {
   const [volOnly,        setVolOnly]        = useState(false);
   const [mtfOnly,        setMtfOnly]        = useState(false);
   const [minRR,          setMinRR]          = useState(0);
+  // Exchange filter — 'all' | 'NSE' | 'MCX'.  UI-only: looks at alert.exchange
+  // first and falls back to a label regex (CRUDE / GOLD / SILVER / etc. = MCX).
+  const [exchangeFilter, setExchangeFilter] = useState('all');
   // Dedup: ON by default — show the single strongest alert per symbol
   const [dedup, setDedup] = useState(true);
 
@@ -1286,6 +1360,7 @@ export default function ScanAlertsPage() {
         // Risk management — Ichimoku natural SL + 2:1 R:R target
         sl:              m.sl             ?? null,
         target:          m.target         ?? null,
+        targetSource:    m.targetSource   ?? null,
         // Volume context
         volumeRatio:     m.volumeRatio    ?? null,
         volumeConfirmed: m.volumeConfirmed ?? null,
@@ -1316,11 +1391,12 @@ export default function ScanAlertsPage() {
   }, [scanAlerts]);
 
   const filtered = useMemo(() => {
-    // 1. Apply signal + interval + pattern + quality filters
+    // 1. Apply signal + interval + pattern + exchange + quality filters
     let list = scanAlerts.filter((a) => {
-      if (signalFilter   !== 'all' && a.signal    !== signalFilter)   return false;
-      if (intervalFilter !== 'all' && a.interval  !== intervalFilter) return false;
-      if (patternFilter  !== 'all' && a.patternId !== patternFilter)  return false;
+      if (signalFilter    !== 'all' && a.signal    !== signalFilter)    return false;
+      if (intervalFilter  !== 'all' && a.interval  !== intervalFilter)  return false;
+      if (patternFilter   !== 'all' && a.patternId !== patternFilter)   return false;
+      if (exchangeFilter  !== 'all' && alertExchange(a) !== exchangeFilter) return false;
       // Quality gates — independent, AND-combined
       if (volOnly && !a.volumeConfirmed)                              return false;
       if (mtfOnly && (a.confluenceCount ?? 0) < 2)                    return false;
@@ -1354,7 +1430,7 @@ export default function ScanAlertsPage() {
     });
 
     return list;
-  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort, volOnly, mtfOnly, minRR]);
+  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort, volOnly, mtfOnly, minRR, exchangeFilter]);
 
   // Modal: alert currently being shown in the chart popup (null = closed)
   const [chartAlert, setChartAlert] = useState(null);
@@ -1457,6 +1533,7 @@ export default function ScanAlertsPage() {
         volOnly={volOnly}         onVolOnly={setVolOnly}
         mtfOnly={mtfOnly}         onMtfOnly={setMtfOnly}
         minRR={minRR}             onMinRR={setMinRR}
+        exchange={exchangeFilter} onExchange={setExchangeFilter}
       />
 
       {/* Paper trades are shown exclusively on the Dashboard tab */}

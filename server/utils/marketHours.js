@@ -25,7 +25,7 @@ function isNseOpen(now = Date.now()) {
   const dow = ist.getUTCDay(); // 0 = Sunday, 6 = Saturday
   if (dow === 0 || dow === 6) return false;
   const mins = ist.getUTCHours() * 60 + ist.getUTCMinutes();
-  return mins >= 540 && mins <= 930; // 09:00 = 540, 15:30 = 930
+  return mins >= 555 && mins <= 930; // 09:15 = 555, 15:30 = 930
 }
 
 /**

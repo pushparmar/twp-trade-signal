@@ -21,7 +21,7 @@ const store            = require('../store');
 const { to4H }         = require('./ichimoku');
 const telegramNotifier = require('./telegramNotifier');
 const patternAlertMessage = require('./patternAlertMessage');
-const { isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const { isNseOpen, isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db               = require('../db');
 const alertBus         = require('./alertBus');
 
@@ -133,6 +133,7 @@ async function _runAndBroadcast(token, interval, candles) {
       // SL / Target (liveScanner passes these through from the pattern result)
       sl:               result.sl               ?? null,
       target:           result.target           ?? null,
+      targetSource:     result.targetSource     ?? null,
       // Volume
       volumeRatio:      result.volumeRatio      ?? null,
       volumeConfirmed:  result.volumeConfirmed  ?? null,
@@ -173,6 +174,12 @@ async function _runAndBroadcast(token, interval, candles) {
 async function onCandleClose(token, interval) {
   if (!WATCHED_INTERVALS.has(interval)) return;
   if (!_watchMap.has(Number(token)))    return;
+
+  // Market-hours gate: NO ALERTS outside live sessions.
+  // NSE 09:15–15:30 IST · MCX 09:00–23:30 IST · weekdays only.
+  // Off-hours candle aggregation (e.g. pre-open snapshots, late ticks) must
+  // not produce SSE alerts, Telegram messages, or MongoDB writes.
+  if (!isAnyMarketOpen()) return;
 
   try {
     // ── Native interval (15m / 1h / 1d) ───────────────────────────────────

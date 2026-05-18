@@ -58,8 +58,14 @@ async function createIndexes() {
  * @param {object} trade  The trade object from store.addPaperTrade().
  */
 function upsertTrade(trade) {
-  if (!mongo.isReady()) return;
-  if (!trade?.id) return;
+  if (!mongo.isReady()) {
+    console.warn(`[tradeRepo] upsertTrade skipped — MongoDB not ready (trade=${trade?.id ?? '?'})`);
+    return;
+  }
+  if (!trade?.id) {
+    console.warn('[tradeRepo] upsertTrade skipped — trade has no id');
+    return;
+  }
 
   const doc = {
     tradeId:      trade.id,
@@ -76,6 +82,7 @@ function upsertTrade(trade) {
     exitPrice:    trade.exitPrice                ?? null,
     sl:           trade.sl                       ?? null,
     target:       trade.target                   ?? null,
+    targetSource: trade.targetSource              ?? null,
     status:       trade.status                   ?? 'OPEN',
     pnl:          trade.pnl                      ?? null,
     // Pattern context
@@ -98,8 +105,12 @@ function upsertTrade(trade) {
       { $set: doc, $setOnInsert: { createdAt: new Date() } },
       { upsert: true },
     )
+    .then((r) => {
+      const action = r.upsertedCount > 0 ? 'inserted' : 'updated';
+      console.log(`[tradeRepo] ${action} ${trade.symbol} (${trade.id.slice(0,8)}…) → MongoDB`);
+    })
     .catch((err) => {
-      console.warn('[tradeRepo] upsertTrade failed:', err.message);
+      console.warn('[tradeRepo] upsertTrade FAILED:', err.message);
     });
 }
 

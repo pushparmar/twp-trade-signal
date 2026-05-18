@@ -11,8 +11,9 @@
  * GET /api/analytics/daily-pnl        — closed trade P&L aggregated by IST date
  */
 
-const express    = require('express');
-const db         = require('../db');
+const express = require('express');
+const db      = require('../db');
+const mongo   = require('../services/mongoClient');
 
 const router = express.Router();
 
@@ -53,7 +54,10 @@ function _parseDateRange(query) {
  *   }
  */
 router.get('/summary', async (req, res) => {
-  if (!db.alertRepo || !db.tradeRepo) {
+  // Authoritative readiness check — the repos return [] silently when mongo
+  // isn't ready, so we must consult mongoClient directly to avoid reporting
+  // dbReady:true on a disconnected database.
+  if (!mongo.isReady()) {
     return res.json({ patternStats: [], winRate: [], dailyPnl: [], dbReady: false });
   }
 
@@ -65,13 +69,7 @@ router.get('/summary', async (req, res) => {
       db.tradeRepo.patternWinRate(),
       db.tradeRepo.dailyPnl(opts),
     ]);
-
-    res.json({
-      patternStats,
-      winRate,
-      dailyPnl,
-      dbReady: true,
-    });
+    res.json({ patternStats, winRate, dailyPnl, dbReady: true });
   } catch (err) {
     console.error('[Analytics] summary failed:', err.message);
     res.status(500).json({ error: err.message });
