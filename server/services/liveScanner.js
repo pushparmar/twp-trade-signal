@@ -218,4 +218,16 @@ function watchCount() {
   return _watchMap.size;
 }
 
-module.exports = { onCandleClose, addWatch, removeWatch, seedFromWatchlist, watchCount };
+/**
+ * Clear the per-instrument pattern-fire dedup guard so every instrument can
+ * re-trigger today's alerts on the next candle close. Called during a full
+ * system reset so live scanner alerts are not suppressed by stale dedup state.
+ * Returns the number of entries cleared.
+ */
+function clearDedup() {
+  const count = _dedup.size;
+  _dedup.clear();
+  return count;
+}
+
+module.exports = { onCandleClose, addWatch, removeWatch, seedFromWatchlist, watchCount, clearDedup };

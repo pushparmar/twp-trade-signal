@@ -36,6 +36,7 @@ const candleStore      = require('../services/candleStore');
 const patternRegistry  = require('../services/patternRegistry');
 const liveScanner       = require('../services/liveScanner');
 const backgroundScanner = require('../services/backgroundScanner');
+const historicalCache  = require('../services/historicalCache');
 const { broadcast }    = require('../sseHub');
 const store            = require('../store');
 const { to4H }         = require('../services/ichimoku');
@@ -311,6 +312,50 @@ router.post('/trigger-close', async (req, res) => {
   // Call the scanner directly — it will broadcast scan_alert if pattern matches
   liveScanner.onCandleClose(Number(token), interval);
   res.json({ ...entry, result: 'triggered', message: 'onCandleClose called — check server logs and Scanner tab for alerts' });
+});
+
+// ── POST /api/scan/reset ──────────────────────────────────────────────────────
+// Full system reset: clears every in-memory cache and dedup guard so the next
+// scan / candle close produces a genuine fresh-start result.
+//
+// What is reset:
+//   historicalCache  — evicts all Kite API response cache entries (TTL 5 min)
+//   candleStore      — drops all seeded ring buffers; next getCandles() re-seeds
+//   backgroundScanner._dedup  — clears "already fired today" guard per pattern
+//   liveScanner._dedup        — same for the live (tick-driven) scanner
+//
+// What is NOT reset:
+//   paperTrades, config, watchlist, Kite auth — persistent data is untouched.
+//   Instrument cache — re-loading 250K instruments takes 10+ seconds; skip it.
+//
+// The client is responsible for clearing its own scanAlerts store and screener
+// state after receiving a 200 response.
+router.post('/reset', (req, res) => {
+  try {
+    const historicalCleared  = historicalCache.clearCache()  ?? 0;   // returns void; treat as 0
+    const candleKeysCleared  = candleStore.clearAll();
+    const bgDedupCleared     = backgroundScanner.clearDedup();
+    const liveDedupCleared   = liveScanner.clearDedup();
+
+    const summary = {
+      ok:                 true,
+      historicalCache:    'cleared',
+      candleStoreKeys:    candleKeysCleared,
+      bgScannerDedup:     bgDedupCleared,
+      liveScannerDedup:   liveDedupCleared,
+      note:               'Next scan will re-fetch candles from Kite and all patterns can re-fire.',
+    };
+
+    console.log(
+      `[Reset] Full cache reset — candleStore: ${candleKeysCleared} keys,` +
+      ` bgDedup: ${bgDedupCleared}, liveDedup: ${liveDedupCleared}`
+    );
+
+    res.json(summary);
+  } catch (err) {
+    console.error('[Reset] Error during system reset:', err.message);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // ── POST /api/scan ────────────────────────────────────────────────────────────

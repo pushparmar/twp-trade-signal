@@ -3095,6 +3095,53 @@ body {
 .screener-run-btn:disabled             { opacity: .5; cursor: not-allowed; }
 .screener-run-btn--running             { background: var(--txt3); }
 
+/* ── Reset Cache button ────────────────────────────────────────────────────── */
+/* Sits next to "Run Screener"; visually quieter (ghost-like) until armed.      */
+.screener-reset-btn {
+  display:         inline-flex;
+  align-items:     center;
+  gap:             5px;
+  padding:         0 14px;
+  height:          32px;
+  border:          1px solid var(--border2);
+  border-radius:   6px;
+  background:      transparent;
+  color:           var(--txt3);
+  font-size:       13px;
+  font-weight:     500;
+  cursor:          pointer;
+  transition:      background 0.15s, color 0.15s, border-color 0.15s;
+  white-space:     nowrap;
+}
+.screener-reset-btn:hover:not(:disabled) {
+  background:    var(--border2);
+  color:         var(--txt1);
+  border-color:  var(--border3, var(--border2));
+}
+/* Armed / confirm state — red tint so the user knows it's destructive */
+.screener-reset-btn--confirm {
+  background:    rgba(239, 68, 68, 0.12);
+  color:         #ef4444;
+  border-color:  rgba(239, 68, 68, 0.4);
+  font-weight:   700;
+  animation:     reset-pulse 0.6s ease-in-out infinite alternate;
+}
+.screener-reset-btn--confirm:hover:not(:disabled) {
+  background:  rgba(239, 68, 68, 0.22);
+  color:       #ef4444;
+}
+/* Loading state */
+.screener-reset-btn--loading {
+  opacity: 0.65;
+  cursor:  not-allowed;
+}
+.screener-reset-btn:disabled { opacity: .45; cursor: not-allowed; }
+
+@keyframes reset-pulse {
+  from { opacity: 0.85; }
+  to   { opacity: 1;    }
+}
+
 /* Spinner inside run button */
 .screener-spinner {
   width: 13px;

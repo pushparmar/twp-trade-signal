@@ -239,4 +239,24 @@ function stats() {
   return { keys: _store.size, totalCandles };
 }
 
-module.exports = { onTick, getCandles, getCandlesSync, remove, stats };
+/**
+ * Wipe every ring buffer and the token index so the next getCandles() call
+ * re-seeds from the Kite API, producing a genuine fresh-start state.
+ *
+ * Note: any in-flight seed promises (_seeding) are left to resolve naturally —
+ * they will simply re-populate the freshly cleared store without harm.
+ * Live tick subscriptions will restart accumulating from the next tick.
+ *
+ * Returns the number of key–interval pairs that were cleared.
+ */
+function clearAll() {
+  const cleared = _store.size;
+  _store.clear();
+  _tokenIndex.clear();
+  _seededWith.clear();
+  _emptyResultAt.clear();
+  // Leave _seeding alone — in-flight promises will finish and repopulate safely.
+  return cleared;
+}
+
+module.exports = { onTick, getCandles, getCandlesSync, remove, stats, clearAll };

@@ -683,6 +683,12 @@ function ScreenerToolbar({ onTfResults, onClear }) {
   const [tfFilter,   setTfFilter]   = useState('all');  // 'all' | interval id
   const [running,    setRunning]    = useState(false);
 
+  // Reset button: two-step guard — first click arms it, second click within 3 s fires.
+  // confirmReset=true means the button is in the "Confirm?" red state.
+  const [confirmReset,  setConfirmReset]  = useState(false);
+  const [resetting,     setResetting]     = useState(false);
+  const confirmTimerRef = useRef(null);
+
   // Status, per-TF state, and last-run timestamp are persisted in the global
   // store so switching tabs doesn't wipe the screener's "last run" view.
   const status               = useAppStore((s) => s.screenerStatus);
@@ -693,6 +699,51 @@ function ScreenerToolbar({ onTfResults, onClear }) {
   const setTfState           = useAppStore((s) => s.setScreenerTfState);
   const screenerLastRunAt    = useAppStore((s) => s.screenerLastRunAt);
   const setScreenerLastRunAt = useAppStore((s) => s.setScreenerLastRunAt);
+  const clearScreenerAlerts  = useAppStore((s) => s.clearScreenerAlerts);
+  const addToast             = useAppStore((s) => s.addToast);
+
+  // ── Reset handler ───────────────────────────────────────────────────────────
+  // Two-step: first click arms the confirmation; second click within 3 s fires.
+  // Calls POST /api/scan/reset then wipes all client-side screener state so the
+  // UI reflects the truly empty server-side caches.
+  const handleResetClick = useCallback(() => {
+    if (!confirmReset) {
+      // Arm the confirmation — auto-disarm after 3 s if user doesn't follow through
+      setConfirmReset(true);
+      confirmTimerRef.current = setTimeout(() => setConfirmReset(false), 3000);
+      return;
+    }
+
+    // Second click — execute the reset
+    clearTimeout(confirmTimerRef.current);
+    setConfirmReset(false);
+    setResetting(true);
+
+    api.post('/scan/reset')
+      .then((r) => {
+        const d = r.data;
+        // Wipe all client-side screener state so nothing stale is displayed
+        clearScreenerAlerts();
+        onClear();
+        setTfState({});
+        setStatus('');
+        setStatusKind('');
+        setScreenerLastRunAt(0);
+
+        const msg =
+          `✅ Reset complete — candle buffers: ${d.candleStoreKeys} cleared,` +
+          ` dedup: ${d.bgScannerDedup + d.liveScannerDedup} entries cleared.` +
+          ` Next scan fetches fresh data.`;
+        addToast({ type: 'info', message: msg });
+        console.log('[Reset]', d);
+      })
+      .catch((err) => {
+        const errMsg = err.response?.data?.error || err.message || 'Reset failed';
+        addToast({ type: 'error', message: `⚠ Reset failed: ${errMsg}` });
+        console.error('[Reset] Error:', errMsg);
+      })
+      .finally(() => setResetting(false));
+  }, [confirmReset, clearScreenerAlerts, onClear, setTfState, setStatus, setStatusKind, setScreenerLastRunAt, addToast]);
 
   // Load pattern list + universe counts on mount
   useEffect(() => {
@@ -959,6 +1010,34 @@ function ScreenerToolbar({ onTfResults, onClear }) {
                 <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
               </svg>
               Run Screener
+            </>
+          )}
+        </button>
+
+        {/* Reset button — two-step guard prevents accidental wipes */}
+        <button
+          className={`screener-reset-btn${confirmReset ? ' screener-reset-btn--confirm' : ''}${resetting ? ' screener-reset-btn--loading' : ''}`}
+          onClick={handleResetClick}
+          disabled={running || resetting}
+          title={
+            confirmReset
+              ? 'Click again within 3 s to wipe all caches and dedup state'
+              : 'Reset all candle caches and pattern dedup — next scan fetches fresh data from Kite'
+          }
+        >
+          {resetting ? (
+            <>
+              <span className="screener-spinner" />
+              Resetting…
+            </>
+          ) : confirmReset ? (
+            '⚠ Confirm Reset?'
+          ) : (
+            <>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/>
+              </svg>
+              Reset Cache
             </>
           )}
         </button>

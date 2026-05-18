@@ -217,8 +217,13 @@ function intervalToMinutes(interval) {
   return map[interval] || 15;
 }
 
+/**
+ * Evict all cached Kite API responses.
+ * The next fetch for any instrument will go straight to Kite instead of
+ * returning a stale cache hit.
+ */
 function clearCache() {
   _cache.clear();
 }
 
-module.exports = { fetchCandles, fetchLastNCandles, formatDate };
+module.exports = { fetchCandles, fetchLastNCandles, formatDate, clearCache };
