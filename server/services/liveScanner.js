@@ -46,6 +46,10 @@ const _watchMap = new Map();
 // Dedup: "token:interval:patternId:signal" → { fired: bool, date: string (IST) }
 const _dedup = new Map();
 
+// MTF bias: Map<token (number), Record<interval, 'bullish'|'bearish'|'neutral'>>
+// Updated on every candle close; checked when a pattern fires to compute alignment.
+const _biasMap = new Map();
+
 // ── Helpers (mirrors patternAlertWatcher.js) ─────────────────────────────────
 
 function _istDateStr() {
@@ -67,6 +71,46 @@ function _claimFire(key) {
 // Session-aware 4h synthesis — imported from ichimoku.js.
 function _to4H(candles1h) {
   return to4H(candles1h);
+}
+
+/**
+ * Compute the Ichimoku directional bias for the most recent candle.
+ * Uses Kijun-sen (26-period midpoint) as the primary direction filter.
+ * Price above Kijun = bullish, below = bearish.  Works with 26+ candles.
+ *
+ * @param {Array}  candles  OHLCV candle array, newest last
+ * @returns {'bullish'|'bearish'|'neutral'}
+ */
+function _computeCloudBias(candles) {
+  if (!candles || candles.length < 26) return 'neutral';
+  const n     = candles.length;
+  const close = candles[n - 1].close;
+  let hi = -Infinity, lo = Infinity;
+  for (let i = n - 26; i < n; i++) {
+    if (candles[i].high > hi) hi = candles[i].high;
+    if (candles[i].low  < lo) lo = candles[i].low;
+  }
+  const kijun = (hi + lo) / 2;
+  if (close > kijun) return 'bullish';
+  if (close < kijun) return 'bearish';
+  return 'neutral';
+}
+
+/**
+ * Returns MTF alignment for a given (token, interval, signal).
+ * Checks _biasMap for other intervals and returns those matching the signal.
+ *
+ * @returns {{ mtfAligned: boolean, alignedTfs: string[] }}
+ */
+function _getMtfAlignment(token, currentInterval, signal) {
+  const tokenBias = _biasMap.get(Number(token));
+  if (!tokenBias) return { mtfAligned: false, alignedTfs: [] };
+  const alignedTfs = [];
+  for (const [interval, bias] of Object.entries(tokenBias)) {
+    if (interval === currentInterval) continue;
+    if (bias === signal) alignedTfs.push(TF_LABEL[interval] || interval);
+  }
+  return { mtfAligned: alignedTfs.length > 0, alignedTfs };
 }
 
 // ── Core scanner ─────────────────────────────────────────────────────────────
@@ -114,6 +158,9 @@ async function _runAndBroadcast(token, interval, candles) {
     const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
     if (!_claimFire(dedupKey)) continue; // already broadcast today
 
+    // MTF alignment — other intervals of this token that confirm the direction
+    const { mtfAligned, alignedTfs } = _getMtfAlignment(token, interval, result.signal);
+
     // ── SSE: always fires (Scanner UI tab) ─────────────────────────────────
     const alertPayload = {
       token:            Number(token),
@@ -137,6 +184,11 @@ async function _runAndBroadcast(token, interval, candles) {
       // Volume
       volumeRatio:      result.volumeRatio      ?? null,
       volumeConfirmed:  result.volumeConfirmed  ?? null,
+      // MTF alignment
+      mtfAligned,
+      alignedTfs,
+      confluenceTfs:    alignedTfs,   // backward compat for Telegram builder
+      confluenceCount:  alignedTfs.length + 1,
       ts:               Date.now(),
     };
     broadcast('scan_alert', alertPayload);
@@ -184,6 +236,16 @@ async function onCandleClose(token, interval) {
   try {
     // ── Native interval (15m / 1h / 1d) ───────────────────────────────────
     const candles = candleStore.getCandlesSync(token, interval);
+
+    // Always compute + store Kijun bias even when candles are below the 52-bar
+    // pattern threshold — it seeds the MTF map for other intervals to reference.
+    if (candles && candles.length >= 26) {
+      const _bias = _computeCloudBias(candles);
+      const _bEntry = _biasMap.get(Number(token)) ?? {};
+      _bEntry[interval] = _bias;
+      _biasMap.set(Number(token), _bEntry);
+    }
+
     if (candles && candles.length >= 52) {
       await _runAndBroadcast(token, interval, candles);
     }
@@ -193,6 +255,13 @@ async function onCandleClose(token, interval) {
       const c1h = candleStore.getCandlesSync(token, '60minute');
       if (c1h && c1h.length >= 8) {
         const c4h = _to4H(c1h);
+        // Store 4h bias
+        if (c4h.length >= 26) {
+          const _bias4h = _computeCloudBias(c4h);
+          const _bEntry = _biasMap.get(Number(token)) ?? {};
+          _bEntry['4h'] = _bias4h;
+          _biasMap.set(Number(token), _bEntry);
+        }
         if (c4h.length >= 52) {
           await _runAndBroadcast(token, '4h', c4h);
         }
@@ -251,6 +320,7 @@ function watchCount() {
 function clearDedup() {
   const count = _dedup.size;
   _dedup.clear();
+  _biasMap.clear(); // reset MTF bias so next candle close recomputes fresh
   return count;
 }
 

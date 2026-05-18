@@ -243,9 +243,9 @@ function ScanRow({ alert, onSelect, onBuy }) {
             📈 {Number(alert.volumeRatio).toFixed(1)}×
           </span>
         )}
-        {/* MTF confluence badge — signal fired on multiple timeframes in the same scan */}
-        {alert.confluenceCount > 1 && (
-          <span className="scan-mtf-badge" title={`MTF Confluence: ${alert.confluenceTfs?.join(' + ')}`}>
+        {/* MTF alignment badge — other TFs confirm the same direction (price above/below Kijun) */}
+        {alert.mtfAligned && alert.alignedTfs?.length > 0 && (
+          <span className="scan-mtf-badge" title={`MTF Aligned: ${alert.alignedTfs.join(' + ')} also ${alert.signal} · other timeframes confirm direction`}>
             ⚡ MTF
           </span>
         )}
@@ -765,7 +765,7 @@ function FilterBar({
         <button
           className={`scan-filter-btn ${mtfOnly ? 'scan-filter-btn--active' : ''}`}
           onClick={() => onMtfOnly(!mtfOnly)}
-          title="Only alerts confirmed on 2 or more timeframes in the same scan"
+          title="Only alerts where other timeframes also confirm direction — price above/below Kijun (26-period midpoint)"
         >
           ⚡ MTF
         </button>
@@ -1364,9 +1364,11 @@ export default function ScanAlertsPage() {
         // Volume context
         volumeRatio:     m.volumeRatio    ?? null,
         volumeConfirmed: m.volumeConfirmed ?? null,
-        // MTF confluence — other TFs where same signal fired in this scan
-        confluenceTfs:   m.confluenceTfs  ?? [],
-        confluenceCount: m.confluenceCount ?? 1,
+        // MTF alignment — other TFs where Kijun confirms the same direction
+        mtfAligned:      m.mtfAligned     ?? false,
+        alignedTfs:      m.alignedTfs     ?? [],
+        confluenceTfs:   m.alignedTfs     ?? m.confluenceTfs ?? [],
+        confluenceCount: (m.alignedTfs?.length ?? 0) + 1,
         ts:              now,
         source:          'screener',
       });
@@ -1399,7 +1401,7 @@ export default function ScanAlertsPage() {
       if (exchangeFilter  !== 'all' && alertExchange(a) !== exchangeFilter) return false;
       // Quality gates — independent, AND-combined
       if (volOnly && !a.volumeConfirmed)                              return false;
-      if (mtfOnly && (a.confluenceCount ?? 0) < 2)                    return false;
+      if (mtfOnly && !a.mtfAligned)                                   return false;
       if (minRR > 0) {
         if (a.close == null || a.sl == null || a.target == null)      return false;
         const risk   = Math.abs(a.close - a.sl);

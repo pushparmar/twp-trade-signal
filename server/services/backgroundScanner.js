@@ -85,6 +85,13 @@ const TF_LABEL = {
 
 const _dedup = new Map();
 
+// ── MTF bias map ──────────────────────────────────────────────────────────────
+// Stores the last-known Ichimoku direction bias per token per interval.
+// Populated as each scan phase runs; persists across interval boundaries so
+// the 4h scan's bias is visible when the 1h scan computes MTF alignment.
+// Map<instrumentToken (number), Record<interval, 'bullish'|'bearish'|'neutral'>>
+const _biasMap = new Map();
+
 function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
@@ -102,23 +109,57 @@ function _claimFire(key) {
 }
 
 /**
- * After a new alert fires for (token, patternId, signal, currentInterval),
- * check whether the same combo has already fired on any OTHER interval today.
- * Returns an array of short TF labels, e.g. ['1h', '4h'].
- * An empty array means no prior confluence — this is the first TF to fire.
+ * Compute the Ichimoku directional bias for the most recent candle.
+ * Uses the Kijun-sen (26-period midpoint) as the equilibrium baseline —
+ * the primary trend filter in Ichimoku: price above = bullish, below = bearish.
+ *
+ * Works with as few as 26 candles, so all intervals (including synthetic 4h)
+ * can be evaluated even when bar counts are close to the 52-bar minimum.
+ *
+ * @param {Array}  candles  OHLCV candle array, newest last
+ * @returns {'bullish'|'bearish'|'neutral'}
  */
-function _getConfluenceTfs(token, patternId, signal, currentInterval) {
-  const today = _istDateStr();
-  const matched = [];
-  for (const iv of INTERVALS) {
-    if (iv === currentInterval) continue;
-    const key   = `bg:${token}:${iv}:${patternId}:${signal}`;
-    const entry = _dedup.get(key);
-    if (entry && entry.date === today && entry.fired) {
-      matched.push(TF_LABEL[iv] || iv);
-    }
+function _computeCloudBias(candles) {
+  if (!candles || candles.length < 26) return 'neutral';
+  const n     = candles.length;
+  const close = candles[n - 1].close;
+
+  // Kijun-sen: (26-period high + 26-period low) / 2
+  let hi = -Infinity, lo = Infinity;
+  for (let i = n - 26; i < n; i++) {
+    if (candles[i].high > hi) hi = candles[i].high;
+    if (candles[i].low  < lo) lo = candles[i].low;
   }
-  return matched;
+  const kijun = (hi + lo) / 2;
+
+  if (close > kijun) return 'bullish';
+  if (close < kijun) return 'bearish';
+  return 'neutral';
+}
+
+/**
+ * Determine MTF alignment for a new alert.
+ * Looks up _biasMap for ALL other timeframes of the same token and returns
+ * those whose stored bias matches the alert's signal direction.
+ *
+ * Example: RELIANCE 1h bullish alert fires.  If 4h bias = 'bullish' and
+ * 1d bias = 'bullish', alignedTfs = ['4h', '1d'] and mtfAligned = true.
+ *
+ * @param {number} token           Instrument token
+ * @param {string} currentInterval The interval the alert fired on (excluded from check)
+ * @param {string} signal          'bullish' | 'bearish'
+ * @returns {{ mtfAligned: boolean, alignedTfs: string[] }}
+ */
+function _getMtfAlignment(token, currentInterval, signal) {
+  const tokenBias = _biasMap.get(Number(token));
+  if (!tokenBias) return { mtfAligned: false, alignedTfs: [] };
+
+  const alignedTfs = [];
+  for (const [interval, bias] of Object.entries(tokenBias)) {
+    if (interval === currentInterval) continue;
+    if (bias === signal) alignedTfs.push(TF_LABEL[interval] || interval);
+  }
+  return { mtfAligned: alignedTfs.length > 0, alignedTfs };
 }
 
 // ── Next-candle-close calculator ──────────────────────────────────────────────
@@ -289,6 +330,13 @@ async function _runScanForInterval(interval) {
     if (!candles || candles.length < MIN_BARS) continue;
     scannedCount++;
 
+    // Store cloud bias for this token×interval so MTF alignment checks below
+    // can compare against other intervals already scanned (or scanned earlier today).
+    const _bias = _computeCloudBias(candles);
+    const _bEntry = _biasMap.get(Number(inst.instrumentToken)) ?? {};
+    _bEntry[interval] = _bias;
+    _biasMap.set(Number(inst.instrumentToken), _bEntry);
+
     const label = inst.name || inst.tradingsymbol;
 
     for (const { id: patternId, label: patternLabel } of patterns) {
@@ -310,9 +358,11 @@ async function _runScanForInterval(interval) {
 
       matchCount++;
 
-      // MTF confluence: check if the same signal already fired on other intervals today
-      const confluenceTfs = _getConfluenceTfs(
-        inst.instrumentToken, patternId, result.signal, interval,
+      // MTF alignment: check if OTHER timeframes for this token confirm the direction.
+      // A TF is "aligned" when its last-known Kijun bias matches the alert signal —
+      // meaning price is above/below the Kijun on that TF as well.
+      const { mtfAligned, alignedTfs } = _getMtfAlignment(
+        inst.instrumentToken, interval, result.signal,
       );
 
       // ── SSE → Scanner UI tab ──────────────────────────────────────────────
@@ -338,10 +388,13 @@ async function _runScanForInterval(interval) {
         // Volume
         volumeRatio:       result.volumeRatio      ?? null,
         volumeConfirmed:   result.volumeConfirmed  ?? null,
-        // MTF Confluence
-        confluenceTfs,
-        confluenceCount:   confluenceTfs.length,
-        ts:                Date.now(),
+        // MTF alignment — other TFs where price confirms the same direction
+        mtfAligned,
+        alignedTfs,
+        // Keep confluenceTfs/confluenceCount for Telegram message builder compat
+        confluenceTfs:   alignedTfs,
+        confluenceCount: alignedTfs.length + 1,
+        ts:              Date.now(),
       };
       broadcast('scan_alert', alertPayload);
 
@@ -352,13 +405,13 @@ async function _runScanForInterval(interval) {
       alertBus.emit('alert', alertPayload, 'background');
 
       const volTag = result.volumeConfirmed ? ' 📈vol' : '';
-      const mtfTag = confluenceTfs.length   ? ` ⚡MTF(${confluenceTfs.join('+')})` : '';
+      const mtfTag = alignedTfs.length      ? ` ⚡MTF(${alignedTfs.join('+')})` : '';
       console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}`);
 
       // ── Telegram ──────────────────────────────────────────────────────────
       if (chatId) {
         const text = patternAlertMessage.build({
-          label, tfLabel, patternLabel, result, kind: 'stock', confluenceTfs,
+          label, tfLabel, patternLabel, result, kind: 'stock', confluenceTfs: alignedTfs,
         });
         try {
           await telegramNotifier.sendMessage(chatId, text);
@@ -523,6 +576,7 @@ function getSchedule() {
 function clearDedup() {
   const count = _dedup.size;
   _dedup.clear();
+  _biasMap.clear();   // also reset MTF bias so next scan starts fresh
   console.log(`[BgScanner] Dedup cleared — ${count} entries removed`);
   return count;
 }

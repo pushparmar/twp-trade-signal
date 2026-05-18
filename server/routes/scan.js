@@ -120,6 +120,29 @@ const router = express.Router();
 // The old local version grouped from buffer index 0 and produced cross-session candles.
 const _to4H = to4H;
 
+/**
+ * Compute the Ichimoku directional bias for the most recent candle.
+ * Uses Kijun-sen (26-period midpoint) — the primary Ichimoku direction filter.
+ * Price above Kijun = bullish, below = bearish.  Requires only 26 candles.
+ *
+ * @param {Array}  candles  OHLCV candle array, newest last
+ * @returns {'bullish'|'bearish'|'neutral'}
+ */
+function _computeCloudBias(candles) {
+  if (!candles || candles.length < 26) return 'neutral';
+  const n     = candles.length;
+  const close = candles[n - 1].close;
+  let hi = -Infinity, lo = Infinity;
+  for (let i = n - 26; i < n; i++) {
+    if (candles[i].high > hi) hi = candles[i].high;
+    if (candles[i].low  < lo) lo = candles[i].low;
+  }
+  const kijun = (hi + lo) / 2;
+  if (close > kijun) return 'bullish';
+  if (close < kijun) return 'bearish';
+  return 'neutral';
+}
+
 // Minimum bars for each interval to satisfy the Ichimoku 52-bar requirement,
 // with a small headroom buffer. Keeping this tight means shorter Kite API date
 // ranges → faster fetches + better cache hit rates on repeat scans.
@@ -452,6 +475,10 @@ router.post('/', async (req, res) => {
   const matches      = [];
   let scannedCount   = 0;
 
+  // Bias map for MTF alignment — populated as each phase fetches candles.
+  // token (number) → { interval → 'bullish'|'bearish'|'neutral' }
+  const scanBiasMap = new Map();
+
   // Sleep helper for inter-phase gaps
   const _sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -473,6 +500,12 @@ router.post('/', async (req, res) => {
 
             phaseScanned++;
             scannedCount++;
+
+            // Store directional bias for MTF alignment annotation after all phases finish
+            const _bias = _computeCloudBias(candles);
+            const _bEntry = scanBiasMap.get(Number(item.instrumentToken)) ?? {};
+            _bEntry[interval] = _bias;
+            scanBiasMap.set(Number(item.instrumentToken), _bEntry);
 
             // Run every selected pattern against this candle set
             for (const p of patternsToRun) {
@@ -559,22 +592,24 @@ router.post('/', async (req, res) => {
     }
   }
 
-  // MTF confluence: annotate every match with the set of timeframes where the
-  // same (token, patternId, signal) combination also appeared in this scan run.
-  // confluenceTfs  — all TF labels for this combo (includes the match's own TF)
-  // confluenceCount — total number of TFs; >1 means the signal fired on several TFs
+  // MTF alignment: annotate each match with the OTHER timeframes that confirm
+  // the signal direction.  A timeframe is "aligned" when its Kijun-sen bias
+  // (price above/below the 26-period midpoint) matches the alert's signal.
+  // This is genuine higher-TF trend confirmation, not "same pattern fired twice".
   const _TF_LABEL = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
-  const confluenceMap = new Map();
   for (const m of matches) {
-    const key = `${m.token}:${m.patternId}:${m.signal}`;
-    if (!confluenceMap.has(key)) confluenceMap.set(key, []);
-    confluenceMap.get(key).push(_TF_LABEL[m.interval] || m.interval);
-  }
-  for (const m of matches) {
-    const key = `${m.token}:${m.patternId}:${m.signal}`;
-    const tfs = confluenceMap.get(key) || [];
-    m.confluenceTfs   = tfs;
-    m.confluenceCount = tfs.length;
+    const tokenBias  = scanBiasMap.get(Number(m.token)) ?? {};
+    const alignedTfs = [];
+    for (const [iv, bias] of Object.entries(tokenBias)) {
+      if (iv !== m.interval && bias === m.signal) {
+        alignedTfs.push(_TF_LABEL[iv] || iv);
+      }
+    }
+    m.mtfAligned    = alignedTfs.length > 0;
+    m.alignedTfs    = alignedTfs;
+    // Backward-compat fields for Telegram message builder
+    m.confluenceTfs   = alignedTfs;
+    m.confluenceCount = alignedTfs.length + 1;
   }
 
   // Sort: bullish first, then bearish; then by score descending within each group
