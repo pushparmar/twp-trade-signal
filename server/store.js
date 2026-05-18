@@ -160,6 +160,27 @@ function addPaperTrade(trade) {
   _saveTrades();
 }
 
+/**
+ * Update fields on an OPEN paper trade — used for trailing-stop SL updates.
+ * Only allows mutation of SL-related fields and trade tracking metadata so
+ * we never accidentally rewrite entry price / quantity from a buggy caller.
+ *
+ * @param {string} id     trade.id
+ * @param {object} fields { sl?, peakPrice?, tslActivated? }
+ * @returns {object|null} the updated trade, or null if not found / closed
+ */
+function updatePaperTrade(id, fields) {
+  const trade = _paperTrades.find((t) => t.id === id);
+  if (!trade || trade.status !== 'OPEN') return null;
+
+  const allowed = ['sl', 'peakPrice', 'tslActivated'];
+  for (const k of allowed) {
+    if (fields[k] !== undefined) trade[k] = fields[k];
+  }
+  _saveTrades();
+  return trade;
+}
+
 function closePaperTrade(id, exitPrice) {
   const trade = _paperTrades.find((t) => t.id === id);
   if (!trade || trade.status !== 'OPEN') return null;
@@ -225,8 +246,19 @@ function getAutoTraderSettings() {
   const config = readConfig();
   return {
     enabled:      config.autoTrader?.enabled      ?? false,
+    // Testing mode — quantity is hard-coded to 1; risk/profit kept for future
+    // when we re-enable rupee-risk sizing.
     riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,
     minProfit:    config.autoTrader?.minProfit     ?? 10_000,
+    // Minimum reward:risk ratio.  2.0 = at least 2:1 R:R required.
+    // Max R:R is uncapped — pattern's natural target is used as-is.
+    minRR:        config.autoTrader?.minRR         ?? 2.0,
+    // Trailing Stop Loss — moves SL up (BUY) or down (SELL) as price moves
+    // favourably.  Activated once unrealised profit ≥ tslTriggerR × initial risk.
+    // After activation, SL trails tslDistanceR × initial-risk behind the peak.
+    tslEnabled:   config.autoTrader?.tslEnabled    ?? false,
+    tslTriggerR:  config.autoTrader?.tslTriggerR   ?? 1.0,
+    tslDistanceR: config.autoTrader?.tslDistanceR  ?? 0.5,
   };
 }
 
@@ -243,7 +275,7 @@ module.exports = {
   getTelegramBotToken, setTelegramBotToken,
   getTelegramChatId, setTelegramChatId,
   getTestMode, setTestMode,
-  addPaperTrade, closePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
+  addPaperTrade, closePaperTrade, updatePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
   getPaperBalance, setPaperInitialBalance, getPaperInitialBalance,
   getWatchlist, setWatchlist, addToWatchlist, removeFromWatchlist,
   getAutoTraderSettings, setAutoTraderSettings,

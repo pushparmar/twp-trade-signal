@@ -96,8 +96,10 @@ async function _runAndBroadcast(token, interval, candles) {
     let result;
     try {
       result = pattern.run(candles, pattern.defaultOpts);
-    } catch {
-      continue; // bad candle data — skip silently
+    } catch (err) {
+      // Log instead of swallowing — silent catches hide real pattern bugs
+      console.warn(`[LiveScanner] pattern.run failed (${patternId}) ${label}:`, err.message);
+      continue;
     }
 
     if (!result?.matched || !result.signal) {
@@ -147,13 +149,13 @@ async function _runAndBroadcast(token, interval, candles) {
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
 
     // ── Telegram: gated on market hours — chatId may be unset ────────────────
+    // Fire-and-forget so a slow Telegram round-trip can't block the tick handler
+    // or starve later pattern checks in this loop.
     if (chatId && isNseOpen()) {
       const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind: 'stock' });
-      try {
-        await telegramNotifier.sendMessage(chatId, text);
-      } catch (err) {
+      telegramNotifier.sendMessage(chatId, text).catch((err) => {
         console.warn(`[LiveScanner] Telegram send failed for ${label} (${tfLabel}):`, err.message);
-      }
+      });
     }
   }
 }

@@ -53,6 +53,12 @@ const _seededWith = new Map();
 const _emptyResultAt = new Map();
 const EMPTY_RETRY_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes between retries for dead tokens
 
+// Map<token, number> — last seen cumulative volume_traded for this token.
+// Kite ticks carry the day's running total, so per-candle volume is the delta
+// between consecutive ticks.  Reset to undefined on subscribe so the very first
+// tick after a (re)connect doesn't get treated as a giant volume burst.
+const _lastVolume = new Map();
+
 function _slotStart(tsMs, intervalMs) {
   return Math.floor(tsMs / intervalMs) * intervalMs;
 }
@@ -63,12 +69,31 @@ function _slotStart(tsMs, intervalMs) {
  *
  * onCandleClose(token, interval) is called whenever a candle period boundary is
  * crossed so callers can broadcast or react to the new closed candle.
+ *
+ * @param {number}   instrumentToken
+ * @param {number}   lastPrice
+ * @param {number}   tradeTimeMs       Tick timestamp (ms) — falls back to now()
+ * @param {function} onCandleClose     Optional callback(token, interval)
+ * @param {number}   [volumeTraded]    Kite's cumulative day volume from the tick.
+ *                                     Per-candle volume = delta from prior tick.
  */
-function onTick(instrumentToken, lastPrice, tradeTimeMs, onCandleClose) {
+function onTick(instrumentToken, lastPrice, tradeTimeMs, onCandleClose, volumeTraded) {
   const intervals = _tokenIndex.get(instrumentToken);
   if (!intervals || intervals.size === 0) return;
 
   const now = tradeTimeMs || Date.now();
+
+  // Per-tick volume delta — Kite ticks carry the day's cumulative total.
+  // The first tick after (re)subscribe stores the baseline and contributes 0
+  // so we never inject a fake bulk volume on the very first update.
+  let volumeDelta = 0;
+  if (typeof volumeTraded === 'number') {
+    const prev = _lastVolume.get(instrumentToken);
+    if (prev != null && volumeTraded >= prev) {
+      volumeDelta = volumeTraded - prev;
+    }
+    _lastVolume.set(instrumentToken, volumeTraded);
+  }
 
   for (const interval of intervals) {
     const iMs = INTERVAL_MS[interval];
@@ -95,14 +120,17 @@ function onTick(instrumentToken, lastPrice, tradeTimeMs, onCandleClose) {
         high:   lastPrice,
         low:    lastPrice,
         close:  lastPrice,
-        volume: 0,
+        // First tick of a new candle: seed with this tick's delta so we capture
+        // any trades that happened right at the boundary (better than discarding).
+        volume: Math.max(0, volumeDelta),
       };
     } else {
-      // Same candle — update OHLC in-place
+      // Same candle — update OHLC + accumulate volume
       const c = entry.currentCandle;
       if (lastPrice > c.high) c.high = lastPrice;
       if (lastPrice < c.low)  c.low  = lastPrice;
-      c.close = lastPrice;
+      c.close   = lastPrice;
+      c.volume += volumeDelta;
     }
   }
 }
@@ -229,6 +257,7 @@ function remove(instrumentToken) {
     }
     _tokenIndex.delete(token);
   }
+  _lastVolume.delete(token);
 }
 
 function stats() {
@@ -255,6 +284,7 @@ function clearAll() {
   _tokenIndex.clear();
   _seededWith.clear();
   _emptyResultAt.clear();
+  _lastVolume.clear();
   // Leave _seeding alone — in-flight promises will finish and repopulate safely.
   return cleared;
 }

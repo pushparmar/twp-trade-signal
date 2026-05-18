@@ -15,6 +15,7 @@ let _reconnectDelay = 1000;
 let _reconnectTimer = null;
 let _intentionalDisconnect = false;
 let _authFailed = false;
+let _tradeWatcherWarned = false;
 
 function _isMarketHours() {
   const now = new Date();
@@ -103,6 +104,9 @@ function connect() {
       const ltt = tick.last_trade_time;
       const tradeTimeMs = ltt instanceof Date ? ltt.getTime()
         : ltt ? new Date(ltt).getTime() : Date.now();
+      // Pass volume_traded (cumulative day total) so candleStore can derive
+      // per-candle volume from the delta — fixes the "volume always 0 during
+      // market hours" bug that silently broke the volumeConfirmed badge.
       candleStore.onTick(tick.instrument_token, tick.last_price, tradeTimeMs, (token, interval) => {
         try {
           const candles = candleStore.getCandlesSync(token, interval);
@@ -122,7 +126,25 @@ function connect() {
         // and sends Telegram. Async; ignore rejections so Telegram outages don't
         // leak into the tick handler.
         liveScanner.onCandleClose(token, interval).catch(() => {});
-      });
+      }, tick.volume_traded);
+
+      // ── Server-side trade watcher — authoritative SL/Target/TSL handling ──
+      // Runs on EVERY tick (not just candle closes) so SL hits don't wait for
+      // the next 250 ms client-throttled SSE.  Imported lazily to avoid a circular
+      // dependency at boot time.
+      try {
+        require('./tradeWatcher').onTick(
+          tick.instrument_token,
+          tick.last_price,
+          tick.ohlc,
+        );
+      } catch (err) {
+        // First-load may fail if tradeWatcher hasn't been registered yet — log once
+        if (!_tradeWatcherWarned) {
+          console.warn('[KiteTicker] tradeWatcher.onTick failed:', err.message);
+          _tradeWatcherWarned = true;
+        }
+      }
     }
   });
 

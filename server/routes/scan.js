@@ -479,8 +479,9 @@ router.post('/', async (req, res) => {
               let result;
               try {
                 result = p.run(candles, opts);
-              } catch {
-                continue; // bad pattern run — skip
+              } catch (err) {
+                console.warn(`[Scan] pattern.run failed (${p.id}) ${item.tradingsymbol}:${interval} —`, err.message);
+                continue;
               }
               if (!result || !result.matched) continue;
 

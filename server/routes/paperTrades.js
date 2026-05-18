@@ -1,7 +1,7 @@
 const express     = require('express');
 const fs          = require('fs');
 const path        = require('path');
-const { addPaperTrade, getPaperTrades, closePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
+const { addPaperTrade, getPaperTrades, closePaperTrade, updatePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
 const { broadcast }   = require('../sseHub');
 const kiteTicker  = require('../services/kiteTicker');
 const db          = require('../db');
@@ -96,6 +96,32 @@ router.post('/', (req, res) => {
   // Mirror to MongoDB for pattern performance analysis — fire-and-forget
   db.tradeRepo.upsertTrade(trade);
   res.status(201).json(trade);
+});
+
+/**
+ * PATCH /api/paper/:id/trail
+ * Update an OPEN trade's SL (and trailing metadata) when TSL fires.
+ * Body: { sl: number, peakPrice?: number, tslActivated?: boolean }
+ *
+ * Returns the updated trade so the client can sync.
+ */
+router.patch('/:id/trail', (req, res) => {
+  const { sl, peakPrice, tslActivated } = req.body;
+  if (sl == null || isNaN(sl)) {
+    return res.status(400).json({ error: 'sl is required (number)' });
+  }
+  const trade = updatePaperTrade(req.params.id, {
+    sl:           Number(sl),
+    peakPrice:    peakPrice    != null ? Number(peakPrice) : undefined,
+    tslActivated: tslActivated != null ? !!tslActivated    : undefined,
+  });
+  if (!trade) return res.status(404).json({ error: 'Trade not found or already closed' });
+
+  // Mirror the SL change to MongoDB so analytics see the trailed exit value
+  db.tradeRepo.upsertTrade(trade);
+  // Broadcast so all clients (and the dashboard PnL preview) refresh immediately
+  broadcast('paper_trade_update', trade);
+  res.json(trade);
 });
 
 router.post('/:id/close', (req, res) => {

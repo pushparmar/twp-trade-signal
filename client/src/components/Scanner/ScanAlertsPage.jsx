@@ -73,17 +73,78 @@ function lastMarketCloseMs(now = Date.now()) {
 
 // ── Score dots ────────────────────────────────────────────────────────────────
 
-function ScoreDots({ score, signal }) {
+// Pattern-specific scoring rubric — used in the score tooltip so the trader
+// understands WHICH of the 5 score points each pattern represents.
+const SCORE_RUBRIC = {
+  'kumo-breakout': [
+    'Price broke cloud',
+    'Cloud color agrees',
+    'Chikou confirms',
+    'TK aligned',
+    'Fresh breakout (≤ N bars)',
+  ],
+  'kumo-bounce': [
+    'Pulled back to cloud edge',
+    'Reversal on current candle',
+    'Cloud color agrees',
+    'TK aligned',
+    'Chikou confirms',
+  ],
+  'cloud-support': [
+    'Above/below cloud',
+    'Cloud color agrees',
+    'TK aligned',
+    'Chikou confirms',
+    'Held for ≥ minBars',
+  ],
+  'kijun-bounce': [
+    'Wick touched Kijun',
+    'Close did not break it',
+    'TK aligned',
+    'Cloud direction agrees',
+    'Chikou confirms',
+  ],
+};
+
+function ScoreDots({ score, signal, patternId }) {
   if (score == null) return <span className="scan-score-na">—</span>;
   const total  = 5;
   const filled = Math.max(0, Math.min(total, Math.round(score)));
   const colorClass = signal === 'bullish' ? 'scan-dot--bull' : 'scan-dot--bear';
+
+  // Build per-dot tooltip from the pattern's rubric — green check if fired, dim cross otherwise.
+  const rubric = SCORE_RUBRIC[patternId] ?? [];
+  const tooltip = rubric.length
+    ? rubric.map((label, i) => `${i < filled ? '✓' : '·'} ${label}`).join('\n')
+    : `Score: ${score}/5`;
+
   return (
-    <span className="scan-score-dots">
+    <span className="scan-score-dots" title={tooltip}>
       {Array.from({ length: total }).map((_, i) => (
         <span key={i} className={`scan-dot ${i < filled ? colorClass : 'scan-dot--empty'}`} />
       ))}
       <span className="scan-score-num">{score}/5</span>
+    </span>
+  );
+}
+
+/**
+ * R:R ratio badge — shown next to score so traders see actual reward:risk
+ * at a glance.  Uses entry/sl/target from the alert; colors green for ≥3.0.
+ */
+function RRBadge({ entry, sl, target }) {
+  if (!entry || !sl || !target) return null;
+  const risk   = Math.abs(entry - sl);
+  if (risk < 0.01) return null;
+  const reward = Math.abs(target - entry);
+  const rr     = reward / risk;
+  const cls    = rr >= 3 ? 'scan-rr-badge--big' : rr >= 2 ? 'scan-rr-badge--ok' : 'scan-rr-badge--low';
+  return (
+    <span
+      className={`scan-rr-badge ${cls}`}
+      title={`Reward:Risk = ${rr.toFixed(2)} · SL ₹${sl} · Target ₹${target}`}
+    >
+      1:{rr.toFixed(1)}
     </span>
   );
 }
@@ -165,7 +226,8 @@ function ScanRow({ alert, onSelect, onBuy }) {
         )}
       </td>
       <td className="scan-cell scan-cell--score">
-        <ScoreDots score={alert.score} signal={alert.signal} />
+        <ScoreDots score={alert.score} signal={alert.signal} patternId={alert.patternId} />
+        <RRBadge entry={alert.close} sl={alert.sl} target={alert.target} />
       </td>
       <td className="scan-cell scan-cell--price">{alert.close != null ? fmt(alert.close) : '—'}</td>
       <td className="scan-cell scan-cell--time">{relativeTime(alert.ts)}</td>
@@ -586,10 +648,21 @@ function ActivePaperTrades() {
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
-function FilterBar({ signal, onSignal, interval, onInterval, pattern, onPattern, patternOptions, dedup, onDedup }) {
+function FilterBar({
+  signal, onSignal, interval, onInterval, pattern, onPattern, patternOptions,
+  dedup, onDedup,
+  volOnly, onVolOnly, mtfOnly, onMtfOnly, minRR, onMinRR,
+}) {
   const SIGNALS   = ['all', 'bullish', 'bearish'];
   const INTERVALS = ['all', '15minute', '60minute', '4h', 'day'];
   const TF_LABEL  = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+  const MIN_RR_OPTIONS = [
+    { value: 0,   label: 'Any' },
+    { value: 1.5, label: '≥ 1:1.5' },
+    { value: 2,   label: '≥ 1:2' },
+    { value: 3,   label: '≥ 1:3' },
+    { value: 4,   label: '≥ 1:4' },
+  ];
 
   return (
     <div className="scan-filters">
@@ -633,6 +706,35 @@ function FilterBar({ signal, onSignal, interval, onInterval, pattern, onPattern,
         </select>
       </div>
 
+      {/* Quality filters — surface only high-conviction setups */}
+      <div className="scan-filter-group">
+        <span className="scan-filter-label">Quality</span>
+        <button
+          className={`scan-filter-btn ${volOnly ? 'scan-filter-btn--active' : ''}`}
+          onClick={() => onVolOnly(!volOnly)}
+          title="Only alerts where volume is ≥ 1.2× the 20-bar average"
+        >
+          📈 Vol
+        </button>
+        <button
+          className={`scan-filter-btn ${mtfOnly ? 'scan-filter-btn--active' : ''}`}
+          onClick={() => onMtfOnly(!mtfOnly)}
+          title="Only alerts confirmed on 2 or more timeframes in the same scan"
+        >
+          ⚡ MTF
+        </button>
+        <select
+          className={`scan-filter-select ${minRR > 0 ? 'scan-filter-select--active' : ''}`}
+          value={minRR}
+          onChange={(e) => onMinRR(Number(e.target.value))}
+          title="Minimum reward:risk ratio"
+        >
+          {MIN_RR_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+
       {/* Best-per-symbol dedup toggle */}
       <div className="scan-filter-group scan-filter-group--right">
         <button
@@ -640,7 +742,7 @@ function FilterBar({ signal, onSignal, interval, onInterval, pattern, onPattern,
           onClick={() => onDedup(!dedup)}
           title="Show only the strongest alert per symbol (highest score → strength → timeframe)"
         >
-          {dedup ? '✦ Best per symbol' : '✦ Best per symbol'}
+          ✦ Best per symbol
         </button>
       </div>
     </div>
@@ -1093,6 +1195,10 @@ export default function ScanAlertsPage() {
   const [signalFilter,   setSignalFilter]   = useState('all');
   const [intervalFilter, setIntervalFilter] = useState('all');
   const [patternFilter,  setPatternFilter]  = useState('all');
+  // Quality filters
+  const [volOnly,        setVolOnly]        = useState(false);
+  const [mtfOnly,        setMtfOnly]        = useState(false);
+  const [minRR,          setMinRR]          = useState(0);
   // Dedup: ON by default — show the single strongest alert per symbol
   const [dedup, setDedup] = useState(true);
 
@@ -1210,11 +1316,21 @@ export default function ScanAlertsPage() {
   }, [scanAlerts]);
 
   const filtered = useMemo(() => {
-    // 1. Apply signal + interval + pattern filters
+    // 1. Apply signal + interval + pattern + quality filters
     let list = scanAlerts.filter((a) => {
       if (signalFilter   !== 'all' && a.signal    !== signalFilter)   return false;
       if (intervalFilter !== 'all' && a.interval  !== intervalFilter) return false;
       if (patternFilter  !== 'all' && a.patternId !== patternFilter)  return false;
+      // Quality gates — independent, AND-combined
+      if (volOnly && !a.volumeConfirmed)                              return false;
+      if (mtfOnly && (a.confluenceCount ?? 0) < 2)                    return false;
+      if (minRR > 0) {
+        if (a.close == null || a.sl == null || a.target == null)      return false;
+        const risk   = Math.abs(a.close - a.sl);
+        if (risk < 0.01)                                              return false;
+        const rr = Math.abs(a.target - a.close) / risk;
+        if (rr < minRR)                                               return false;
+      }
       return true;
     });
 
@@ -1238,7 +1354,7 @@ export default function ScanAlertsPage() {
     });
 
     return list;
-  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort]);
+  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort, volOnly, mtfOnly, minRR]);
 
   // Modal: alert currently being shown in the chart popup (null = closed)
   const [chartAlert, setChartAlert] = useState(null);
@@ -1338,6 +1454,9 @@ export default function ScanAlertsPage() {
         pattern={patternFilter}   onPattern={setPatternFilter}
         patternOptions={patternOptions}
         dedup={dedup}             onDedup={setDedup}
+        volOnly={volOnly}         onVolOnly={setVolOnly}
+        mtfOnly={mtfOnly}         onMtfOnly={setMtfOnly}
+        minRR={minRR}             onMinRR={setMinRR}
       />
 
       {/* Paper trades are shown exclusively on the Dashboard tab */}

@@ -17,6 +17,7 @@ const macroRouter    = require('./routes/macro');
 const scanRouter      = require('./routes/scan');
 const analyticsRouter    = require('./routes/analytics');
 const autoTraderRouter   = require('./routes/autoTrader');
+const backtestRouter     = require('./routes/backtest');
 const autoTrader         = require('./services/autoTrader');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
@@ -95,6 +96,7 @@ app.use('/api/macro',   macroRouter);
 app.use('/api/scan',      scanRouter);
 app.use('/api/analytics',   analyticsRouter);
 app.use('/api/auto-trader', autoTraderRouter);
+app.use('/api/backtest',    backtestRouter);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);

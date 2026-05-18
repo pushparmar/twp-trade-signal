@@ -516,6 +516,92 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
         seriesRef.current.candles.update(updated);
     }, [tick]);
 
+    // ── Trade overlay lines: entry / SL / target for every OPEN trade on this token ─
+    //
+    // Draws horizontal price lines on the candle series so traders can see where
+    // their entry, stop-loss and target sit on the chart.  Re-runs whenever:
+    //   • token / interval change                    (clear stale lines)
+    //   • paperTrades change                         (new trade opened or closed)
+    //   • a trade's SL moves (TSL trail)             (update the SL line)
+    //
+    // Lines are removed and recreated on every render — lightweight-charts
+    // doesn't expose a setPrice() so this is the simplest, leak-free pattern.
+    const paperTrades = useAppStore((s) => s.paperTrades);
+    const priceLineHandlesRef = useRef([]);
+
+    useEffect(() => {
+        const series = seriesRef.current.candles;
+        if (!series) return;
+
+        // 1. Remove any lines drawn on a previous render
+        for (const handle of priceLineHandlesRef.current) {
+            try { series.removePriceLine(handle); } catch { /* line already gone */ }
+        }
+        priceLineHandlesRef.current = [];
+
+        if (!token) return;
+
+        // 2. Find OPEN trades belonging to the displayed token
+        const myTrades = paperTrades.filter(
+            (t) =>
+                t.status === 'OPEN' &&
+                Number(t.token) === Number(token) &&
+                (t.source === 'scan' || t.source === 'auto'),
+        );
+        if (myTrades.length === 0) return;
+
+        // 3. Draw entry / SL / target for each trade
+        const ENTRY_COLOR  = '#3b82f6'; // blue
+        const SL_COLOR     = '#f87171'; // red
+        const TARGET_COLOR = '#4ade80'; // green
+        const TSL_COLOR    = '#a78bfa'; // purple — distinguishes trailed stop from initial
+
+        for (const t of myTrades) {
+            const prefix = t.source === 'auto' ? '🤖' : '✦';
+            if (t.entryPrice != null) {
+                const h = series.createPriceLine({
+                    price:     t.entryPrice,
+                    color:     ENTRY_COLOR,
+                    lineWidth: 1,
+                    lineStyle: 2, // dashed
+                    axisLabelVisible: true,
+                    title:     `${prefix} ${t.action} @ ${t.entryPrice}`,
+                });
+                priceLineHandlesRef.current.push(h);
+            }
+            if (t.sl != null) {
+                const h = series.createPriceLine({
+                    price:     t.sl,
+                    color:     t.tslActivated ? TSL_COLOR : SL_COLOR,
+                    lineWidth: 1,
+                    lineStyle: 0, // solid
+                    axisLabelVisible: true,
+                    title:     t.tslActivated ? `🔒 TSL ${t.sl}` : `SL ${t.sl}`,
+                });
+                priceLineHandlesRef.current.push(h);
+            }
+            if (t.target != null) {
+                const h = series.createPriceLine({
+                    price:     t.target,
+                    color:     TARGET_COLOR,
+                    lineWidth: 1,
+                    lineStyle: 0, // solid
+                    axisLabelVisible: true,
+                    title:     `🎯 ${t.target}`,
+                });
+                priceLineHandlesRef.current.push(h);
+            }
+        }
+
+        // Cleanup on token/interval change — fires before next effect run
+        return () => {
+            for (const handle of priceLineHandlesRef.current) {
+                try { series.removePriceLine(handle); } catch { /* ignore */ }
+            }
+            priceLineHandlesRef.current = [];
+        };
+    }, [token, interval, paperTrades]);
+
     // ── Imperative zoom API ─────────────────────────────────────────────────
     // Exposed via forwardRef so parents (e.g. ScanChartModal) can wire zoom
     // buttons without re-implementing barSpacing math.

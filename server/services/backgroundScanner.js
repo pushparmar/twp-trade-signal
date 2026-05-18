@@ -297,8 +297,9 @@ async function _runScanForInterval(interval) {
       let result;
       try {
         result = patternDef.run(candles, patternDef.defaultOpts);
-      } catch {
-        continue; // bad candle data — skip silently
+      } catch (err) {
+        console.warn(`[BgScanner] pattern.run failed (${patternId}) ${label}:${interval} —`, err.message);
+        continue;
       }
 
       if (!result?.matched || !result.signal) continue;

@@ -1,0 +1,280 @@
+/* ── Backtest Page ──────────────────────────────────────────────────────── */
+
+.bt-page {
+  padding: 20px 24px;
+  max-width: 1300px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.bt-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bt-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--txt);
+  margin: 0;
+}
+.bt-subtitle {
+  font-size: 13px;
+  color: var(--txt3);
+}
+
+/* ── Config form ────────────────────────────────────────────────────────── */
+
+.bt-form {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bt-field--run {
+  align-self: flex-end;
+}
+
+.bt-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--txt3);
+}
+
+.bt-input {
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--txt);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  min-width: 100px;
+}
+
+.bt-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.bt-pattern-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.bt-pattern-chip {
+  padding: 5px 11px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--txt2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.bt-pattern-chip:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.bt-pattern-chip--active {
+  background: rgba(59,130,246,.15);
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.bt-pattern-chip:disabled { opacity: .4; cursor: not-allowed; }
+
+.bt-run-btn {
+  padding: 8px 22px;
+  font-weight: 700;
+}
+
+/* ── Errors / loading ───────────────────────────────────────────────────── */
+
+.bt-error {
+  background: rgba(248,113,113,.12);
+  border: 1px solid rgba(248,113,113,.3);
+  color: #f87171;
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.bt-running {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--txt2);
+}
+.bt-running small { color: var(--txt3); }
+
+@keyframes bt-spin { to { transform: rotate(360deg); } }
+.bt-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--blue);
+  animation: bt-spin .8s linear infinite;
+}
+
+/* ── Summary cards ──────────────────────────────────────────────────────── */
+
+.bt-cards {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+}
+@media (max-width: 1100px) { .bt-cards { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 700px)  { .bt-cards { grid-template-columns: repeat(2, 1fr); } }
+
+.bt-stat {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.bt-stat--up   { border-color: rgba(74,222,128,.4); }
+.bt-stat--down { border-color: rgba(248,113,113,.4); }
+
+.bt-stat-label {
+  font-size: 11px;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.bt-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+}
+.bt-stat--up   .bt-stat-value { color: #4ade80; }
+.bt-stat--down .bt-stat-value { color: #f87171; }
+.bt-stat-sub {
+  font-size: 11px;
+  color: var(--txt3);
+}
+
+/* ── Params summary line ────────────────────────────────────────────────── */
+
+.bt-params {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--txt3);
+}
+.bt-params b { color: var(--txt); }
+.bt-params-fail { color: #f87171; }
+
+/* ── Sections + Tables ──────────────────────────────────────────────────── */
+
+.bt-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.bt-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--txt);
+}
+
+.bt-table-wrap {
+  overflow-x: auto;
+}
+
+.bt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.bt-table thead th {
+  padding: 9px 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--txt3);
+  background: var(--bg);
+  white-space: nowrap;
+}
+
+.bt-table tbody tr {
+  border-top: 1px solid var(--border);
+  transition: background .1s;
+}
+.bt-table tbody tr:hover {
+  background: rgba(255,255,255,.02);
+}
+
+.bt-table tbody td {
+  padding: 8px 12px;
+  vertical-align: middle;
+  color: var(--txt);
+}
+
+.bt-td-num     { text-align: right; font-variant-numeric: tabular-nums; }
+.bt-td-pattern { font-family: monospace; font-size: 11px; color: var(--txt2) !important; }
+.bt-td-symbol  { font-weight: 600; }
+.bt-td-date    { font-family: monospace; color: var(--txt2) !important; font-size: 11px; }
+
+.bt-pnl--up   { color: #4ade80 !important; }
+.bt-pnl--down { color: #f87171 !important; }
+
+.bt-table-more {
+  padding: 10px;
+  text-align: center;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Chips (outcome, signal) ────────────────────────────────────────────── */
+
+.bt-chip {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+.bt-chip--win     { background: rgba(74,222,128,.18); color: #4ade80; }
+.bt-chip--loss    { background: rgba(248,113,113,.18); color: #f87171; }
+.bt-chip--open    { background: rgba(251,191,36,.18); color: #fbbf24; }
+.bt-chip--neutral { background: var(--border); color: var(--txt3); }
+.bt-chip--bull    { background: rgba(74,222,128,.15); color: #4ade80; }
+.bt-chip--bear    { background: rgba(248,113,113,.15); color: #f87171; }

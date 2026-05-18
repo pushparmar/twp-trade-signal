@@ -3955,3 +3955,155 @@ body {
   color: var(--txt3);
   margin-left: auto;
 }
+
+/* ── Auto-Trader extras (TSL pill + qty1 tag) ─────────────────────────────── */
+.at-settings-mode {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+  text-transform: uppercase;
+}
+
+.at-tsl-pill {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--txt2);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.at-tsl-pill:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.at-tsl-pill--on {
+  background: rgba(74,222,128,.15);
+  border-color: rgba(74,222,128,.4);
+  color: #4ade80;
+}
+.at-tsl-pill--on:hover:not(:disabled) {
+  background: rgba(74,222,128,.22);
+}
+.at-tsl-pill:disabled { opacity: .55; cursor: not-allowed; }
+
+/* TSL lock indicator inside the SL cell */
+.paper-tsl-tag {
+  font-size: 11px;
+  color: #4ade80;
+}
+
+/* ── R:R badge in Scanner table ───────────────────────────────────────────── */
+.scan-rr-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.scan-rr-badge--big { background: rgba(74,222,128,.18); color: #4ade80; }
+.scan-rr-badge--ok  { background: rgba(59,130,246,.18); color: #60a5fa; }
+.scan-rr-badge--low { background: rgba(248,113,113,.15); color: #f87171; }
+
+/* ScoreDots tooltip needs pre-wrap so newlines render in title — browser native handles this */
+.scan-score-dots {
+  cursor: help;
+}
+
+/* ── Header strip (persistent across pages) ───────────────────────────────── */
+.header-strip {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 8px 16px;
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: saturate(140%) blur(8px);
+}
+
+.hdr-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 16px;
+  flex: 1;
+  min-width: 0;
+}
+
+.hdr-item--right { flex: 0 0 auto; align-items: flex-end; }
+
+.hdr-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.hdr-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+
+.hdr-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.hdr-value--big { font-size: 16px; }
+
+.hdr-sub {
+  font-size: 10px;
+  color: var(--txt3);
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.hdr-pnl--up   { color: #4ade80; }
+.hdr-pnl--down { color: #f87171; }
+
+.hdr-risk--on { color: #fbbf24; }
+
+.hdr-auto--on  { color: #4ade80; }
+.hdr-auto--off { color: var(--txt3); }
+
+.hdr-pill {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: .03em;
+}
+.hdr-pill--auto { background: rgba(59,130,246,.18); color: #60a5fa; }
+.hdr-pill--scan { background: rgba(168,85,247,.18); color: #c084fc; }
+
+.hdr-mkt-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.hdr-mkt--open    { background: rgba(74,222,128,.18); color: #4ade80; }
+.hdr-mkt--preopen { background: rgba(251,191,36,.18); color: #fbbf24; }
+.hdr-mkt--closed  { background: rgba(148,163,184,.18); color: #94a3b8; }

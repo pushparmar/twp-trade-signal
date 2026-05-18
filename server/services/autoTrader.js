@@ -3,18 +3,17 @@
  *
  * Automatically places paper trades when scan alerts arrive.
  *
- * Position sizing (fixed-risk model):
+ * Testing-mode position sizing:
  *   ┌──────────────────────────────────────────────────────────┐
- *   │  risk       = riskPerTrade (default ₹5,000)             │
- *   │  riskPerUnit = |entry − SL|                              │
- *   │  quantity   = ceil(risk / riskPerUnit)                   │
- *   │  potProfit  = |target − entry| × quantity               │
- *   │  → only execute when potProfit ≥ minProfit (₹10,000)    │
+ *   │  quantity = 1 (fixed — generates max samples for analysis)│
+ *   │  Require R:R ≥ minRR (default 2.0)                       │
+ *   │  No max R:R cap — pattern's natural target is used as-is │
  *   └──────────────────────────────────────────────────────────┘
  *
  * Guards:
  *   • autoTrader.enabled must be true (off by default — user opts in)
  *   • alert must carry close, sl, and target from the pattern engine
+ *   • R:R = |target − entry| / |entry − sl| must be ≥ minRR
  *   • at most one OPEN auto-trade per (token, interval) at a time
  *   • same (token, patternId, signal, interval) fires at most once per IST day
  *
@@ -41,32 +40,31 @@ function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-// ── Position sizing ───────────────────────────────────────────────────────────
+// ── Trade qualifier (testing mode) ───────────────────────────────────────────
 
 /**
- * Calculate position size based on fixed rupee risk.
+ * Check whether a setup qualifies for auto-trade in testing mode.
+ * Position size is fixed at 1 unit so we can sample every pattern firing
+ * and rely on the Analytics tab to determine which patterns work.
  *
- * @param {number} entry         Last candle close — used as entry proxy
- * @param {number} sl            Stop-loss price from Ichimoku engine
- * @param {number} target        Target price (2:1 R:R minimum from engine)
- * @param {number} riskPerTrade  Max rupee risk per trade (e.g. 5000)
- * @param {number} minProfit     Minimum acceptable rupee profit (e.g. 10000)
- * @returns {{ quantity, potentialProfit, riskPerUnit } | null}
+ * @param {number} entry  Last candle close — used as entry proxy
+ * @param {number} sl     Stop-loss price from the Ichimoku engine
+ * @param {number} target Target price from the Ichimoku engine
+ * @param {number} minRR  Minimum acceptable reward:risk ratio (default 2.0)
+ * @returns {{ quantity, riskPerUnit, potentialProfit, rrRatio } | null}
  */
-function _calcPosition(entry, sl, target, riskPerTrade, minProfit) {
+function _qualifyTrade(entry, sl, target, minRR) {
   const riskPerUnit = Math.abs(entry - sl);
   if (riskPerUnit < 0.01) return null; // SL too tight — likely data issue
 
-  const quantity      = Math.ceil(riskPerTrade / riskPerUnit);
-  const potentialProfit = Math.abs(target - entry) * quantity;
-
-  // Reject if the trade can't reach the minimum profit target at this sizing
-  if (potentialProfit < minProfit) return null;
+  const rrRatio = Math.abs(target - entry) / riskPerUnit;
+  if (rrRatio < minRR) return null;
 
   return {
-    quantity,
-    potentialProfit: Math.round(potentialProfit * 100) / 100,
-    riskPerUnit:     Math.round(riskPerUnit * 100)     / 100,
+    quantity:        1,
+    riskPerUnit:     Math.round(riskPerUnit  * 100) / 100,
+    potentialProfit: Math.round(Math.abs(target - entry) * 100) / 100,
+    rrRatio:         Math.round(rrRatio      * 100) / 100,
   };
 }
 
@@ -108,16 +106,13 @@ function _onAlert(alert, source) {
   );
   if (alreadyOpen) return;
 
-  // ── 5. Position sizing ────────────────────────────────────────────────────
-  const pos = _calcPosition(entry, sl, target, settings.riskPerTrade, settings.minProfit);
+  // ── 5. Qualify the trade (testing mode: quantity=1, R:R ≥ minRR) ─────────
+  const pos = _qualifyTrade(entry, sl, target, settings.minRR);
   if (!pos) {
-    // Log why we skipped — useful when tuning risk settings
-    const rrRatio = (Math.abs(target - entry) / Math.abs(entry - sl)).toFixed(1);
+    const rrRatio = (Math.abs(target - entry) / Math.abs(entry - sl)).toFixed(2);
     console.log(
       `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — ` +
-      `skipped: R:R=${rrRatio}, ` +
-      `potProfit=₹${(Math.abs(target - entry) * Math.ceil(settings.riskPerTrade / Math.abs(entry - sl))).toFixed(0)} ` +
-      `< minProfit=₹${settings.minProfit}`,
+      `skipped: R:R=${rrRatio} < minRR=${settings.minRR}`,
     );
     return;
   }
@@ -145,8 +140,13 @@ function _onAlert(alert, source) {
     lotSize:         1,
     entryPrice:      Number(entry),
     exitPrice:       null,
+    // sl moves as TSL trails; initialSl is preserved for R-multiple analytics
     sl:              Number(sl),
+    initialSl:       Number(sl),
     target:          Number(target),
+    // TSL state — set when trailing stop activates
+    tslActivated:    false,
+    peakPrice:       Number(entry),
     status:          'OPEN',
     pnl:             null,
     closedTs:        null,
@@ -157,7 +157,8 @@ function _onAlert(alert, source) {
     interval:        interval         ?? null,
     tfLabel:         alert.tfLabel    ?? null,
     // Risk metadata
-    riskAmount:      settings.riskPerTrade,
+    riskPerUnit:     pos.riskPerUnit,
+    rrRatio:         pos.rrRatio,
     potentialProfit: pos.potentialProfit,
   };
 
@@ -180,7 +181,7 @@ function _onAlert(alert, source) {
     `[AutoTrader] 🤖 ${action} ${trade.symbol} ` +
     `[${alert.tfLabel ?? interval}] ${patternId} ` +
     `entry=₹${entry} sl=₹${sl} target=₹${target} ` +
-    `qty=${pos.quantity} risk=₹${settings.riskPerTrade} pot=₹${pos.potentialProfit} [${source}]`,
+    `R:R=${pos.rrRatio} qty=${pos.quantity} [${source}]`,
   );
 }
 

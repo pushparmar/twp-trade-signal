@@ -19,8 +19,13 @@
 const {
   getKumoBreakoutTwist, getKumoBreakout, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
-  getKijunLevel, getCloudSupport, getVolumeContext,
+  getKijunLevel, getCloudSupport, getVolumeContext, getATR,
 } = require('./ichimoku');
+
+// Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
+// to this floor so positions don't get wicked out by normal noise and the
+// natural Kijun/cloud SL is preserved when it's already sensible.
+const MIN_SL_ATR_MULT = 0.5;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared helpers
@@ -33,41 +38,59 @@ const {
  *   kijun-bounce  → Kijun itself  (close through it = setup failed)
  *   cloud patterns → cloud edge   (re-entering the cloud = setup failed)
  *
- * Fallback when the natural level is missing or on the wrong side of close:
- *   0.5% of the entry price is used so we always return a valid pair.
+ * ATR floor:
+ *   When the natural SL sits closer than MIN_SL_ATR_MULT × ATR14, it gets
+ *   widened to that floor.  This prevents 1-rupee-stop pathologies on tight
+ *   Kijun touches and stops getting wicked out by normal noise.  Skipped
+ *   when candles are unavailable or there aren't enough bars for ATR14.
  *
- * Target = entry ± 2 × risk  (fixed 2:1 R:R).
+ * Fallback when the natural level is missing or on the wrong side of close:
+ *   max(0.5% × close, 0.5 × ATR14) — always returns a valid pair.
+ *
+ * Target = entry ± 2 × risk  (fixed 2:1 R:R minimum; max uncapped).
  *
  * @param {string} patternId  — one of the PATTERNS keys
  * @param {'bullish'|'bearish'} signal
  * @param {object} result     — the raw return from the ichimoku detector
- * @returns {{ sl: number|null, target: number|null }}
+ * @param {object[]} [candles] — optional candle array used to derive ATR
+ * @returns {{ sl: number|null, target: number|null, atr?: number|null }}
  */
-function computeSLTarget(patternId, signal, result) {
+function computeSLTarget(patternId, signal, result, candles) {
   const { close, cloudBottom, cloudTop, kijun, kijunValue } = result;
   if (!close || !signal) return { sl: null, target: null };
 
   const kijunLevel = kijun ?? kijunValue ?? null;
-  let sl;
+  // ATR14 — used both as a floor for the natural SL and as a richer fallback
+  const atr = candles ? getATR(candles, 14) : null;
+  const atrFloor = atr != null ? MIN_SL_ATR_MULT * atr : null;
 
+  let sl;
   if (patternId === 'kijun-bounce') {
-    // SL = the Kijun line itself — a close through it invalidates the setup.
     sl = kijunLevel;
   } else {
-    // Cloud-based patterns: SL = the cloud edge price must not re-enter.
     sl = signal === 'bullish'
       ? (cloudBottom ?? kijunLevel)
       : (cloudTop    ?? kijunLevel);
   }
 
-  // Fallback: no level found → use 0.5% of close
+  // Fallback when no natural level was found — use the bigger of 0.5% and 0.5·ATR
   if (sl == null) {
-    sl = signal === 'bullish' ? close * 0.995 : close * 1.005;
+    const pctSl = signal === 'bullish' ? close * 0.005 : close * 0.005;
+    const slDistance = atrFloor != null ? Math.max(pctSl, atrFloor) : pctSl;
+    sl = signal === 'bullish' ? close - slDistance : close + slDistance;
   }
 
   // Safety: SL must sit on the correct side of close
   if (signal === 'bullish' && sl >= close) sl = close * 0.995;
   if (signal === 'bearish' && sl <= close) sl = close * 1.005;
+
+  // ATR floor — widen SL if it's tighter than 0.5×ATR
+  if (atrFloor != null) {
+    const naturalDist = Math.abs(close - sl);
+    if (naturalDist < atrFloor) {
+      sl = signal === 'bullish' ? close - atrFloor : close + atrFloor;
+    }
+  }
 
   const risk   = Math.abs(close - sl);
   const target = signal === 'bullish' ? close + 2 * risk : close - 2 * risk;
@@ -75,6 +98,7 @@ function computeSLTarget(patternId, signal, result) {
   return {
     sl:     Math.round(sl     * 100) / 100,
     target: Math.round(target * 100) / 100,
+    atr:    atr != null ? Math.round(atr * 100) / 100 : null,
   };
 }
 
@@ -127,8 +151,8 @@ const PATTERNS = {
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target } = computeSLTarget(this.id, result.signal, result);
-      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
+      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
     },
   },
 
@@ -142,8 +166,8 @@ const PATTERNS = {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target } = computeSLTarget(this.id, result.signal, result);
-      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
+      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
     },
   },
 
@@ -160,8 +184,8 @@ const PATTERNS = {
       if (!_tkAligned(result)) return { matched: false };
       if (result.consecutiveBars > maxBars) return { matched: false };
       if (result.score < 3) return { matched: false };
-      const { sl, target } = computeSLTarget(this.id, result.signal, result);
-      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
+      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
     },
   },
 
@@ -175,8 +199,8 @@ const PATTERNS = {
       const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target } = computeSLTarget(this.id, result.signal, result);
-      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
+      const { sl, target, atr } = computeSLTarget(this.id, result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, ..._volumeFields(candles) };
     },
   },
 

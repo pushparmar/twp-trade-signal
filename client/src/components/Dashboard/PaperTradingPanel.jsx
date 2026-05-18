@@ -230,6 +230,9 @@ function OpenTradeRow({ trade, onClose }) {
           : trade.quantity}
       </td>
       <td className="td-num td-sl">
+        {trade.tslActivated && (
+          <span className="paper-tsl-tag" title={`TSL armed — original SL ₹${trade.initialSl ?? '—'}`}>🔒 </span>
+        )}
         {trade.sl != null ? fmtPrice(trade.sl) : '—'}
         {slHit && <span className="paper-hit-tag paper-hit-tag--sl"> 🛑</span>}
       </td>
@@ -252,12 +255,15 @@ function OpenTradeRow({ trade, onClose }) {
 }
 
 // ── Auto-trader settings strip ────────────────────────────────────────────────
+// Testing-mode UI: shows the simplified controls relevant for sampling every
+// pattern firing (quantity is always 1, no rupee-risk filter applied).
 function AutoTraderSettings() {
   const [settings, setSettings] = useState(null);
   const [saving, setSaving]     = useState(false);
   const [editing, setEditing]   = useState(false);
-  const [riskStr, setRiskStr]   = useState('');
-  const [minStr, setMinStr]     = useState('');
+  const [rrStr, setRrStr]       = useState('');
+  const [trigStr, setTrigStr]   = useState('');
+  const [distStr, setDistStr]   = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -268,39 +274,45 @@ function AutoTraderSettings() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function toggle() {
-    if (!settings) return;
+  async function patch(updates) {
     setSaving(true);
     try {
-      const r = await api.post('/auto-trader/settings', { enabled: !settings.enabled });
+      const r = await api.post('/auto-trader/settings', updates);
       setSettings(r.data);
     } catch (err) {
-      console.error('[AutoTrader] toggle failed:', err.message);
+      console.error('[AutoTrader] settings update failed:', err.message);
     } finally {
       setSaving(false);
     }
   }
 
-  async function saveRisk() {
-    const risk = Number(riskStr);
-    const min  = Number(minStr);
-    if (!risk || !min || risk <= 0 || min <= 0) { setEditing(false); return; }
-    setSaving(true);
-    try {
-      const r = await api.post('/auto-trader/settings', { riskPerTrade: risk, minProfit: min });
-      setSettings(r.data);
-    } catch (err) {
-      console.error('[AutoTrader] save risk failed:', err.message);
-    } finally {
-      setSaving(false);
-      setEditing(false);
-    }
+  function toggleAuto() {
+    if (!settings) return;
+    patch({ enabled: !settings.enabled });
+  }
+
+  function toggleTsl() {
+    if (!settings) return;
+    patch({ tslEnabled: !settings.tslEnabled });
+  }
+
+  async function saveEdits() {
+    const rr   = Number(rrStr);
+    const trig = Number(trigStr);
+    const dist = Number(distStr);
+    const updates = {};
+    if (rr   > 0) updates.minRR        = rr;
+    if (trig > 0) updates.tslTriggerR  = trig;
+    if (dist > 0) updates.tslDistanceR = dist;
+    if (Object.keys(updates).length) await patch(updates);
+    setEditing(false);
   }
 
   function startEdit() {
     if (!settings) return;
-    setRiskStr(String(settings.riskPerTrade));
-    setMinStr(String(settings.minProfit));
+    setRrStr(String(settings.minRR));
+    setTrigStr(String(settings.tslTriggerR));
+    setDistStr(String(settings.tslDistanceR));
     setEditing(true);
   }
 
@@ -314,16 +326,24 @@ function AutoTraderSettings() {
         <span className={`at-settings-pill ${settings.enabled ? 'at-settings-pill--on' : 'at-settings-pill--off'}`}>
           {settings.enabled ? 'ON' : 'OFF'}
         </span>
+        <span className="at-settings-mode" title="Testing mode — every qualifying alert places 1 unit">qty 1</span>
       </div>
 
       {settings.enabled && !editing && (
         <div className="at-settings-risk">
-          <span className="at-risk-label">Risk / trade</span>
-          <span className="at-risk-val">₹{settings.riskPerTrade.toLocaleString('en-IN')}</span>
+          <span className="at-risk-label">Min R:R</span>
+          <span className="at-risk-val">1:{settings.minRR}</span>
           <span className="at-risk-sep">·</span>
-          <span className="at-risk-label">Min profit</span>
-          <span className="at-risk-val">₹{settings.minProfit.toLocaleString('en-IN')}</span>
-          <button className="at-edit-btn" onClick={startEdit} title="Edit risk settings">
+          <span className="at-risk-label">TSL</span>
+          <button
+            className={`at-tsl-pill ${settings.tslEnabled ? 'at-tsl-pill--on' : ''}`}
+            onClick={toggleTsl}
+            disabled={saving}
+            title="Toggle Trailing Stop Loss"
+          >
+            {settings.tslEnabled ? `ON · ${settings.tslTriggerR}R / ${settings.tslDistanceR}R` : 'OFF'}
+          </button>
+          <button className="at-edit-btn" onClick={startEdit} title="Edit thresholds">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
@@ -334,18 +354,20 @@ function AutoTraderSettings() {
 
       {editing && (
         <div className="at-settings-edit">
-          <label className="at-edit-label">Risk ₹</label>
-          <input className="at-edit-input" type="number" value={riskStr} onChange={(e) => setRiskStr(e.target.value)} placeholder="5000" />
-          <label className="at-edit-label">Min profit ₹</label>
-          <input className="at-edit-input" type="number" value={minStr}  onChange={(e) => setMinStr(e.target.value)}  placeholder="10000" />
-          <button className="btn btn-primary btn-sm" onClick={saveRisk} disabled={saving}>Save</button>
+          <label className="at-edit-label">Min R:R</label>
+          <input className="at-edit-input" type="number" step="0.1" value={rrStr}   onChange={(e) => setRrStr(e.target.value)}   placeholder="2.0" />
+          <label className="at-edit-label">TSL trig (R)</label>
+          <input className="at-edit-input" type="number" step="0.1" value={trigStr} onChange={(e) => setTrigStr(e.target.value)} placeholder="1.0" />
+          <label className="at-edit-label">TSL dist (R)</label>
+          <input className="at-edit-input" type="number" step="0.1" value={distStr} onChange={(e) => setDistStr(e.target.value)} placeholder="0.5" />
+          <button className="btn btn-primary btn-sm" onClick={saveEdits} disabled={saving}>Save</button>
           <button className="btn btn-ghost   btn-sm" onClick={() => setEditing(false)}>Cancel</button>
         </div>
       )}
 
       <button
         className={`at-toggle-btn ${settings.enabled ? 'at-toggle-btn--on' : ''}`}
-        onClick={toggle}
+        onClick={toggleAuto}
         disabled={saving}
         title={settings.enabled ? 'Disable auto-trader' : 'Enable auto-trader'}
       >

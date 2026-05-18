@@ -1110,17 +1110,33 @@ function to4H(candles1h) {
     byDay.get(day).push(c);
   }
 
+  // Track the most-recent day so we can emit a partial group for it.
+  // For all earlier days a partial group at the end is dropped (historical
+  // accuracy matters — but the most-recent day's intraday move should NOT
+  // be invisible to the 4h scan just because the day hasn't finished yet).
+  const days = [...byDay.keys()].sort(); // ISO YYYY-MM-DD sorts chronologically
+  const todayKey = days[days.length - 1];
+
   const out = [];
-  for (const dayCandles of byDay.values()) {
-    // Only process complete groups of 4 — partial end-of-session groups are dropped
-    for (let i = 0; i + 3 < dayCandles.length; i += 4) {
+  for (const day of days) {
+    const dayCandles = byDay.get(day);
+    const isToday    = day === todayKey;
+
+    for (let i = 0; i < dayCandles.length; i += 4) {
       const slice = dayCandles.slice(i, i + 4);
+      // Historical days: drop partial trailing groups (preserves old behaviour)
+      if (slice.length < 4 && !isToday) continue;
+      // Today: emit even partial groups (≥1 bar) so latest intraday is visible
+      if (slice.length < 1) continue;
+
       out.push({
         date:  slice[0].date,
         open:  slice[0].open,
         high:  Math.max(...slice.map((c) => c.high)),
         low:   Math.min(...slice.map((c) => c.low)),
         close: slice[slice.length - 1].close,
+        // Flag forming candles so downstream scanners can opt to exclude them
+        partial: isToday && slice.length < 4,
       });
     }
   }
@@ -1245,6 +1261,37 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
  * @param {number}   [lookback=20]
  * @returns {{ currentVolume: number, avgVolume: number, volumeRatio: number } | null}
  */
+/**
+ * Average True Range (ATR) over `period` bars.
+ * Classic Wilder TR = max(high-low, |high-prevClose|, |low-prevClose|).
+ *
+ * Returns the simple average over the last `period` true-range values, computed
+ * on the closed history portion of the array.  Returns null when there aren't
+ * enough bars to satisfy the period (need period+1 candles to form `period` TRs).
+ *
+ * Used by patternRegistry.computeSLTarget to widen tight SLs (e.g. when Kijun
+ * sits 0.1% from price) to a minimum distance of `0.5 * ATR14`.  This avoids
+ * "1-rupee stop" position-sizing pathologies and stops getting wicked out by
+ * normal noise.
+ */
+function getATR(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
+  const trs = [];
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const c    = candles[i];
+    const prev = candles[i - 1];
+    if (!c || !prev) continue;
+    const tr = Math.max(
+      c.high - c.low,
+      Math.abs(c.high - prev.close),
+      Math.abs(c.low  - prev.close),
+    );
+    trs.push(tr);
+  }
+  if (trs.length < period) return null;
+  return trs.reduce((s, x) => s + x, 0) / trs.length;
+}
+
 function getVolumeContext(candles, lookback = 20) {
   if (!candles || candles.length < lookback + 1) return null;
 
@@ -1288,5 +1335,6 @@ module.exports = {
   getKijunLevel,
   getCloudSupport,
   getVolumeContext,
+  getATR,
   to4H,
 };

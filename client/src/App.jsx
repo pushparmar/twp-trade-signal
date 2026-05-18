@@ -3,57 +3,122 @@ import api from './api';
 import useAppStore from './store/appStore';
 import useSSE from './hooks/useSSE';
 import Sidebar from './components/Layout/Sidebar';
+import HeaderStrip from './components/Layout/HeaderStrip';
 import Dashboard from './components/Dashboard/Dashboard';
 import SettingsPanel from './components/Settings/SettingsPanel';
 import MarketWatch from './components/Market/MarketWatch';
 import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import AnalyticsPage from './components/Analytics/AnalyticsPage';
+import BacktestPage from './components/Backtest/BacktestPage';
 import ToastContainer from './components/Toast/Toast';
 import LoginPage from './components/Auth/LoginPage';
 import './App.css';
 
-// ── Global paper-trade auto-close watcher ─────────────────────────────────────
-// Watches live ticks for every open scan-sourced paper trade and auto-closes
-// when SL or target is hit. Runs at the App level so it stays active regardless
-// of which tab (Dashboard / Scanner / Market) the user is on.
+// ── Client-side fallback for SL / Target / TSL ────────────────────────────────
+// The server-side tradeWatcher.js is the authoritative path — it runs on raw
+// ticks, has access to ohlc.high/low (catches gap-throughs), persists every
+// state change, and broadcasts paper_trade_update SSE so all clients sync.
+//
+// This client hook now exists ONLY as a fallback for when SSE drops or the
+// server-side watcher is unavailable (e.g. older deployment).  It uses the
+// same logic but PATCH /trail and POST /close calls become no-ops when the
+// server has already processed the close (server returns 404, we ignore).
 function usePaperAutoClose() {
   const paperTrades         = useAppStore((s) => s.paperTrades);
   const ticks               = useAppStore((s) => s.ticks);
   const closeScanPaperTrade = useAppStore((s) => s.closeScanPaperTrade);
+  const updatePaperTrade    = useAppStore((s) => s.updatePaperTrade);
   const addToast            = useAppStore((s) => s.addToast);
   // Ref prevents double-closing the same trade in React strict-mode double-effects
-  const closedIds = useRef(new Set());
+  const closedIds  = useRef(new Set());
+  // Cache TSL settings — refetched lazily, no need for SSE
+  const tslSettings = useRef(null);
+
+  // Lazy-load TSL settings on first use
+  useEffect(() => {
+    api.get('/auto-trader/settings')
+      .then((r) => { tslSettings.current = r.data; })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    // Monitor all scan-originated and auto-placed trades for SL / target hits
     const openTrades = paperTrades.filter(
       (t) => t.status === 'OPEN' && (t.source === 'scan' || t.source === 'auto'),
     );
     if (openTrades.length === 0) return;
+
+    const tslCfg = tslSettings.current;
+    const tslEnabled   = !!tslCfg?.tslEnabled;
+    const tslTriggerR  = tslCfg?.tslTriggerR  ?? 1.0;
+    const tslDistanceR = tslCfg?.tslDistanceR ?? 0.5;
 
     for (const trade of openTrades) {
       if (closedIds.current.has(trade.id)) continue;
       const ltp = ticks[trade.token]?.lastPrice;
       if (ltp == null) continue;
 
-      let closeAt  = null;
-      let msg      = '';
+      // ── 1. TRAILING STOP LOSS ─────────────────────────────────────────────
+      // Only run TSL when enabled, an initialSl is present (set at trade open),
+      // and we have a clean BUY/SELL direction.
+      const initialSl  = trade.initialSl ?? trade.sl;
+      const riskPerUnit = Math.abs(trade.entryPrice - initialSl);
+      if (tslEnabled && riskPerUnit > 0.01 && (trade.action === 'BUY' || trade.action === 'SELL')) {
+        // Profit in price-units (per share) so far
+        const profit = trade.action === 'BUY'
+          ? ltp - trade.entryPrice
+          : trade.entryPrice - ltp;
+
+        if (profit >= tslTriggerR * riskPerUnit) {
+          // Track the favourable extreme
+          const prevPeak = trade.peakPrice ?? trade.entryPrice;
+          const newPeak  = trade.action === 'BUY' ? Math.max(prevPeak, ltp) : Math.min(prevPeak, ltp);
+
+          // New SL = trail tslDistanceR × risk behind the peak
+          const trailGap = tslDistanceR * riskPerUnit;
+          const candidateSl = trade.action === 'BUY' ? newPeak - trailGap : newPeak + trailGap;
+
+          // SL may only move favourably (never widen) — and must clear break-even
+          const shouldMove = trade.action === 'BUY'
+            ? candidateSl > (trade.sl ?? -Infinity)
+            : candidateSl < (trade.sl ?? Infinity);
+
+          if (shouldMove) {
+            const newSl = Math.round(candidateSl * 100) / 100;
+            // Update local state immediately for snappy UI
+            updatePaperTrade({ ...trade, sl: newSl, peakPrice: newPeak, tslActivated: true });
+            // Persist server-side (mirrored to MongoDB inside the route)
+            api.patch(`/paper/${trade.id}/trail`, {
+              sl: newSl, peakPrice: newPeak, tslActivated: true,
+            }).catch(() => {});
+            // First-time activation toast
+            if (!trade.tslActivated) {
+              addToast({ type: 'info', message: `🔒 TSL armed — ${trade.symbol} SL → ₹${newSl.toFixed(2)}` });
+            }
+            // Continue to SL/target check below using the new SL via local ref
+            trade.sl = newSl;
+          }
+        }
+      }
+
+      // ── 2. SL / TARGET HIT CHECK ──────────────────────────────────────────
+      let closeAt = null;
+      let msg     = '';
 
       if (trade.action === 'BUY') {
         if (trade.sl != null && ltp <= trade.sl) {
           closeAt = trade.sl;
-          msg = `🛑 SL hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+          msg = `${trade.tslActivated ? '🔒' : '🛑'} ${trade.tslActivated ? 'TSL' : 'SL'} hit — ${trade.symbol} @ ₹${ltp.toFixed(2)}`;
         } else if (trade.target != null && ltp >= trade.target) {
           closeAt = trade.target;
-          msg = `🎯 Target hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+          msg = `🎯 Target hit — ${trade.symbol} @ ₹${ltp.toFixed(2)}`;
         }
       } else if (trade.action === 'SELL') {
         if (trade.sl != null && ltp >= trade.sl) {
           closeAt = trade.sl;
-          msg = `🛑 SL hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+          msg = `${trade.tslActivated ? '🔒' : '🛑'} ${trade.tslActivated ? 'TSL' : 'SL'} hit — ${trade.symbol} @ ₹${ltp.toFixed(2)}`;
         } else if (trade.target != null && ltp <= trade.target) {
           closeAt = trade.target;
-          msg = `🎯 Target hit — ${trade.symbol} closed @ ₹${ltp.toFixed(2)}`;
+          msg = `🎯 Target hit — ${trade.symbol} @ ₹${ltp.toFixed(2)}`;
         }
       }
 
@@ -61,12 +126,10 @@ function usePaperAutoClose() {
         closedIds.current.add(trade.id);
         closeScanPaperTrade(trade.id, closeAt);
         addToast({ type: 'info', message: msg });
-        // Sync the auto-close to the server so trades-current.json reflects
-        // the closed status and the 6 AM archive captures correct P&L.
         api.post(`/paper/${trade.id}/close`, { exitPrice: closeAt }).catch(() => {});
       }
     }
-  }, [ticks, paperTrades, closeScanPaperTrade, addToast]);
+  }, [ticks, paperTrades, closeScanPaperTrade, updatePaperTrade, addToast]);
 }
 
 function useTheme() {
@@ -86,6 +149,7 @@ const PAGES = {
   market:    MarketWatch,
   scanner:   ScanAlertsPage,
   analytics: AnalyticsPage,
+  backtest:  BacktestPage,
   settings:  SettingsPanel,
 };
 
@@ -187,6 +251,7 @@ function AppShell() {
         }}
       />
       <div className="main-area">
+        <HeaderStrip />
         <ActiveComponent />
       </div>
       <ToastContainer />
