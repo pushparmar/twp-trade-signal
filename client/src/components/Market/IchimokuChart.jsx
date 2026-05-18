@@ -51,7 +51,7 @@ function cssVar(name, fallback) {
 
 // ── IchimokuChart ─────────────────────────────────────────────────────────────
 
-function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null }, forwardedRef) {
+function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, label = null }, forwardedRef) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
@@ -279,6 +279,19 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null },
             seriesRef.current = {};
         };
     }, []); // run once — series are updated by data effect below
+
+    // ── Peek-subscribe: ensure this token gets live ticks while the chart is open ──
+    // Background scanner and manual screener alerts are NOT in the watchlist,
+    // so their tokens have no Kite ticker subscription and ticks[token] stays null.
+    // We subscribe on first mount (and on token change) and clean up on unmount
+    // so the live-tick update effect below can animate the current candle.
+    useEffect(() => {
+        if (!token) return;
+        api.post('/instruments/peek-subscribe', { tokens: [token] }).catch(() => {});
+        return () => {
+            api.post('/instruments/peek-unsubscribe', { tokens: [token] }).catch(() => {});
+        };
+    }, [token]);
 
     // ── Fetch + populate data whenever token or interval changes ─────────────
     useEffect(() => {
@@ -525,11 +538,29 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null },
     }), []);
 
     // ── Render ────────────────────────────────────────────────────────────────
+    const ltp    = tick?.lastPrice ?? null;
+    const change = tick?.change    ?? null;
+    const chgPos = change > 0;
+    const chgNeg = change < 0;
+
     return (
         <div className="ichi-chart-wrap">
-            {/* Header: title + legend in one compact row */}
+            {/* Header: instrument name + live price on the same row */}
             <div className="ichi-chart-header">
-                <span className="ichi-chart-title">TWP chart</span>
+                {label
+                  ? <span className="ichi-chart-title">{label}</span>
+                  : <span className="ichi-chart-title">Chart</span>
+                }
+                {ltp != null && (
+                    <span className="ichi-chart-ltp">
+                        ₹{Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        {change != null && (
+                            <span className={`ichi-chart-chg ${chgPos ? 'ichi-chart-chg--up' : chgNeg ? 'ichi-chart-chg--down' : ''}`}>
+                                {chgPos ? '+' : ''}{Number(change).toFixed(2)}%
+                            </span>
+                        )}
+                    </span>
+                )}
             </div>
 
             {/* Chart canvas */}

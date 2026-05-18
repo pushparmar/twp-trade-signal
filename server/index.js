@@ -14,7 +14,8 @@ const instrumentsRouter = require('./routes/instruments');
 const historicalRouter = require('./routes/historical');
 const ichimokuRouter = require('./routes/ichimoku');
 const macroRouter    = require('./routes/macro');
-const scanRouter     = require('./routes/scan');
+const scanRouter      = require('./routes/scan');
+const analyticsRouter = require('./routes/analytics');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
 const kiteTicker = require('./services/kiteTicker');
@@ -25,6 +26,7 @@ const liveScanner           = require('./services/liveScanner');
 const backgroundScanner     = require('./services/backgroundScanner');
 const foStockRegistry       = require('./services/foStockRegistry');
 const tradeArchiver         = require('./services/tradeArchiver');
+const db                    = require('./db');
 const store = require('./store');
 
 const app = express();
@@ -88,10 +90,19 @@ app.use('/api/instruments', instrumentsRouter);
 app.use('/api/historical', historicalRouter);
 app.use('/api/ichimoku', ichimokuRouter);
 app.use('/api/macro',   macroRouter);
-app.use('/api/scan',    scanRouter);
+app.use('/api/scan',      scanRouter);
+app.use('/api/analytics', analyticsRouter);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
+
+  // Connect to MongoDB — fire-and-forget (a DB outage must never block startup).
+  // All repo writes check mongo.isReady() so they silently skip if DB is down.
+  db.init().then((connected) => {
+    if (!connected) console.warn('[DB] MongoDB not connected — pattern analytics disabled');
+  }).catch((err) => {
+    console.warn('[DB] init() threw unexpectedly:', err.message);
+  });
 
   // DISABLE_TELEGRAM_POLLING=true in local .env prevents 409 conflicts when
   // both local dev server and Railway are running simultaneously.
@@ -212,6 +223,8 @@ function _gracefulShutdown(signal) {
   console.log(`[Server] ${signal} received — shutting down gracefully`);
   telegramPoller.stop();
   backgroundScanner.stop();
+  // Close MongoDB connection so any in-flight writes complete before exit
+  db.close().catch(() => {});
   // Give in-flight requests a moment to complete, then exit
   setTimeout(() => process.exit(0), 2_000);
 }

@@ -10,8 +10,13 @@ let isPolling  = false;
 let pollTimeout = null;
 let lastMessages = [];
 let _conflictRetries = 0;
-const MAX_CONFLICT_RETRIES = 10;      // retry for up to ~80s total before giving up
-const CONFLICT_BACKOFF_MS  = 8_000;  // wait 8s per retry — old instance usually dies within 5s
+
+// On Railway redeploy the old instance gets SIGTERM but Telegram's servers
+// hold the long-poll socket open for up to ~10 s after the process exits.
+// We retry with generous backoff so the new instance waits out that window.
+// 15 retries × 10 s = up to 150 s total — well past Telegram's 90 s timeout.
+const MAX_CONFLICT_RETRIES = 15;
+const CONFLICT_BACKOFF_MS  = 10_000;
 
 function getStatus() {
   return { isPolling, offset };
@@ -38,10 +43,11 @@ async function start() {
   _conflictRetries = 0;
   isPolling = true;
   broadcast('status', { pollingStatus: 'running' });
-  // Short startup delay — on Railway, the old instance gets SIGTERM and has
-  // ~2s to stop. Waiting here ensures its long-poll connection is released
-  // before we open a new one, preventing the 409 conflict on redeploy.
-  pollTimeout = setTimeout(poll, 3_000);
+  // Startup delay — on Railway, the old instance gets SIGTERM but Telegram's
+  // servers hold the long-poll socket open for several seconds after the process
+  // exits. Waiting 12 s here means the very first poll attempt lands after the
+  // stale connection has expired, eliminating 409s on normal redeployments.
+  pollTimeout = setTimeout(poll, 12_000);
 }
 
 function stop() {
@@ -86,7 +92,7 @@ async function poll() {
         stop();
         return;
       }
-      console.warn(`[Telegram] 409 conflict — backing off ${CONFLICT_BACKOFF_MS / 1000}s (attempt ${_conflictRetries}/${MAX_CONFLICT_RETRIES})`);
+      console.warn(`[Telegram] 409 conflict — another instance is polling. Backing off ${CONFLICT_BACKOFF_MS / 1000}s (attempt ${_conflictRetries}/${MAX_CONFLICT_RETRIES}). Set DISABLE_TELEGRAM_POLLING=true in local .env if running alongside Railway.`);
       pollTimeout = setTimeout(poll, CONFLICT_BACKOFF_MS);
       return; // skip schedulePoll() below
     }

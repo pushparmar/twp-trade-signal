@@ -43,6 +43,7 @@ const { to4H }         = require('../services/ichimoku');
 const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis');
 const instrumentCache  = require('../services/instrumentCache');
 const foStockRegistry  = require('../services/foStockRegistry');
+const db               = require('../db');
 
 /**
  * Return the scan universe of F&O-eligible stocks.
@@ -479,7 +480,7 @@ router.post('/', async (req, res) => {
               if (!result || !result.matched) continue;
 
               phaseMatched++;
-              matches.push({
+              const matchEntry = {
                 token:           item.instrumentToken,
                 tradingsymbol:   item.tradingsymbol,
                 exchange:        item.exchange,
@@ -512,7 +513,16 @@ router.post('/', async (req, res) => {
                 // Volume context — ratio vs 20-bar avg; confirmed when ≥ 1.2×
                 volumeRatio:     result.volumeRatio     ?? null,
                 volumeConfirmed: result.volumeConfirmed ?? null,
-              });
+              };
+              matches.push(matchEntry);
+
+              // Mirror to MongoDB for pattern analytics — fire-and-forget
+              db.alertRepo.insertAlert({
+                ...matchEntry,
+                label: matchEntry.name || matchEntry.tradingsymbol,
+                tfLabel: { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' }[interval] || interval,
+                ts: Date.now(),
+              }, 'manual');
             }
           } catch (err) {
             // Silence per-instrument errors — one bad token shouldn't abort the scan

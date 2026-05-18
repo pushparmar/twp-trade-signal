@@ -403,4 +403,44 @@ router.get('/status', (req, res) => {
   });
 });
 
+// ── Peek-subscribe / peek-unsubscribe ─────────────────────────────────────────
+// Lightweight endpoints for temporary chart-viewing subscriptions.
+//
+// Unlike /subscribe (which modifies the watchlist + liveScanner), these only
+// touch the KiteTicker. Use them when a chart modal opens so live tick prices
+// flow in, and clean up when the modal closes.
+//
+// POST /api/instruments/peek-subscribe   { tokens: number[] }
+// POST /api/instruments/peek-unsubscribe { tokens: number[] }
+
+router.post('/peek-subscribe', (req, res) => {
+  const tokens = (req.body?.tokens || []).map(Number).filter(Boolean);
+  if (!tokens.length) return res.status(400).json({ error: 'tokens array is required' });
+
+  kiteTicker.subscribe(tokens);
+  res.json({ ok: true, subscribed: tokens });
+});
+
+router.post('/peek-unsubscribe', (req, res) => {
+  const tokens = (req.body?.tokens || []).map(Number).filter(Boolean);
+  if (!tokens.length) return res.status(400).json({ error: 'tokens array is required' });
+
+  const watchlistTokens = new Set(
+    store.getWatchlist().map((w) => Number(w.instrumentToken)),
+  );
+  const openTradeTokens = new Set(
+    store.getPaperTrades()
+      .filter((t) => t.status === 'OPEN' && t.token)
+      .map((t) => Number(t.token)),
+  );
+
+  // Only unsubscribe tokens that are not still needed by the watchlist or open trades
+  const toUnsub = tokens.filter(
+    (t) => !watchlistTokens.has(t) && !openTradeTokens.has(t),
+  );
+  if (toUnsub.length) kiteTicker.unsubscribe(toUnsub);
+
+  res.json({ ok: true, unsubscribed: toUnsub, kept: tokens.length - toUnsub.length });
+});
+
 module.exports = router;

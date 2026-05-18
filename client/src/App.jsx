@@ -7,6 +7,7 @@ import Dashboard from './components/Dashboard/Dashboard';
 import SettingsPanel from './components/Settings/SettingsPanel';
 import MarketWatch from './components/Market/MarketWatch';
 import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
+import AnalyticsPage from './components/Analytics/AnalyticsPage';
 import ToastContainer from './components/Toast/Toast';
 import LoginPage from './components/Auth/LoginPage';
 import './App.css';
@@ -81,6 +82,7 @@ const PAGES = {
   dashboard: Dashboard,
   market:    MarketWatch,
   scanner:   ScanAlertsPage,
+  analytics: AnalyticsPage,
   settings:  SettingsPanel,
 };
 

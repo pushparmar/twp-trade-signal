@@ -123,6 +123,7 @@ export default function ScanChartModal({ alert, onClose }) {
             token={alert.token}
             interval={interval}
             defaultBars={50}
+            label={alert.label}
           />
         </div>
       </div>

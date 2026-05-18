@@ -1099,6 +1099,41 @@ export default function ScanAlertsPage() {
   // Buy modal state — set to { alert, entryPrice, action } when user clicks Paper BUY/SELL
   const [buyModalData, setBuyModalData] = useState(null);
 
+  // ── Live tick subscription for scanner alert tokens ───────────────────────
+  // Scanner alerts (both live SSE and screener results) come from tokens that
+  // are NOT in the watchlist and therefore not subscribed to the Kite ticker.
+  // Without subscribing them, ticks[alert.token] stays null and the LTP column
+  // always shows "—".
+  //
+  // Strategy: keep a ref of already-subscribed tokens so we never re-subscribe
+  // the same token, batch any newly seen tokens in one API call, and on unmount
+  // release everything via peek-unsubscribe (which is smart enough to skip
+  // tokens still needed by the watchlist or open paper trades).
+  const subscribedScanTokensRef = useRef(new Set());
+
+  useEffect(() => {
+    const allTokens = scanAlerts
+      .map((a) => Number(a.token))
+      .filter(Boolean);
+    const newTokens = [...new Set(allTokens)].filter(
+      (t) => !subscribedScanTokensRef.current.has(t),
+    );
+    if (newTokens.length === 0) return;
+    api.post('/instruments/peek-subscribe', { tokens: newTokens }).catch(() => {});
+    newTokens.forEach((t) => subscribedScanTokensRef.current.add(t));
+  }, [scanAlerts]);
+
+  // Release all scanner-subscribed tokens when the Scanner tab unmounts
+  useEffect(() => {
+    return () => {
+      const tokens = [...subscribedScanTokensRef.current];
+      if (tokens.length > 0) {
+        api.post('/instruments/peek-unsubscribe', { tokens }).catch(() => {});
+        subscribedScanTokensRef.current.clear();
+      }
+    };
+  }, []);
+
   // Auto-close watcher has been moved to App.jsx (usePaperAutoClose) so it
   // remains active across all tabs — not just when the Scanner is mounted.
 

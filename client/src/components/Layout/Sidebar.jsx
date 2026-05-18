@@ -83,6 +83,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    id: 'analytics',
+    label: 'Analytics',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="18" y1="20" x2="18" y2="10" />
+        <line x1="12" y1="20" x2="12" y2="4"  />
+        <line x1="6"  y1="20" x2="6"  y2="14" />
+      </svg>
+    ),
+  },
+  {
     id: 'settings',
     label: 'Settings',
     icon: (
@@ -112,6 +123,8 @@ export default function Sidebar({
 }) {
   const isLive       = pollingStatus === 'running';
   const isMarket     = activePage === 'market';
+  // Settings tab is hidden by default (visible only when ?setting=1 is in the URL).
+  // All other tabs — including analytics — are always visible.
   const visibleNav   = NAV_ITEMS.filter(item => item.id !== 'settings' || showSettings);
   const scanAlerts   = useAppStore(s => s.scanAlerts);
   const scanCount    = scanAlerts.length;

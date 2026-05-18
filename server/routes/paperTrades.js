@@ -4,6 +4,7 @@ const path        = require('path');
 const { addPaperTrade, getPaperTrades, closePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
 const { broadcast }   = require('../sseHub');
 const kiteTicker  = require('../services/kiteTicker');
+const db          = require('../db');
 
 // ── Ticker subscription helpers ───────────────────────────────────────────────
 
@@ -76,6 +77,8 @@ router.post('/', (req, res) => {
   }
   addPaperTrade(trade); // writes through to trades-current.json
   _subscribeTradeToken(trade.token);
+  // Mirror to MongoDB for pattern performance analysis — fire-and-forget
+  db.tradeRepo.upsertTrade(trade);
   res.status(201).json(trade);
 });
 
@@ -90,6 +93,8 @@ router.post('/:id/close', (req, res) => {
   broadcast('paper_balance', getPaperBalance());
   // Unsubscribe the token if no other open trade or watchlist entry needs it
   _unsubscribeIfUnneeded(trade.token);
+  // Mirror closed trade to MongoDB — fire-and-forget
+  db.tradeRepo.closeTrade(trade);
   res.json(trade);
 });
 

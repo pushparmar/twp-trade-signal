@@ -45,6 +45,7 @@ const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
 const { isAnyMarketOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const db                  = require('../db');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -313,7 +314,7 @@ async function _runScanForInterval(interval) {
       );
 
       // ── SSE → Scanner UI tab ──────────────────────────────────────────────
-      broadcast('scan_alert', {
+      const alertPayload = {
         token:             Number(inst.instrumentToken),
         label,
         interval,
@@ -338,7 +339,11 @@ async function _runScanForInterval(interval) {
         confluenceTfs,
         confluenceCount:   confluenceTfs.length,
         ts:                Date.now(),
-      });
+      };
+      broadcast('scan_alert', alertPayload);
+
+      // ── MongoDB — fire-and-forget (never blocks the scan loop) ────────────
+      db.alertRepo.insertAlert(alertPayload, 'background');
 
       const volTag = result.volumeConfirmed ? ' 📈vol' : '';
       const mtfTag = confluenceTfs.length   ? ` ⚡MTF(${confluenceTfs.join('+')})` : '';

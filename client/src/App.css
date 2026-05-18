@@ -2610,6 +2610,28 @@ body {
   letter-spacing: 0.06em;
 }
 
+/* Live price shown alongside the instrument name in the chart header */
+.ichi-chart-ltp {
+  display:     flex;
+  align-items: center;
+  gap:         6px;
+  font-size:   15px;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+  color:       var(--txt1);
+  letter-spacing: 0.01em;
+}
+.ichi-chart-chg {
+  font-size:   11px;
+  font-weight: 600;
+  padding:     2px 6px;
+  border-radius: 4px;
+  background:  var(--border2);
+  color:       var(--txt3);
+}
+.ichi-chart-chg--up   { background: rgba(34,197,94,0.12); color: #22c55e; }
+.ichi-chart-chg--down { background: rgba(239,68,68,0.12); color: #ef4444; }
+
 /* TF selector pill buttons */
 .ichi-chart-tfs {
   display: flex;

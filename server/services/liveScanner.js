@@ -22,6 +22,7 @@ const { to4H }         = require('./ichimoku');
 const telegramNotifier = require('./telegramNotifier');
 const patternAlertMessage = require('./patternAlertMessage');
 const { isNseOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const db               = require('../db');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ async function _runAndBroadcast(token, interval, candles) {
     if (!_claimFire(dedupKey)) continue; // already broadcast today
 
     // ── SSE: always fires (Scanner UI tab) ─────────────────────────────────
-    broadcast('scan_alert', {
+    const alertPayload = {
       token:            Number(token),
       label,
       interval,
@@ -126,8 +127,18 @@ async function _runAndBroadcast(token, interval, candles) {
       barsAgo:          result.barsAgo          ?? null,
       consecutiveBars:  result.consecutiveBars  ?? null,
       cloudThickness:   result.cloudThickness   ?? null,
+      // SL / Target (liveScanner passes these through from the pattern result)
+      sl:               result.sl               ?? null,
+      target:           result.target           ?? null,
+      // Volume
+      volumeRatio:      result.volumeRatio      ?? null,
+      volumeConfirmed:  result.volumeConfirmed  ?? null,
       ts:               Date.now(),
-    });
+    };
+    broadcast('scan_alert', alertPayload);
+
+    // ── MongoDB — fire-and-forget (never blocks the scan loop) ────────────
+    db.alertRepo.insertAlert(alertPayload, 'live');
 
     console.log(`[LiveScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} ${result.signal} — ${label} (${tfLabel})`);
 
