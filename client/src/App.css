@@ -521,7 +521,9 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow: hidden;
+  overflow-x: auto;          /* horizontal scroll when table is wider than viewport */
+  overflow-y: hidden;        /* keep border-radius clipping on top/bottom */
+  -webkit-overflow-scrolling: touch;   /* smooth momentum scroll on iOS */
   box-shadow: var(--shadow);
 }
 .kite-table { width: 100%; border-collapse: collapse; }
@@ -1879,7 +1881,7 @@ body {
     order: 1;
     flex: 1;
     overflow-y: auto;
-    overflow-x: hidden;
+    overflow-x: clip;   /* clip page-level overflow but allow child scroll containers */
     min-height: 0;
   }
 
@@ -2008,11 +2010,8 @@ body {
 
   .idx-sig-cell { padding: 10px 8px; font-size: 10px; }
 
-  /* ── Watchlist table — horizontal scroll like index tab ── */
-  .kite-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-
-  .kite-table th { padding: 8px 8px; font-size: 10px; white-space: nowrap; }
-  .kite-table td { padding: 8px 8px; font-size: 11px; white-space: nowrap; }
+  .kite-table th { padding: 8px 8px; font-size: 10px; }
+  .kite-table td { padding: 8px 8px; font-size: 11px; }
 
   .mw-sym-name  { font-size: 11px; white-space: nowrap; }
   .mw-sym-meta  { font-size: 10px; }
