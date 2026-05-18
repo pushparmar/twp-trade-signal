@@ -2881,6 +2881,35 @@ body {
   vertical-align: middle;
 }
 
+/* Volume confirmation badge — green tint, shown when vol ≥ 1.2× avg */
+.scan-vol-badge {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* MTF confluence badge — amber/gold tint, shown when same signal fired on ≥2 TFs */
+.scan-mtf-badge {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(234, 179, 8, 0.14);
+  color: #eab308;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
 /* Price @ alert */
 .scan-cell--price { font-family: var(--mono); color: var(--txt2); font-size: 12px; }
 .scan-cell--time  { color: var(--txt3); font-size: 12px; }
@@ -3510,6 +3539,12 @@ body {
 .pbm-optional {
   font-weight: 400;
   color: var(--txt3);
+}
+/* Indicates the field was auto-filled from the pattern's Ichimoku level */
+.pbm-prefilled {
+  font-weight: 500;
+  color: #22c55e;
+  font-size: 10px;
 }
 /* Lot-size helpers inside PaperBuyModal */
 .pbm-lot-hint {

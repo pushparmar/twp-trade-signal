@@ -458,6 +458,12 @@ router.post('/', async (req, res) => {
                 senkouB:         result.senkouB         ?? null,
                 price26ago:      result.price26ago      ?? null,
                 twistBarsAgo:    result.twistBarsAgo    ?? null,
+                // Risk management — Ichimoku natural SL + 2:1 R:R target
+                sl:              result.sl              ?? null,
+                target:          result.target          ?? null,
+                // Volume context — ratio vs 20-bar avg; confirmed when ≥ 1.2×
+                volumeRatio:     result.volumeRatio     ?? null,
+                volumeConfirmed: result.volumeConfirmed ?? null,
               });
             }
           } catch (err) {
@@ -484,6 +490,24 @@ router.post('/', async (req, res) => {
       console.log(`[Scan] pausing ${interTfDelayMs}ms before next timeframe…`);
       await _sleep(interTfDelayMs);
     }
+  }
+
+  // MTF confluence: annotate every match with the set of timeframes where the
+  // same (token, patternId, signal) combination also appeared in this scan run.
+  // confluenceTfs  — all TF labels for this combo (includes the match's own TF)
+  // confluenceCount — total number of TFs; >1 means the signal fired on several TFs
+  const _TF_LABEL = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+  const confluenceMap = new Map();
+  for (const m of matches) {
+    const key = `${m.token}:${m.patternId}:${m.signal}`;
+    if (!confluenceMap.has(key)) confluenceMap.set(key, []);
+    confluenceMap.get(key).push(_TF_LABEL[m.interval] || m.interval);
+  }
+  for (const m of matches) {
+    const key = `${m.token}:${m.patternId}:${m.signal}`;
+    const tfs = confluenceMap.get(key) || [];
+    m.confluenceTfs   = tfs;
+    m.confluenceCount = tfs.length;
   }
 
   // Sort: bullish first, then bearish; then by score descending within each group

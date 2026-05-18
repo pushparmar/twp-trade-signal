@@ -151,6 +151,18 @@ function ScanRow({ alert, onSelect, onBuy }) {
         {alert.consecutiveBars != null && (
           <span className="scan-meta-tag">{alert.consecutiveBars} bars</span>
         )}
+        {/* Volume confirmation badge — only shown when volume is above-average (≥1.2×) */}
+        {alert.volumeConfirmed && alert.volumeRatio != null && (
+          <span className="scan-vol-badge" title={`Volume ${Number(alert.volumeRatio).toFixed(1)}× 20-bar average`}>
+            📈 {Number(alert.volumeRatio).toFixed(1)}×
+          </span>
+        )}
+        {/* MTF confluence badge — signal fired on multiple timeframes in the same scan */}
+        {alert.confluenceCount > 1 && (
+          <span className="scan-mtf-badge" title={`MTF Confluence: ${alert.confluenceTfs?.join(' + ')}`}>
+            ⚡ MTF
+          </span>
+        )}
       </td>
       <td className="scan-cell scan-cell--score">
         <ScoreDots score={alert.score} signal={alert.signal} />
@@ -275,8 +287,10 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
   const [entryEdited, setEntryEdited] = useState(false);
   // Lots (number of lots) — actual quantity = lots * lotSize
   const [lotsStr,     setLotsStr]     = useState(String(tradingDefaults.quantity || 1));
-  const [slStr,       setSlStr]       = useState('');
-  const [targetStr,   setTargetStr]   = useState('');
+  // Pre-fill SL and target from the pattern's computed Ichimoku levels (2:1 R:R)
+  // so the user doesn't need to enter them manually — they can still override.
+  const [slStr,       setSlStr]       = useState(alert.sl     != null ? String(alert.sl)     : '');
+  const [targetStr,   setTargetStr]   = useState(alert.target != null ? String(alert.target) : '');
 
   // Keep entry synced with live LTP until user touches the field
   useEffect(() => {
@@ -377,7 +391,13 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
           {/* SL + Target */}
           <div className="pbm-fields">
             <div className="pbm-field">
-              <label className="pbm-label">Stop Loss ₹ <span className="pbm-optional">(optional)</span></label>
+              <label className="pbm-label">
+                Stop Loss ₹{' '}
+                {alert.sl != null
+                  ? <span className="pbm-prefilled">(Ichimoku level)</span>
+                  : <span className="pbm-optional">(optional)</span>
+                }
+              </label>
               <input
                 className="pbm-input pbm-input--sl"
                 type="number"
@@ -389,7 +409,13 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
               />
             </div>
             <div className="pbm-field">
-              <label className="pbm-label">Target ₹ <span className="pbm-optional">(optional)</span></label>
+              <label className="pbm-label">
+                Target ₹{' '}
+                {alert.target != null
+                  ? <span className="pbm-prefilled">(2:1 R:R)</span>
+                  : <span className="pbm-optional">(optional)</span>
+                }
+              </label>
               <input
                 className="pbm-input pbm-input--target"
                 type="number"
@@ -1037,6 +1063,15 @@ export default function ScanAlertsPage() {
         barsAgo:         m.barsAgo        ?? null,
         consecutiveBars: m.consecutiveBars ?? null,
         cloudThickness:  m.cloudThickness  ?? null,
+        // Risk management — Ichimoku natural SL + 2:1 R:R target
+        sl:              m.sl             ?? null,
+        target:          m.target         ?? null,
+        // Volume context
+        volumeRatio:     m.volumeRatio    ?? null,
+        volumeConfirmed: m.volumeConfirmed ?? null,
+        // MTF confluence — other TFs where same signal fired in this scan
+        confluenceTfs:   m.confluenceTfs  ?? [],
+        confluenceCount: m.confluenceCount ?? 1,
         ts:              now,
         source:          'screener',
       });

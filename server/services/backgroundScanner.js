@@ -95,6 +95,26 @@ function _claimFire(key) {
   return true;
 }
 
+/**
+ * After a new alert fires for (token, patternId, signal, currentInterval),
+ * check whether the same combo has already fired on any OTHER interval today.
+ * Returns an array of short TF labels, e.g. ['1h', '4h'].
+ * An empty array means no prior confluence — this is the first TF to fire.
+ */
+function _getConfluenceTfs(token, patternId, signal, currentInterval) {
+  const today = _istDateStr();
+  const matched = [];
+  for (const iv of INTERVALS) {
+    if (iv === currentInterval) continue;
+    const key   = `bg:${token}:${iv}:${patternId}:${signal}`;
+    const entry = _dedup.get(key);
+    if (entry && entry.date === today && entry.fired) {
+      matched.push(TF_LABEL[iv] || iv);
+    }
+  }
+  return matched;
+}
+
 // ── Next-candle-close calculator ──────────────────────────────────────────────
 
 /**
@@ -283,31 +303,47 @@ async function _runScanForInterval(interval) {
 
       matchCount++;
 
+      // MTF confluence: check if the same signal already fired on other intervals today
+      const confluenceTfs = _getConfluenceTfs(
+        inst.instrumentToken, patternId, result.signal, interval,
+      );
+
       // ── SSE → Scanner UI tab ──────────────────────────────────────────────
       broadcast('scan_alert', {
-        token:            Number(inst.instrumentToken),
+        token:             Number(inst.instrumentToken),
         label,
         interval,
         tfLabel,
         patternId,
         patternLabel,
-        signal:           result.signal,
-        score:            result.score            ?? null,
-        close:            result.close            ?? null,
-        strength:         result.strength         ?? null,
-        cloudPosition:    result.cloudPosition    ?? null,
-        barsAgo:          result.barsAgo          ?? null,
-        consecutiveBars:  result.consecutiveBars  ?? null,
-        cloudThickness:   result.cloudThickness   ?? null,
-        ts:               Date.now(),
+        signal:            result.signal,
+        score:             result.score            ?? null,
+        close:             result.close            ?? null,
+        strength:          result.strength         ?? null,
+        cloudPosition:     result.cloudPosition    ?? null,
+        barsAgo:           result.barsAgo          ?? null,
+        consecutiveBars:   result.consecutiveBars  ?? null,
+        cloudThickness:    result.cloudThickness   ?? null,
+        // SL / Target
+        sl:                result.sl               ?? null,
+        target:            result.target           ?? null,
+        // Volume
+        volumeRatio:       result.volumeRatio      ?? null,
+        volumeConfirmed:   result.volumeConfirmed  ?? null,
+        // MTF Confluence
+        confluenceTfs,
+        confluenceCount:   confluenceTfs.length,
+        ts:                Date.now(),
       });
 
-      console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})`);
+      const volTag = result.volumeConfirmed ? ' 📈vol' : '';
+      const mtfTag = confluenceTfs.length   ? ` ⚡MTF(${confluenceTfs.join('+')})` : '';
+      console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}`);
 
       // ── Telegram ──────────────────────────────────────────────────────────
       if (chatId) {
         const text = patternAlertMessage.build({
-          label, tfLabel, patternLabel, result, kind: 'stock',
+          label, tfLabel, patternLabel, result, kind: 'stock', confluenceTfs,
         });
         try {
           await telegramNotifier.sendMessage(chatId, text);

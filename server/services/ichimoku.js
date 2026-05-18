@@ -1227,6 +1227,46 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
   };
 }
 
+// ── Volume context ────────────────────────────────────────────────────────────
+
+/**
+ * Compare the current candle's volume against a rolling average of the
+ * previous `lookback` candles (the current bar is excluded from the average
+ * so the ratio is based on confirmed closed candles only).
+ *
+ * Returns null when the candle data lacks volume fields or there are fewer
+ * than lookback+1 bars available.
+ *
+ * volumeRatio > 1.0 means current volume is above average.
+ * volumeRatio >= 1.2 is a meaningful confirmation (20 %+ above average).
+ * volumeRatio >= 2.0 signals an unusually active candle.
+ *
+ * @param {Object[]} candles
+ * @param {number}   [lookback=20]
+ * @returns {{ currentVolume: number, avgVolume: number, volumeRatio: number } | null}
+ */
+function getVolumeContext(candles, lookback = 20) {
+  if (!candles || candles.length < lookback + 1) return null;
+
+  const n = candles.length;
+  let sum = 0;
+  for (let i = n - 1 - lookback; i < n - 1; i++) {
+    sum += candles[i].volume ?? 0;
+  }
+
+  const avgVolume     = sum / lookback;
+  const currentVolume = candles[n - 1].volume ?? 0;
+
+  // Avoid division by zero on instruments with no volume data
+  if (avgVolume === 0) return null;
+
+  return {
+    currentVolume: Math.round(currentVolume),
+    avgVolume:     Math.round(avgVolume),
+    volumeRatio:   Math.round((currentVolume / avgVolume) * 100) / 100,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function round(n) {
@@ -1247,5 +1287,6 @@ module.exports = {
   getKumoBounce,
   getKijunLevel,
   getCloudSupport,
+  getVolumeContext,
   to4H,
 };

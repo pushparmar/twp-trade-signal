@@ -19,13 +19,64 @@
 const {
   getKumoBreakoutTwist, getKumoBreakout, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
-  getKijunLevel, getCloudSupport,
+  getKijunLevel, getCloudSupport, getVolumeContext,
 } = require('./ichimoku');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Active patterns — kumo-breakout, kumo-bounce, cloud-support only.
-// The remaining patterns are commented out; uncomment to re-enable.
+// Shared helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute a suggested SL and 2:1 R:R target from a pattern result.
+ *
+ * SL anchor per pattern:
+ *   kijun-bounce  → Kijun itself  (close through it = setup failed)
+ *   cloud patterns → cloud edge   (re-entering the cloud = setup failed)
+ *
+ * Fallback when the natural level is missing or on the wrong side of close:
+ *   0.5% of the entry price is used so we always return a valid pair.
+ *
+ * Target = entry ± 2 × risk  (fixed 2:1 R:R).
+ *
+ * @param {string} patternId  — one of the PATTERNS keys
+ * @param {'bullish'|'bearish'} signal
+ * @param {object} result     — the raw return from the ichimoku detector
+ * @returns {{ sl: number|null, target: number|null }}
+ */
+function computeSLTarget(patternId, signal, result) {
+  const { close, cloudBottom, cloudTop, kijun, kijunValue } = result;
+  if (!close || !signal) return { sl: null, target: null };
+
+  const kijunLevel = kijun ?? kijunValue ?? null;
+  let sl;
+
+  if (patternId === 'kijun-bounce') {
+    // SL = the Kijun line itself — a close through it invalidates the setup.
+    sl = kijunLevel;
+  } else {
+    // Cloud-based patterns: SL = the cloud edge price must not re-enter.
+    sl = signal === 'bullish'
+      ? (cloudBottom ?? kijunLevel)
+      : (cloudTop    ?? kijunLevel);
+  }
+
+  // Fallback: no level found → use 0.5% of close
+  if (sl == null) {
+    sl = signal === 'bullish' ? close * 0.995 : close * 1.005;
+  }
+
+  // Safety: SL must sit on the correct side of close
+  if (signal === 'bullish' && sl >= close) sl = close * 0.995;
+  if (signal === 'bearish' && sl <= close) sl = close * 1.005;
+
+  const risk   = Math.abs(close - sl);
+  const target = signal === 'bullish' ? close + 2 * risk : close - 2 * risk;
+
+  return {
+    sl:     Math.round(sl     * 100) / 100,
+    target: Math.round(target * 100) / 100,
+  };
+}
 
 /**
  * TK alignment guard — shared by all active patterns.
@@ -45,6 +96,20 @@ function _tkAligned(result) {
   return true;
 }
 
+/**
+ * Extract volume fields from raw candles and return them ready to spread
+ * into a pattern result.  volumeConfirmed=true when the current candle's
+ * volume is at least 20% above the 20-bar average — a meaningful signal that
+ * the move has participation behind it.
+ */
+function _volumeFields(candles) {
+  const volCtx = getVolumeContext(candles);
+  return {
+    volumeRatio:     volCtx?.volumeRatio    ?? null,
+    volumeConfirmed: volCtx != null ? volCtx.volumeRatio >= 1.2 : null,
+  };
+}
+
 const PATTERNS = {
 
   'kumo-breakout': {
@@ -61,9 +126,9 @@ const PATTERNS = {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
-      // TK alignment: bullish → Tenkan above Kijun; bearish → Kijun above Tenkan
       if (!_tkAligned(result)) return { matched: false };
-      return { matched: true, ...result };
+      const { sl, target } = computeSLTarget(this.id, result.signal, result);
+      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
     },
   },
 
@@ -76,9 +141,9 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
-      // TK alignment: bullish → Tenkan above Kijun; bearish → Kijun above Tenkan
       if (!_tkAligned(result)) return { matched: false };
-      return { matched: true, ...result };
+      const { sl, target } = computeSLTarget(this.id, result.signal, result);
+      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
     },
   },
 
@@ -92,32 +157,26 @@ const PATTERNS = {
       const { maxBars, ...icOpts } = { ...this.defaultOpts, ...opts };
       const result = getCloudSupport(candles, icOpts);
       if (!result || !result.signal) return { matched: false };
-      // TK alignment is a hard requirement (not just a score bonus):
-      // bullish → Tenkan above Kijun; bearish → Kijun above Tenkan
       if (!_tkAligned(result)) return { matched: false };
-      // Only fire when the setup is fresh — too many consecutive bars means it's
-      // already a well-known trend, not a newly confirmed support/resistance.
       if (result.consecutiveBars > maxBars) return { matched: false };
-      // Only fire when score is at least 3 — avoids alerting on weak/thin cloud setups
       if (result.score < 3) return { matched: false };
-      return { matched: true, ...result };
+      const { sl, target } = computeSLTarget(this.id, result.signal, result);
+      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
     },
   },
 
   'kijun-bounce': {
     id:          'kijun-bounce',
     label:       'Kijun Support / Resistance',
-    description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, no close confirmation required.',
-    // lookback:3 — the wick touch must have occurred within the last 3 closed candles.
-    // tolerance:0.003 — wick must come within 0.3% of the Kijun at that bar.
+    description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, close must not break through.',
     defaultOpts: { lookback: 3, tolerance: 0.003 },
 
     run(candles, opts = {}) {
       const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
-      // TK alignment: bullish → Tenkan above Kijun; bearish → Kijun above Tenkan.
       if (!_tkAligned(result)) return { matched: false };
-      return { matched: true, ...result };
+      const { sl, target } = computeSLTarget(this.id, result.signal, result);
+      return { matched: true, ...result, sl, target, ..._volumeFields(candles) };
     },
   },
 
@@ -221,4 +280,4 @@ function get(id) {
   return PATTERNS[id] || null;
 }
 
-module.exports = { list, get };
+module.exports = { list, get, computeSLTarget };
