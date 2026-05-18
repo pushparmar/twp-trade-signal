@@ -4034,6 +4034,12 @@ body {
   backdrop-filter: saturate(140%) blur(8px);
 }
 
+@media (max-width: 768px) {
+  .header-strip {
+    top:60px;
+  }
+}
+
 .hdr-item {
   display: flex;
   flex-direction: column;
@@ -4111,11 +4117,4 @@ body {
 /* ── Numeric column headers — right-aligned to match td.td-num data ───────── */
 .kite-table th.th-num {
   text-align: right;
-}
-
-/* Swing-target indicator inside R:R badge */
-.scan-rr-swing {
-  margin-left: 3px;
-  font-size: 9px;
-  opacity: .85;
 }
