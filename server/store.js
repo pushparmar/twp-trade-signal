@@ -107,7 +107,8 @@ const TRADES_PATH = process.env.DATA_DIR
 
 let _testMode = false;
 let _paperTrades = [];
-let _paperInitialBalance = 100000;
+// Default starting balance: ₹1 crore (1,00,00,000)
+let _paperInitialBalance = 10_000_000;
 
 // Persist current trades to disk after every mutation.
 function _saveTrades() {
@@ -240,12 +241,12 @@ function removeFromWatchlist(instrumentToken) {
 
 /**
  * Returns the current auto-trader configuration.
- * enabled is false by default — the user must explicitly opt in.
+ * enabled is true by default — user can opt out via the Dashboard toggle.
  */
 function getAutoTraderSettings() {
   const config = readConfig();
   return {
-    enabled:      config.autoTrader?.enabled      ?? false,
+    enabled:      config.autoTrader?.enabled      ?? true,
     // Testing mode — quantity is hard-coded to 1; risk/profit kept for future
     // when we re-enable rupee-risk sizing.
     riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,

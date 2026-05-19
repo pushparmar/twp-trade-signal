@@ -442,6 +442,33 @@ body {
   margin-bottom: 12px;
 }
 
+.order-filter-group {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--card);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 2px;
+}
+.order-filter-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt2);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 120ms, color 120ms;
+}
+.order-filter-btn:hover {
+  color: var(--txt1);
+}
+.order-filter-btn.is-active {
+  background: var(--surface);
+  color: var(--txt1);
+}
+
 .section-title {
   font-size: 11px;
   font-weight: 700;

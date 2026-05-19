@@ -1,3 +1,4 @@
+import { useState } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
 import PaperTradingPanel from "./PaperTradingPanel";
@@ -134,6 +135,13 @@ export default function Dashboard() {
     const orders = useAppStore(s => s.orders);
     const kiteConnected = useAppStore(s => s.kiteConnected);
     const testMode = useAppStore(s => s.testMode);
+    const [orderFilter, setOrderFilter] = useState("all"); // 'all' | 'auto' | 'manual'
+
+    const filteredOrders = orders.filter(o => {
+        if (orderFilter === "all") return true;
+        const src = o.source ?? "auto";
+        return src === orderFilter;
+    });
 
     async function handleKiteConnect() {
         try {
@@ -222,21 +230,39 @@ export default function Dashboard() {
 
             {/* Orders */}
             <section className="dash-section">
-                <h3 className="section-title">
-                    Orders <span className="count-badge">{orders.length}</span>
-                </h3>
-                {orders.length === 0 ? (
+                <div className="section-header">
+                    <h3 className="section-title">
+                        Orders <span className="count-badge">{filteredOrders.length}</span>
+                    </h3>
+                    <div className="order-filter-group" role="tablist">
+                        {["all", "auto", "manual"].map(key => (
+                            <button
+                                key={key}
+                                className={`order-filter-btn ${orderFilter === key ? "is-active" : ""}`}
+                                onClick={() => setOrderFilter(key)}
+                                type="button"
+                            >
+                                {key === "all" ? "All" : key === "auto" ? "Auto" : "Manual"}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                {filteredOrders.length === 0 ? (
                     <div className="empty-card">
-                        <p>No orders placed yet.</p>
+                        <p>
+                            {orders.length === 0
+                                ? "No orders placed yet."
+                                : `No ${orderFilter} orders.`}
+                        </p>
                     </div>
                 ) : (
                     <div className="kite-table-wrap">
                         <table className="kite-table">
                             <thead>
                                 <tr>
-                                    <th>Time</th>
                                     <th>Symbol</th>
                                     <th>Action</th>
+                                    <th>Source</th>
                                     <th>Price</th>
                                     <th>SL</th>
                                     <th>Target</th>
@@ -246,31 +272,38 @@ export default function Dashboard() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {orders.map(o => (
-                                    <tr key={o.id}>
-                                        <td className="td-mono">{fmt(o.ts)}</td>
-                                        <td className="td-symbol">{o.symbol || "—"}</td>
-                                        <td>
-                                            <span className={`pill ${o.action === "BUY" ? "pill-green" : "pill-red"}`}>
-                                                {o.action || "—"}
-                                            </span>
-                                        </td>
-                                        <td className="td-num">{o.price ?? "—"}</td>
-                                        <td className="td-num td-sl">{o.sl ?? "—"}</td>
-                                        <td className="td-num td-tgt">{o.target ?? "—"}</td>
-                                        <td className="td-mono td-muted">{o.orderId || "—"}</td>
-                                        <td>
-                                            <StatusPill status={o.status} />
-                                        </td>
-                                        <td>
-                                            {o.gttStatus ? (
-                                                <StatusPill status={o.gttStatus} />
-                                            ) : (
-                                                <span className="td-muted">—</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
+                                {filteredOrders.map(o => {
+                                    const src = o.source ?? "auto";
+                                    return (
+                                        <tr key={o.id}>
+                                            <td className="td-symbol">{o.symbol || "—"}</td>
+                                            <td>
+                                                <span className={`pill ${o.action === "BUY" ? "pill-green" : "pill-red"}`}>
+                                                    {o.action || "—"}
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span className={`pill ${src === "auto" ? "pill-blue" : "pill-gray"}`}>
+                                                    {src.toUpperCase()}
+                                                </span>
+                                            </td>
+                                            <td className="td-num">{o.price ?? "—"}</td>
+                                            <td className="td-num td-sl">{o.sl ?? "—"}</td>
+                                            <td className="td-num td-tgt">{o.target ?? "—"}</td>
+                                            <td className="td-mono td-muted">{o.orderId || "—"}</td>
+                                            <td>
+                                                <StatusPill status={o.status} />
+                                            </td>
+                                            <td>
+                                                {o.gttStatus ? (
+                                                    <StatusPill status={o.gttStatus} />
+                                                ) : (
+                                                    <span className="td-muted">—</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

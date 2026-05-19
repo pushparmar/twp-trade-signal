@@ -232,6 +232,7 @@ async function handleUpdate(update) {
         target: parsed.targets[0] ?? null,
         targets: parsed.targets,
         status: 'OPEN',
+        source: 'auto',
         gttStatus: null,
       });
     } catch (err) {
@@ -244,6 +245,7 @@ async function handleUpdate(update) {
         action: parsed.action,
         price: entryPrice,
         status: 'FAILED',
+        source: 'auto',
         error: err.message,
         gttStatus: null,
       });
