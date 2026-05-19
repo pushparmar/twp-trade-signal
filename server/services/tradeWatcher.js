@@ -30,6 +30,14 @@ const _closing = new Set();
 const _lastTickBroadcast = new Map();
 
 /**
+ * For options trades, SL/target/TSL all operate in spot price space.
+ * Use spotEntry (the underlying close) instead of entryPrice (the premium).
+ */
+function _spotEntry(trade) {
+  return trade.spotEntry ?? trade.entryPrice;
+}
+
+/**
  * Move the stop-loss favourably when TSL is enabled and the profit threshold
  * has been crossed.  Mutates trade in-place and persists to store + MongoDB.
  *
@@ -40,15 +48,16 @@ function _maybeTrail(trade, ltp, settings) {
   if (trade.action !== 'BUY' && trade.action !== 'SELL') return false;
 
   const initialSl   = trade.initialSl ?? trade.sl;
-  const riskPerUnit = Math.abs(trade.entryPrice - initialSl);
+  const entry       = _spotEntry(trade);
+  const riskPerUnit = Math.abs(entry - initialSl);
   if (riskPerUnit < 0.01) return false;
 
   const profit = trade.action === 'BUY'
-    ? ltp - trade.entryPrice
-    : trade.entryPrice - ltp;
+    ? ltp - entry
+    : entry - ltp;
   if (profit < settings.tslTriggerR * riskPerUnit) return false;
 
-  const prevPeak = trade.peakPrice ?? trade.entryPrice;
+  const prevPeak = trade.peakPrice ?? entry;
   const newPeak  = trade.action === 'BUY'
     ? Math.max(prevPeak, ltp)
     : Math.min(prevPeak, ltp);
@@ -163,13 +172,15 @@ async function _closeTrade(trade, closeAt, reason) {
 function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
-  const numToken   = Number(token);
-  const allOpen    = store.getPaperTrades().filter(
-    (t) => t.status === 'OPEN' && (t.source === 'auto' || t.source === 'scan'),
-  );
+  const numToken = Number(token);
 
-  // ── Underlying token ticks: SL/target monitoring + TSL ────────────────
-  const underlyingTrades = allOpen.filter((t) => Number(t.token) === numToken);
+  // Filter by token FIRST to keep this O(trades_for_token), not O(all_trades)
+  const underlyingTrades = store.getPaperTrades().filter(
+    (t) =>
+      t.status === 'OPEN' &&
+      Number(t.token) === numToken &&
+      (t.source === 'auto' || t.source === 'scan'),
+  );
   if (underlyingTrades.length > 0) {
     const settings = store.getAutoTraderSettings();
     const now      = Date.now();
@@ -203,8 +214,12 @@ function onTick(token, lastPrice) {
   }
 
   // ── Derivative token ticks: premium-based PnL for options trades ──────
-  const derivativeTrades = allOpen.filter(
-    (t) => t.tradingMode === 'options' && Number(t.derivativeToken) === numToken,
+  const derivativeTrades = store.getPaperTrades().filter(
+    (t) =>
+      t.status === 'OPEN' &&
+      t.tradingMode === 'options' &&
+      Number(t.derivativeToken) === numToken &&
+      (t.source === 'auto' || t.source === 'scan'),
   );
   if (derivativeTrades.length > 0) {
     const now = Date.now();

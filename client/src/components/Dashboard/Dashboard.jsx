@@ -53,82 +53,82 @@ function KiteBanner({ connected, onConnect }) {
     );
 }
 
-function SummaryCards({ signals, orders }) {
-    const completedOrders = orders.filter(o => o.status === "COMPLETE").length;
-    const failedOrders = orders.filter(o => o.status === "REJECTED" || o.status === "FAILED").length;
-    return (
-        <div className="summary-row">
-            <div className="summary-card">
-                <div className="summary-icon summary-icon--blue">
-                    <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    >
-                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-                    </svg>
-                </div>
-                <div className="summary-info">
-                    <span className="summary-value">{signals.length}</span>
-                    <span className="summary-label">Signals</span>
-                </div>
-            </div>
-            <div className="summary-card">
-                <div className="summary-icon summary-icon--green">
-                    <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    >
-                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                        <polyline points="22 4 12 14.01 9 11.01" />
-                    </svg>
-                </div>
-                <div className="summary-info">
-                    <span className="summary-value">{completedOrders}</span>
-                    <span className="summary-label">Filled</span>
-                </div>
-            </div>
-            <div className="summary-card">
-                <div className="summary-icon summary-icon--red">
-                    <svg
-                        width="20"
-                        height="20"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    >
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="15" y1="9" x2="9" y2="15" />
-                        <line x1="9" y1="9" x2="15" y2="15" />
-                    </svg>
-                </div>
-                <div className="summary-info">
-                    <span className="summary-value">{failedOrders}</span>
-                    <span className="summary-label">Rejected</span>
-                </div>
-            </div>
-        </div>
-    );
-}
+// function SummaryCards({ signals, orders }) {
+//     const completedOrders = orders.filter(o => o.status === "COMPLETE").length;
+//     const failedOrders = orders.filter(o => o.status === "REJECTED" || o.status === "FAILED").length;
+//     return (
+//         <div className="summary-row">
+//             <div className="summary-card">
+//                 <div className="summary-icon summary-icon--blue">
+//                     <svg
+//                         width="20"
+//                         height="20"
+//                         viewBox="0 0 24 24"
+//                         fill="none"
+//                         stroke="currentColor"
+//                         strokeWidth="2"
+//                         strokeLinecap="round"
+//                         strokeLinejoin="round"
+//                     >
+//                         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+//                     </svg>
+//                 </div>
+//                 <div className="summary-info">
+//                     <span className="summary-value">{signals.length}</span>
+//                     <span className="summary-label">Signals</span>
+//                 </div>
+//             </div>
+//             <div className="summary-card">
+//                 <div className="summary-icon summary-icon--green">
+//                     <svg
+//                         width="20"
+//                         height="20"
+//                         viewBox="0 0 24 24"
+//                         fill="none"
+//                         stroke="currentColor"
+//                         strokeWidth="2"
+//                         strokeLinecap="round"
+//                         strokeLinejoin="round"
+//                     >
+//                         <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+//                         <polyline points="22 4 12 14.01 9 11.01" />
+//                     </svg>
+//                 </div>
+//                 <div className="summary-info">
+//                     <span className="summary-value">{completedOrders}</span>
+//                     <span className="summary-label">Filled</span>
+//                 </div>
+//             </div>
+//             <div className="summary-card">
+//                 <div className="summary-icon summary-icon--red">
+//                     <svg
+//                         width="20"
+//                         height="20"
+//                         viewBox="0 0 24 24"
+//                         fill="none"
+//                         stroke="currentColor"
+//                         strokeWidth="2"
+//                         strokeLinecap="round"
+//                         strokeLinejoin="round"
+//                     >
+//                         <circle cx="12" cy="12" r="10" />
+//                         <line x1="15" y1="9" x2="9" y2="15" />
+//                         <line x1="9" y1="9" x2="15" y2="15" />
+//                     </svg>
+//                 </div>
+//                 <div className="summary-info">
+//                     <span className="summary-value">{failedOrders}</span>
+//                     <span className="summary-label">Rejected</span>
+//                 </div>
+//             </div>
+//         </div>
+//     );
+// }
 
-function multiVal(arr) {
-    if (!arr || arr.length === 0) return "—";
-    return arr.join(" / ");
-}
+// function multiVal(arr) {
+//     if (!arr || arr.length === 0) return "—";
+//     return arr.join(" / ");
+// }
 
 export default function Dashboard() {
     const signals = useAppStore(s => s.signals);
@@ -187,10 +187,10 @@ export default function Dashboard() {
             {/* Paper trades — always visible; active trades update live */}
             <PaperTradingPanel />
 
-            <SummaryCards signals={signals} orders={orders} />
+            {/* <SummaryCards signals={signals} orders={orders} /> */}
 
             {/* Signals */}
-            <section className="dash-section">
+            {/* <section className="dash-section">
                 <h3 className="section-title">
                     Signals <span className="count-badge">{signals.length}</span>
                 </h3>
@@ -226,7 +226,7 @@ export default function Dashboard() {
                         </table>
                     </div>
                 )}
-            </section>
+            </section> */}
 
             {/* Orders */}
             <section className="dash-section">
@@ -249,11 +249,7 @@ export default function Dashboard() {
                 </div>
                 {filteredOrders.length === 0 ? (
                     <div className="empty-card">
-                        <p>
-                            {orders.length === 0
-                                ? "No orders placed yet."
-                                : `No ${orderFilter} orders.`}
-                        </p>
+                        <p>{orders.length === 0 ? "No orders placed yet." : `No ${orderFilter} orders.`}</p>
                     </div>
                 ) : (
                     <div className="kite-table-wrap">
@@ -278,7 +274,9 @@ export default function Dashboard() {
                                         <tr key={o.id}>
                                             <td className="td-symbol">{o.symbol || "—"}</td>
                                             <td>
-                                                <span className={`pill ${o.action === "BUY" ? "pill-green" : "pill-red"}`}>
+                                                <span
+                                                    className={`pill ${o.action === "BUY" ? "pill-green" : "pill-red"}`}
+                                                >
                                                     {o.action || "—"}
                                                 </span>
                                             </td>

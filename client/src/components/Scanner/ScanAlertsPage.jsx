@@ -632,27 +632,32 @@ function ActiveTradeRow({ trade, onManualClose }) {
 
 function ActivePaperTrades() {
   const paperTrades          = useAppStore((s) => s.paperTrades);
-  const ticks                = useAppStore((s) => s.ticks);
+  // tradeTicks is server-throttled to 500 ms — safe React selector.
+  // Raw ticks fire 50+ times/sec; never subscribe to s.ticks here.
+  const tradeTicks           = useAppStore((s) => s.tradeTicks);
   const closeScanPaperTrade  = useAppStore((s) => s.closeScanPaperTrade);
   const addToast             = useAppStore((s) => s.addToast);
+
+  // Ref for manual-close LTP so we can read the latest price without subscribing.
+  const ticksRef = useRef({});
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((s) => { ticksRef.current = s.ticks; });
+    return unsub;
+  }, []);
 
   const openTrades = paperTrades.filter((t) => t.status === 'OPEN' && t.source === 'scan');
   if (openTrades.length === 0) return null;
 
   function handleManualClose(trade) {
-    const ltp = ticks[trade.token]?.lastPrice ?? trade.entryPrice;
+    const ltp = ticksRef.current[trade.token]?.lastPrice ?? trade.entryPrice;
     closeScanPaperTrade(trade.id, ltp);
     addToast({ type: 'info', message: `Closed ${trade.symbol} @ ₹${fmt(ltp)}` });
   }
 
-  // Total unrealized P&L across all open trades
+  // Total unrealized P&L — sum server-computed values from tradeTicks.
   const totalPnl = openTrades.reduce((sum, t) => {
-    const ltp = ticks[t.token]?.lastPrice;
-    if (ltp == null) return sum;
-    const pnl = t.action === 'BUY'
-      ? (ltp - t.entryPrice) * t.quantity
-      : (t.entryPrice - ltp) * t.quantity;
-    return sum + pnl;
+    const pnl = tradeTicks[t.id]?.unrealizedPnl;
+    return pnl != null ? sum + pnl : sum;
   }, 0);
 
   return (

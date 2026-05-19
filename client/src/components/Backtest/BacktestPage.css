@@ -278,3 +278,29 @@
 .bt-chip--neutral { background: var(--border); color: var(--txt3); }
 .bt-chip--bull    { background: rgba(74,222,128,.15); color: #4ade80; }
 .bt-chip--bear    { background: rgba(248,113,113,.15); color: #f87171; }
+
+/* ── Scan Mode toggle ────────────────────────────────────────────────── */
+.bt-scan-mode-group {
+  display: inline-flex;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  padding: 1px;
+}
+.bt-scan-mode-btn {
+  background: transparent;
+  border: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--txt3);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 120ms, color 120ms;
+}
+.bt-scan-mode-btn:hover { color: var(--txt1); }
+.bt-scan-mode-btn.is-active {
+  background: var(--surface);
+  color: var(--accent);
+}

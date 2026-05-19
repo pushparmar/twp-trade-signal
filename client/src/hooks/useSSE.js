@@ -38,11 +38,12 @@ export default function useSSE() {
     es.addEventListener('paper_trade', (e) => {
       const trade = JSON.parse(e.data);
       addPaperTrade(trade);
-      const prefix = trade.source === 'auto' ? '🤖 AUTO' : `${trade.action} matched`;
-      addToast({
-        type: trade.action === 'BUY' ? 'buy' : 'sell',
-        message: `${prefix} — ${trade.symbol} [${trade.tfLabel ?? trade.interval ?? ''}] @ ₹${trade.entryPrice}`,
-      });
+      if (trade.source !== 'auto') {
+        addToast({
+          type: trade.action === 'BUY' ? 'buy' : 'sell',
+          message: `${trade.action} matched — ${trade.symbol} [${trade.tfLabel ?? trade.interval ?? ''}] @ ₹${trade.entryPrice}`,
+        });
+      }
     });
     es.addEventListener('paper_trade_update', (e) => updatePaperTrade(JSON.parse(e.data)));
     es.addEventListener('paper_trades_cleared', () => clearPaperTrades());

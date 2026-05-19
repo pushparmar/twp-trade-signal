@@ -25,7 +25,6 @@ import './App.css';
 // server has already processed the close (server returns 404, we ignore).
 function usePaperAutoClose() {
   const paperTrades         = useAppStore((s) => s.paperTrades);
-  const ticks               = useAppStore((s) => s.ticks);
   const closeScanPaperTrade = useAppStore((s) => s.closeScanPaperTrade);
   const updatePaperTrade    = useAppStore((s) => s.updatePaperTrade);
   const addToast            = useAppStore((s) => s.addToast);
@@ -33,6 +32,13 @@ function usePaperAutoClose() {
   const closedIds  = useRef(new Set());
   // Cache TSL settings — refetched lazily, no need for SSE
   const tslSettings = useRef(null);
+  // Use a ref for ticks so reading live prices never triggers the effect.
+  // The effect only needs to re-run when trades open/close — not on every tick.
+  const ticksRef = useRef({});
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((s) => { ticksRef.current = s.ticks; });
+    return unsub;
+  }, []);
 
   // Lazy-load TSL settings on first use
   useEffect(() => {
@@ -54,23 +60,21 @@ function usePaperAutoClose() {
 
     for (const trade of openTrades) {
       if (closedIds.current.has(trade.id)) continue;
-      const ltp = ticks[trade.token]?.lastPrice;
+      const ltp = ticksRef.current[trade.token]?.lastPrice;
       if (ltp == null) continue;
 
       // ── 1. TRAILING STOP LOSS ─────────────────────────────────────────────
-      // Only run TSL when enabled, an initialSl is present (set at trade open),
-      // and we have a clean BUY/SELL direction.
+      // For options trades, SL/target/TSL operate in spot price space.
+      const spotEntry  = trade.spotEntry ?? trade.entryPrice;
       const initialSl  = trade.initialSl ?? trade.sl;
-      const riskPerUnit = Math.abs(trade.entryPrice - initialSl);
+      const riskPerUnit = Math.abs(spotEntry - initialSl);
       if (tslEnabled && riskPerUnit > 0.01 && (trade.action === 'BUY' || trade.action === 'SELL')) {
-        // Profit in price-units (per share) so far
         const profit = trade.action === 'BUY'
-          ? ltp - trade.entryPrice
-          : trade.entryPrice - ltp;
+          ? ltp - spotEntry
+          : spotEntry - ltp;
 
         if (profit >= tslTriggerR * riskPerUnit) {
-          // Track the favourable extreme
-          const prevPeak = trade.peakPrice ?? trade.entryPrice;
+          const prevPeak = trade.peakPrice ?? spotEntry;
           const newPeak  = trade.action === 'BUY' ? Math.max(prevPeak, ltp) : Math.min(prevPeak, ltp);
 
           // New SL = trail tslDistanceR × risk behind the peak
@@ -90,8 +94,7 @@ function usePaperAutoClose() {
             api.patch(`/paper/${trade.id}/trail`, {
               sl: newSl, peakPrice: newPeak, tslActivated: true,
             }).catch(() => {});
-            // First-time activation toast
-            if (!trade.tslActivated) {
+            if (!trade.tslActivated && trade.source !== 'auto') {
               addToast({ type: 'info', message: `🔒 TSL armed — ${trade.symbol} SL → ₹${newSl.toFixed(2)}` });
             }
             // Continue to SL/target check below using the new SL via local ref
@@ -125,11 +128,13 @@ function usePaperAutoClose() {
       if (closeAt != null) {
         closedIds.current.add(trade.id);
         closeScanPaperTrade(trade.id, closeAt);
-        addToast({ type: 'info', message: msg });
+        if (trade.source !== 'auto') {
+          addToast({ type: 'info', message: msg });
+        }
         api.post(`/paper/${trade.id}/close`, { exitPrice: closeAt }).catch(() => {});
       }
     }
-  }, [ticks, paperTrades, closeScanPaperTrade, updatePaperTrade, addToast]);
+  }, [paperTrades, closeScanPaperTrade, updatePaperTrade, addToast]);
 }
 
 function useTheme() {
@@ -196,18 +201,23 @@ function AppShell() {
       .catch(() => {})
       .finally(() => {
         // Secondary sync: pull OPEN trades directly from MongoDB.
-        // Merges in any trades the client is missing (e.g. after localStorage
-        // was cleared or logging in from a new device).  No-op when MongoDB
-        // is not configured (server returns []).
         api.get('/paper/open-from-db').then((r) => {
           if (!r.data?.length) return;
-          // Merge MongoDB open trades into current state.
-          // useAppStore.getState() lets us read current trades without a hook.
           const current = useAppStore.getState().paperTrades || [];
           const existingIds = new Set(current.map((t) => t.id));
           const missing = r.data.filter((t) => !existingIds.has(t.id));
           if (missing.length) {
             setPaperTrades([...missing, ...current]);
+          }
+        }).catch(() => {});
+
+        // Seed ticks with last traded prices so the order book shows
+        // closing prices immediately, even when market is closed.
+        api.get('/paper/ltp').then((r) => {
+          if (!r.data || !Object.keys(r.data).length) return;
+          const updateTick = useAppStore.getState().updateTick;
+          for (const [token, lastPrice] of Object.entries(r.data)) {
+            updateTick({ instrumentToken: Number(token), lastPrice });
           }
         }).catch(() => {});
       });

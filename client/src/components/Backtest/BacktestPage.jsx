@@ -149,6 +149,21 @@ function ConfigForm({ config, onChange, onRun, running, scopes, patterns }) {
         </div>
       </div>
 
+      {/* Scan Mode */}
+      <div className="bt-field">
+        <label className="bt-label">Scan Mode</label>
+        <div className="bt-scan-mode-group">
+          <button
+            className={`bt-scan-mode-btn ${config.scanMode === 'closed' ? 'is-active' : ''}`}
+            onClick={() => update('scanMode', 'closed')}
+          >Closed</button>
+          <button
+            className={`bt-scan-mode-btn ${config.scanMode === 'spot' ? 'is-active' : ''}`}
+            onClick={() => update('scanMode', 'spot')}
+          >Spot</button>
+        </div>
+      </div>
+
       {/* Interval + Dates + R:R */}
       <div className="bt-row">
         <div className="bt-field">
@@ -370,6 +385,7 @@ export default function BacktestPage() {
     fromDate:   toInputDate(ninetyAgo),
     toDate:     toInputDate(today),
     minRR:      2.0,
+    scanMode:   'closed',
   });
 
   const [scopes,   setScopes]   = useState([]);
@@ -445,6 +461,8 @@ export default function BacktestPage() {
             <span>{report.params.instrumentCount} instruments</span>
             <span>·</span>
             <span>min R:R 1:{report.params.minRR}</span>
+            <span>·</span>
+            <span>{report.params.scanMode === 'spot' ? 'Spot candle' : 'Closed candle'}</span>
             <span>·</span>
             <span>{report.params.elapsedSec}s</span>
             {report.params.failed?.length > 0 && (

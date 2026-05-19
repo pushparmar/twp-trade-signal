@@ -63,7 +63,9 @@ function _todaysRealized(trades) {
 
 export default function HeaderStrip() {
     const paperTrades = useAppStore(s => s.paperTrades);
-    const ticks = useAppStore(s => s.ticks);
+    // tradeTicks is server-throttled to 500 ms per trade — safe to use as a
+    // React selector. Never subscribe to s.ticks here; it fires 50+ times/sec.
+    const tradeTicks  = useAppStore(s => s.tradeTicks);
     const [autoEnabled, setAutoEnabled] = useState(null);
     const [mkt, setMkt] = useState(marketState());
 
@@ -100,12 +102,11 @@ export default function HeaderStrip() {
     let unrealized = 0;
     let liveRisk = 0;
     for (const t of openTrades) {
-        const ltp = ticks[t.token]?.lastPrice ?? null;
         const qty = t.quantity ?? 1;
-        if (ltp != null) {
-            const pnlPerUnit = t.action === "BUY" ? ltp - t.entryPrice : t.entryPrice - ltp;
-            unrealized += pnlPerUnit * qty;
-        }
+        // Use server-computed unrealizedPnl from tradeTicks (throttled 500 ms).
+        // Falls back to 0 until the first tick arrives for this trade.
+        const pnl = tradeTicks[t.id]?.unrealizedPnl;
+        if (pnl != null) unrealized += pnl;
         if (t.sl != null && t.entryPrice != null) {
             // Risk now = distance from current SL (which may have trailed) to entry.
             // For an in-profit TSL-trailed trade this can go NEGATIVE — meaning we've

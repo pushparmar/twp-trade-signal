@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api';
 import useAppStore from '../../store/appStore';
 
@@ -98,8 +98,18 @@ export default function MacroPanel() {
   const macroData    = useAppStore((s) => s.macroData);
   const setMacroData = useAppStore((s) => s.setMacroData);
 
-  // Live tick prices — same store that IndexTab uses; updated on every tick SSE event
-  const ticks = useAppStore((s) => s.ticks);
+  // Live tick prices — read via ref so we don't re-render on every raw tick.
+  // A 1-second interval refreshes the display; acceptable for macro analysis.
+  const ticksRef = useRef({});
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((s) => { ticksRef.current = s.ticks; });
+    return unsub;
+  }, []);
+  const [, tickRefresh] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tickRefresh((v) => v + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // Initial load via REST — SSE takes over after first candle close
   const load = useCallback(async () => {
@@ -126,12 +136,12 @@ export default function MacroPanel() {
 
   const { vix, crude, gold, silver, usdinr } = macroData;
 
-  // Read live price from ticks store — falls back to last analysis price.
-  const vixLive    = ticks[vix?.instrumentToken]?.lastPrice    ?? vix?.currentVix;
-  const crudeLive  = ticks[crude?.instrumentToken]?.lastPrice  ?? crude?.currentPrice;
-  const goldLive   = ticks[gold?.instrumentToken]?.lastPrice   ?? gold?.currentPrice;
-  const silverLive = ticks[silver?.instrumentToken]?.lastPrice ?? silver?.currentPrice;
-  const usdinrLive = ticks[usdinr?.instrumentToken]?.lastPrice ?? usdinr?.currentPrice;
+  // Read live price from ticks ref — falls back to last analysis price.
+  const vixLive    = ticksRef.current[vix?.instrumentToken]?.lastPrice    ?? vix?.currentVix;
+  const crudeLive  = ticksRef.current[crude?.instrumentToken]?.lastPrice  ?? crude?.currentPrice;
+  const goldLive   = ticksRef.current[gold?.instrumentToken]?.lastPrice   ?? gold?.currentPrice;
+  const silverLive = ticksRef.current[silver?.instrumentToken]?.lastPrice ?? silver?.currentPrice;
+  const usdinrLive = ticksRef.current[usdinr?.instrumentToken]?.lastPrice ?? usdinr?.currentPrice;
 
   return (
     <div style={{ padding: '0 4px' }}>

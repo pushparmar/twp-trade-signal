@@ -149,7 +149,7 @@ function _simulateExit(trade, candles, entryBar) {
  * Run all selected patterns on this instrument's candles within the date
  * window.  Returns an array of trade records.
  */
-function _backtestInstrument(inst, candles, patterns, fromMs, toMs, minRR) {
+function _backtestInstrument(inst, candles, patterns, fromMs, toMs, minRR, scanMode) {
   const trades = [];
   if (!candles || candles.length < MIN_WARMUP_BARS + 5) return trades;
 
@@ -157,7 +157,10 @@ function _backtestInstrument(inst, candles, patterns, fromMs, toMs, minRR) {
   // openByKey: Map<'patternId:signal', exitBar>
   const openUntil = new Map();
 
-  for (let i = MIN_WARMUP_BARS; i < candles.length - 1; i++) {
+  // 'spot' mode includes the forming candle (like live scanner), 'closed' skips it
+  const endIdx = scanMode === 'spot' ? candles.length : candles.length - 1;
+
+  for (let i = MIN_WARMUP_BARS; i < endIdx; i++) {
     const candle    = candles[i];
     const candleMs  = new Date(candle.date).getTime();
     // Skip patterns until candle is inside the user's window
@@ -325,6 +328,7 @@ async function runBacktest(opts) {
     fromDate,
     toDate,
     minRR = 2.0,
+    scanMode = 'closed',
     concurrency = 6,
   } = opts;
 
@@ -357,7 +361,7 @@ async function runBacktest(opts) {
     await Promise.allSettled(batch.map(async (inst) => {
       try {
         const candles = await _fetchHistory(inst.instrumentToken, interval, fromDate, toDate);
-        const trades  = _backtestInstrument(inst, candles, patterns, fromMs, toMs, minRR);
+        const trades  = _backtestInstrument(inst, candles, patterns, fromMs, toMs, minRR, scanMode);
         for (const t of trades) t.interval = interval;
         allTrades.push(...trades);
       } catch (err) {
@@ -376,6 +380,7 @@ async function runBacktest(opts) {
     fromDate,
     toDate,
     minRR,
+    scanMode,
     patternIds: patterns.map((p) => p.id),
     instrumentCount: instruments.length,
     failed,

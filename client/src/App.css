@@ -1016,6 +1016,19 @@ body {
   outline: none;
 }
 
+.paper-source-filter {
+  display: flex; gap: 6px; margin-bottom: 16px;
+}
+.paper-source-btn {
+  padding: 4px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: transparent; color: var(--txt2); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+}
+.paper-source-btn:hover { background: var(--bg2); }
+.paper-source-btn--active {
+  background: var(--accent, #3b82f6); color: #fff; border-color: var(--accent, #3b82f6);
+}
+
 .paper-stats-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

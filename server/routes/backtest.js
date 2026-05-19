@@ -92,6 +92,7 @@ router.post('/run', async (req, res) => {
     scope      = 'watchlist',
     tokens,
     minRR      = 2.0,
+    scanMode   = 'closed',
   } = req.body;
 
   // Input validation
@@ -103,6 +104,9 @@ router.post('/run', async (req, res) => {
   }
   if (!VALID_INTERVALS.includes(interval)) {
     return res.status(400).json({ error: `interval must be one of: ${VALID_INTERVALS.join(', ')}` });
+  }
+  if (!['closed', 'spot'].includes(scanMode)) {
+    return res.status(400).json({ error: 'scanMode must be "closed" or "spot"' });
   }
 
   // Build instrument universe
@@ -146,6 +150,7 @@ router.post('/run', async (req, res) => {
       fromDate,
       toDate,
       minRR: Number(minRR),
+      scanMode,
     });
     res.json(report);
   } catch (err) {

@@ -4,6 +4,7 @@ const path        = require('path');
 const { addPaperTrade, getPaperTrades, closePaperTrade, updatePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
 const { broadcast }   = require('../sseHub');
 const kiteTicker  = require('../services/kiteTicker');
+const kiteService = require('../services/kiteService');
 const db          = require('../db');
 
 // ── Ticker subscription helpers ───────────────────────────────────────────────
@@ -240,6 +241,47 @@ router.post('/balance', (req, res) => {
   const balance = getPaperBalance();
   broadcast('paper_balance', balance);
   res.json(balance);
+});
+
+// ── Last traded prices for open trades ────────────────────────────────────────
+// Returns { [instrumentToken]: lastPrice } for all unique tokens across open
+// paper trades.  Works even when market is closed — Kite returns the last
+// session's closing price.  Called once on client mount so the order book
+// never shows "—" while waiting for live ticks.
+
+router.get('/ltp', async (req, res) => {
+  try {
+    const open = getPaperTrades().filter((t) => t.status === 'OPEN');
+    if (open.length === 0) return res.json({});
+
+    // Build EXCHANGE:SYMBOL strings — Kite's LTP API requires this format.
+    const symbolMap = new Map(); // "EXCHANGE:SYMBOL" → instrumentToken
+    for (const t of open) {
+      if (t.token && t.exchange && t.symbol) {
+        symbolMap.set(`${t.exchange}:${t.symbol}`, Number(t.token));
+      }
+      if (t.derivativeToken && t.derivativeExchange && t.derivativeSymbol) {
+        symbolMap.set(`${t.derivativeExchange}:${t.derivativeSymbol}`, Number(t.derivativeToken));
+      }
+    }
+
+    if (symbolMap.size === 0) return res.json({});
+
+    const ltpData = await kiteService.getLTP([...symbolMap.keys()]);
+
+    const result = {};
+    for (const [sym, val] of Object.entries(ltpData)) {
+      const token = symbolMap.get(sym) ?? val.instrument_token;
+      if (token && val.last_price != null) {
+        result[token] = val.last_price;
+      }
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error('[Paper/LTP]', err.message);
+    res.json({});
+  }
 });
 
 // ── Trade history (daily archives) ───────────────────────────────────────────
