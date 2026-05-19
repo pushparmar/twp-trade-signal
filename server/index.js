@@ -119,7 +119,11 @@ app.listen(PORT, async () => {
           for (const trade of openFromMongo) store.addPaperTrade(trade);
           console.log(`[DB] Restored ${openFromMongo.length} open trade(s) from MongoDB`);
 
-          const tokens = [...new Set(openFromMongo.map((t) => t.token).filter(Boolean).map(Number))];
+          const rawTokens = [
+            ...openFromMongo.map((t) => t.token),
+            ...openFromMongo.map((t) => t.derivativeToken),
+          ].filter(Boolean).map(Number);
+          const tokens = [...new Set(rawTokens)];
           if (tokens.length > 0) {
             try { kiteTicker.subscribe(tokens); } catch { /* ticker may not be connected yet */ }
           }
@@ -208,13 +212,15 @@ app.listen(PORT, async () => {
       // Re-subscribe tokens for any open paper trades loaded from trades-current.json.
       // Without this, server restarts would stop live-tick monitoring for those trades
       // until the client manually re-places them.
-      const openTradeTokens = store.getPaperTrades()
-        .filter((t) => t.status === 'OPEN' && t.token)
-        .map((t) => Number(t.token));
+      const openTrades = store.getPaperTrades().filter((t) => t.status === 'OPEN');
+      const openTradeTokens = [
+        ...openTrades.filter((t) => t.token).map((t) => Number(t.token)),
+        ...openTrades.filter((t) => t.derivativeToken).map((t) => Number(t.derivativeToken)),
+      ];
       const uniqueTokens = [...new Set(openTradeTokens)];
       if (uniqueTokens.length > 0) {
         kiteTicker.subscribe(uniqueTokens);
-        console.log(`[KiteTicker] Re-subscribed ${uniqueTokens.length} open paper trade token(s) from disk`);
+        console.log(`[KiteTicker] Re-subscribed ${uniqueTokens.length} token(s) for open paper trades (incl. derivatives)`);
       }
     } catch (err) {
       console.warn('[KiteTicker] Could not connect on boot:', err.message);

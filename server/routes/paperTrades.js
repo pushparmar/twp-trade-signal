@@ -81,17 +81,21 @@ router.get('/open-from-db', async (req, res) => {
     // store (e.g. after a "Clear all" or server restart without disk file).
     const current = getPaperTrades();
     const existingIds = new Set(current.map((t) => t.id));
-    let restored = 0;
+    const restored = [];
     for (const t of trades) {
       if (!existingIds.has(t.id)) {
         addPaperTrade(t);
         _subscribeTradeToken(t.token);
         if (t.derivativeToken) _subscribeTradeToken(t.derivativeToken);
-        restored++;
+        restored.push(t);
       }
     }
-    if (restored > 0) {
-      console.log(`[Paper] Restored ${restored} OPEN trade(s) from MongoDB into memory`);
+    if (restored.length > 0) {
+      console.log(`[Paper] Restored ${restored.length} OPEN trade(s) from MongoDB into memory`);
+      // Broadcast each restored trade via SSE so all connected clients receive
+      // them even if the HTTP response arrives before the client state is ready.
+      for (const t of restored) broadcast('paper_trade', t);
+      broadcast('paper_balance', getPaperBalance());
     }
     res.json(trades);
   } catch (err) {
