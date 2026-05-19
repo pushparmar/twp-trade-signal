@@ -162,7 +162,7 @@ const PAGES = {
 // Extracted into its own component so all hooks are called unconditionally,
 // regardless of whether the user is logged in (satisfies React rules of hooks).
 function AppShell() {
-  const [activePage, setActivePage] = useState('market');
+  const [activePage, setActivePage] = useState('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // Settings tab visible only when ?setting=1 is in the URL
   const showSettings = new URLSearchParams(window.location.search).get('setting') === '1';
