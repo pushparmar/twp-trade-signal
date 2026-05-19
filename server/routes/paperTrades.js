@@ -77,6 +77,22 @@ router.get('/', (req, res) => {
 router.get('/open-from-db', async (req, res) => {
   try {
     const trades = await db.tradeRepo.getOpenTrades();
+    // Restore any OPEN trades from MongoDB that are missing from the in-memory
+    // store (e.g. after a "Clear all" or server restart without disk file).
+    const current = getPaperTrades();
+    const existingIds = new Set(current.map((t) => t.id));
+    let restored = 0;
+    for (const t of trades) {
+      if (!existingIds.has(t.id)) {
+        addPaperTrade(t);
+        _subscribeTradeToken(t.token);
+        if (t.derivativeToken) _subscribeTradeToken(t.derivativeToken);
+        restored++;
+      }
+    }
+    if (restored > 0) {
+      console.log(`[Paper] Restored ${restored} OPEN trade(s) from MongoDB into memory`);
+    }
     res.json(trades);
   } catch (err) {
     res.status(500).json({ error: err.message });
