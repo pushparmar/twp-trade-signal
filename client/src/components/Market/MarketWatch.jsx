@@ -37,6 +37,7 @@ const INDEX_SYMBOLS = new Set(Object.keys(SYMBOL_TO_TAB));
 const MACRO_KEYS = [
     { key: "vix", label: "India VIX" },
     { key: "crude", label: "Crude Oil" },
+    { key: "naturalgas", label: "Natural Gas" },
     { key: "gold", label: "Gold" },
     { key: "silver", label: "Silver" },
     { key: "usdinr", label: "USD / INR" }
@@ -48,6 +49,16 @@ const SCAN_TFS = [
     { value: "4h", label: "4h" },
     { value: "day", label: "1d" }
 ];
+
+// ── useLiveTime ───────────────────────────────────────────────────────────────
+function useLiveTime() {
+    const [time, setTime] = useState(() => new Date().toTimeString().slice(0, 8));
+    useEffect(() => {
+        const t = setInterval(() => setTime(new Date().toTimeString().slice(0, 8)), 1000);
+        return () => clearInterval(t);
+    }, []);
+    return time;
+}
 
 // ── Module-level flags ────────────────────────────────────────────────────────
 let _initDone = false;
@@ -144,9 +155,7 @@ function TFCard({ token, interval, label, active = false, onClick }) {
     );
 }
 
-// ── OverallSignalCard — aggregates all 4 TF Ichimoku signals into one verdict ──
-// Shows CALL BUY / PUT BUY when any TF fires that strong signal, otherwise
-// computes majority of bullish/bearish across all timeframes.
+// ── OverallSignalCard — Pro Terminal analysis section below chart ─────────────
 function OverallSignalCard({ token }) {
     const tf15 = useIchiSignal(token, "15minute");
     const tf1h = useIchiSignal(token, "60minute");
@@ -163,11 +172,9 @@ function OverallSignalCard({ token }) {
     const loading = tfs.some(tf => tf.loading);
     const anyData = tfs.some(tf => tf.ichi != null);
 
-    // Strong signals: any timeframe firing CALL BUY / PUT BUY takes priority
     const hasCallBuy = tfs.some(tf => tf.ichi?.callBuySignal);
     const hasPutBuy = tfs.some(tf => tf.ichi?.putBuySignal);
 
-    // Per-TF overall direction
     const tfSignals = tfs.map(tf => overallSig(tf.ichi));
     const bullCount = tfSignals.filter(s => s === "bullish").length;
     const bearCount = tfSignals.filter(s => s === "bearish").length;
@@ -191,70 +198,92 @@ function OverallSignalCard({ token }) {
     }
 
     const color = sigColor(finalSig);
-    const cardMod =
-        !loading && anyData
-            ? finalSig === "bullish"
-                ? "mw-tf-card--bull"
-                : finalSig === "bearish"
-                ? "mw-tf-card--bear"
-                : ""
-            : "";
+    const confidence = Math.round((Math.max(bullCount, bearCount) / tfs.length) * 100);
 
-    // Per-TF arrow/dot indicators for the breakdown row
-    const breakdown = tfs.map(tf => {
-        if (!tf.ichi) return { label: tf.label, symbol: "–", color: "var(--txt3)" };
-        if (tf.ichi.callBuySignal) return { label: tf.label, symbol: "●", color: "var(--green)" };
-        if (tf.ichi.putBuySignal) return { label: tf.label, symbol: "●", color: "var(--red)" };
-        const s = overallSig(tf.ichi);
-        return {
-            label: tf.label,
-            symbol: s === "bullish" ? "▲" : s === "bearish" ? "▼" : "–",
-            color: sigColor(s)
-        };
-    });
+    function strengthLabel(n) {
+        if (n >= 4) return "STRONG";
+        if (n >= 3) return "MODERATE";
+        if (n >= 2) return "WEAK";
+        return "SLIGHT";
+    }
 
     return (
-        <div className={`mw-tf-card mw-overall-card ${cardMod}`}>
-            <div className="mw-tf-card-label">Overall Bias</div>
-
-            {loading && !anyData ? (
-                <div className="mw-overall-signal" style={{ color: "var(--txt3)" }}>
-                    ·
-                </div>
-            ) : !anyData ? (
-                <div className="mw-overall-signal" style={{ color: "var(--txt3)" }}>
-                    —
-                </div>
-            ) : (
-                <>
-                    <div className="mw-overall-signal" style={{ color }}>
-                        {finalLabel}
-                    </div>
-
-                    {/* Per-TF arrow indicators */}
-                    <div className="mw-overall-breakdown">
-                        {breakdown.map(b => (
-                            <span
-                                key={b.label}
-                                className="mw-overall-tf-dot"
-                                style={{ color: b.color }}
-                                title={b.label}
-                            >
-                                {b.symbol}
+        <div className="pt-analysis-section">
+            {/* CONSENSUS BIAS */}
+            <div className="pt-consensus">
+                <div className="pt-section-label">Consensus Bias</div>
+                <div className="pt-consensus-body">
+                    <span className="pt-consensus-signal" style={{ color }}>
+                        {loading && !anyData ? "·" : !anyData ? "—" : finalLabel}
+                    </span>
+                    {anyData && (
+                        <div className="pt-consensus-meta">
+                            <span className="pt-consensus-score" style={{ color }}>
+                                {confidence}%
                             </span>
-                        ))}
-                    </div>
-
-                    <div className="mw-tf-card-counts">
-                        <span className="sig-bull">{bullCount}↑</span> <span className="sig-bear">{bearCount}↓</span>
-                        {(bullCount > 0 || bearCount > 0) && (
-                            <span style={{ marginLeft: 5, color: "var(--txt3)" }}>
-                                ({finalSig === "bullish" ? bullCount : bearCount}/4)
+                            <span className="pt-consensus-detail">
+                                {bullCount}↑/{bearCount}↓ · {strengthLabel(Math.max(bullCount, bearCount))}
                             </span>
-                        )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* TIMEFRAME ANALYSIS */}
+            <div className="pt-tf-analysis">
+                <div className="pt-section-label">Timeframe Analysis</div>
+                <div className="pt-tf-table">
+                    <div className="pt-tf-table-head">
+                        <span>TF</span>
+                        <span>BIAS</span>
+                        <span>STRENGTH</span>
+                        <span>SIGS</span>
                     </div>
-                </>
-            )}
+                    {tfs.map(tf => {
+                        const sig = overallSig(tf.ichi);
+                        const col = sigColor(sig);
+                        const factors = tf.ichi
+                            ? [tf.ichi.chikouSignal, tf.ichi.kijunSignal, tf.ichi.cloudSignal, tf.ichi.tenkanSignal]
+                            : [];
+                        const b = factors.filter(s => s === "bullish").length;
+                        const r = factors.filter(s => s === "bearish").length;
+                        const pct = (Math.max(b, r) / 4) * 100;
+
+                        let biasLabel;
+                        if (!tf.ichi) biasLabel = tf.loading ? "·" : "—";
+                        else if (tf.ichi.callBuySignal) biasLabel = "CALL BUY";
+                        else if (tf.ichi.putBuySignal) biasLabel = "PUT BUY";
+                        else biasLabel = sig === "neutral" ? "NEUTRAL" : sig.toUpperCase();
+
+                        return (
+                            <div key={tf.label} className="pt-tf-row">
+                                <span className="pt-tf-row-tf">{tf.label}</span>
+                                <span className="pt-tf-row-bias" style={{ color: col }}>
+                                    {biasLabel}
+                                </span>
+                                <span className="pt-tf-row-bar">
+                                    <span className="pt-tf-row-bar-track">
+                                        <span
+                                            className="pt-tf-row-bar-fill"
+                                            style={{ width: `${pct}%`, background: col }}
+                                        />
+                                    </span>
+                                </span>
+                                <span className="pt-tf-row-sigs">
+                                    {tf.ichi ? (
+                                        <>
+                                            <span className="sig-bull">{b}↑</span>
+                                            <span className="sig-bear">{r}↓</span>
+                                        </>
+                                    ) : (
+                                        "—"
+                                    )}
+                                </span>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
         </div>
     );
 }
@@ -356,79 +385,99 @@ function OhlcItem({ label, value, cls = "" }) {
     );
 }
 
-// ── InstrumentDetail — detail panel for a selected instrument ─────────────────
+// ── InstrumentDetail — Pro Terminal style detail panel ───────────────────────
 function InstrumentDetail({ token, label, sublabel }) {
     const [chartInterval, setChartInterval] = useState("15minute");
     const chartRef = useRef(null);
+    const liveTime = useLiveTime();
     const tick = useAppStore(s => (token ? s.ticks[token] : null));
     const ltp = tick?.lastPrice ?? null;
     const change = tick?.change ?? null;
     const ohlc = tick?.ohlc ?? {};
 
-    const chgMod =
-        change > 0 ? "mw-detail-chg-pill--up" : change < 0 ? "mw-detail-chg-pill--down" : "mw-detail-chg-pill--flat";
-
     const hasOhlc = ohlc.open != null || ohlc.high != null || ohlc.low != null;
+    const chgPositive = change != null && change > 0;
+    const chgNegative = change != null && change < 0;
+
+    // Derive exchange from sublabel (e.g. "CRUDEOIL26JUNFUT · MCX" → "MCX")
+    const exchange = sublabel ? sublabel.split("·").pop()?.trim() : "NSE";
 
     return (
-        <>
-            {/* ── Top row: price header (left) + Overall Bias card (right) ── */}
-            <div className="mw-detail-top">
-                <div className="mw-detail-header">
-                    <div className="mw-detail-name-row">
-                        <span className="mw-detail-name">{label}</span>
-                        {sublabel && <span className="mw-detail-sublabel">{sublabel}</span>}
-                    </div>
-
-                    <div className="mw-detail-price-row">
-                        <span className="mw-detail-ltp">{ltp != null ? fmt(ltp) : "—"}</span>
-                        {change != null && (
-                            <span className={`mw-detail-chg-pill ${chgMod}`}>
-                                {change > 0 ? "+" : ""}
-                                {Number(change).toFixed(2)}%
-                            </span>
-                        )}
-                    </div>
-
-                    {hasOhlc && (
-                        <div className="mw-detail-ohlc-row">
-                            {ohlc.open != null && <OhlcItem label="Open" value={fmt(ohlc.open)} />}
-                            {ohlc.high != null && (
-                                <OhlcItem label="High" value={fmt(ohlc.high)} cls="mw-detail-ohlc-value--high" />
-                            )}
-                            {ohlc.low != null && (
-                                <OhlcItem label="Low" value={fmt(ohlc.low)} cls="mw-detail-ohlc-value--low" />
-                            )}
-                            {ohlc.close != null && <OhlcItem label="Prev Close" value={fmt(ohlc.close)} />}
-                        </div>
-                    )}
-                </div>
-
-                {/* Overall Bias card aligned to the right of the price header */}
-                {token && <OverallSignalCard token={token} />}
+        <div className="pt-detail">
+            {/* ── Nav header ── */}
+            <div className="pt-detail-nav">
+                <span className="pt-detail-breadcrumb">← MARKET WATCH</span>
+                <span className="pt-detail-live">
+                    {exchange} · LIVE {liveTime}
+                </span>
             </div>
 
-            {token && (
-                /* ── TF Signal Bar: clicking a card switches the chart below ── */
-                <div className="mw-tf-bar">
-                    {INDEX_TFS.map(tf => (
-                        <TFCard
-                            key={tf.value}
-                            token={token}
-                            interval={tf.value}
-                            label={tf.label}
-                            active={chartInterval === tf.value}
-                            onClick={() => setChartInterval(tf.value)}
-                        />
-                    ))}
+            {/* ── Symbol ── */}
+            <div className="pt-detail-symbol">{sublabel || label}</div>
+
+            {/* ── Price + change ── */}
+            <div className="pt-detail-price-row">
+                <span className="pt-detail-price">{ltp != null ? fmt(ltp) : "—"}</span>
+                {change != null && (
+                    <span
+                        className={`pt-detail-chg ${
+                            chgPositive ? "pt-chg--up" : chgNegative ? "pt-chg--down" : "pt-chg--flat"
+                        }`}
+                    >
+                        {chgPositive ? "▲ +" : chgNegative ? "▼ " : ""}
+                        {Number(change).toFixed(2)}%
+                    </span>
+                )}
+            </div>
+
+            {/* ── OHLC strip ── */}
+            {hasOhlc && (
+                <div className="pt-ohlc-row">
+                    {ohlc.open != null && (
+                        <span className="pt-ohlc-item">
+                            <span className="pt-ohlc-lbl">O</span>
+                            <span className="pt-ohlc-val">{fmt(ohlc.open)}</span>
+                        </span>
+                    )}
+                    {ohlc.high != null && (
+                        <span className="pt-ohlc-item">
+                            <span className="pt-ohlc-lbl">H</span>
+                            <span className="pt-ohlc-val pt-ohlc-val--high">{fmt(ohlc.high)}</span>
+                        </span>
+                    )}
+                    {ohlc.low != null && (
+                        <span className="pt-ohlc-item">
+                            <span className="pt-ohlc-lbl">L</span>
+                            <span className="pt-ohlc-val pt-ohlc-val--low">{fmt(ohlc.low)}</span>
+                        </span>
+                    )}
+                    {ohlc.close != null && (
+                        <span className="pt-ohlc-item">
+                            <span className="pt-ohlc-lbl">PC</span>
+                            <span className="pt-ohlc-val">{fmt(ohlc.close)}</span>
+                        </span>
+                    )}
                 </div>
             )}
 
-            {/* ── Ichimoku Cloud Chart — interval driven by selected TF card ── */}
+            {/* ── TF pills + Ichimoku chart + zoom ── */}
+
+            {/* ── Consensus Bias + Timeframe Analysis ── */}
+            {token && <OverallSignalCard token={token} />}
+
             {token && (
                 <>
-                    {/* Zoom controls — mirrors ScanChartModal pattern */}
-
+                    <div className="pt-tf-pills">
+                        {INDEX_TFS.map(tf => (
+                            <button
+                                key={tf.value}
+                                className={`pt-tf-pill${chartInterval === tf.value ? " pt-tf-pill--active" : ""}`}
+                                onClick={() => setChartInterval(tf.value)}
+                            >
+                                {tf.label}
+                            </button>
+                        ))}
+                    </div>
                     <IchimokuChart ref={chartRef} token={token} interval={chartInterval} label={label} />
                     <div className="chart-zoom-bar">
                         <span className="chart-zoom-label">Zoom</span>
@@ -452,7 +501,15 @@ function InstrumentDetail({ token, label, sublabel }) {
                     </div>
                 </>
             )}
-        </>
+
+            {/* ── BUY / SELL action bar ──
+            {token && (
+                <div className="pt-action-bar">
+                    <button className="pt-action-btn pt-buy-btn">BUY</button>
+                    <button className="pt-action-btn pt-sell-btn">SELL</button>
+                </div>
+            )} */}
+        </div>
     );
 }
 

@@ -145,29 +145,36 @@ function CloseTradeModal({ trade, onClose, onConfirm }) {
 }
 
 function BalanceCard({ balance }) {
+    const totalBalance = balance.available + balance.invested;
+    const intPart = Math.floor(totalBalance).toLocaleString("en-IN");
+    const decPart = (totalBalance % 1).toFixed(2).slice(2);
+    const pnlCls = balance.realizedPnl >= 0 ? "pnl-positive" : "pnl-negative";
+
     return (
-        <div className="paper-balance-card">
-            <div className="paper-balance-row">
-                <div className="paper-balance-item paper-balance-item--available">
-                    <span className="paper-balance-label">Available</span>
-                    <span className="paper-balance-value">
-                        ₹{balance.available.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+        <div className="lc-balance-hero">
+            <div className="lc-balance-label">Total Balance</div>
+            <div className="lc-balance-amount">
+                ₹{intPart}
+                <span className="lc-balance-decimal">.{decPart}</span>
+            </div>
+            {balance.realizedPnl !== 0 && (
+                <div className={`lc-balance-change ${pnlCls}`}>
+                    {balance.realizedPnl >= 0 ? "↑ +" : "↓ −"}₹
+                    {Math.abs(balance.realizedPnl).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                    <span className="lc-balance-change-label">· Realized P&L</span>
+                </div>
+            )}
+            <div className="lc-balance-cards">
+                <div className="lc-balance-card">
+                    <span className="lc-balance-card-label">Available</span>
+                    <span className="lc-balance-card-value">
+                        ₹{balance.available.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
                     </span>
                 </div>
-                <div className="paper-balance-item">
-                    <span className="paper-balance-label">Invested</span>
-                    <span className="paper-balance-value">
+                <div className="lc-balance-card">
+                    <span className="lc-balance-card-label">Deployed</span>
+                    <span className="lc-balance-card-value">
                         ₹{balance.invested.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
-                    </span>
-                </div>
-                <div
-                    className={`paper-balance-item ${
-                        balance.realizedPnl >= 0 ? "paper-balance-item--profit" : "paper-balance-item--loss"
-                    }`}
-                >
-                    <span className="paper-balance-label">Realized P&L</span>
-                    <span className="paper-balance-value">
-                        {balance.realizedPnl >= 0 ? "+" : ""}₹{balance.realizedPnl.toFixed(2)}
                     </span>
                 </div>
             </div>
@@ -231,8 +238,8 @@ function OpenTradeRow({ trade, onClose }) {
 
     return (
         <tr className={slHit ? "paper-row--sl" : targetHit ? "paper-row--target" : ""}>
-            <td className="td-mono">{fmt(trade.ts)}</td>
-            <td>
+            <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
+            <td className="mob-hide">
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <span className={`pill ${trade.action === "BUY" ? "pill-green" : "pill-red"}`}>{trade.action}</span>
                     {trade.source === "auto" && (
@@ -242,19 +249,32 @@ function OpenTradeRow({ trade, onClose }) {
                     )}
                 </div>
             </td>
-            <td className="td-symbol">
-                {trade.symbol}
-                {(isOptions || trade.tradingMode === "futures") && (
-                    <span
-                        style={{
-                            fontSize: 11,
-                            color: spotLtp != null ? "var(--txt3)" : "var(--txt4, #555)",
-                            marginLeft: 4
-                        }}
-                    >
-                        ₹{fmtPrice(spotLtp ?? trade.spotEntry)}
+            <td className="td-symbol flex">
+                <span>
+                    {trade.source === "auto" && (
+                        <span className="td-sym-bot" title="Auto trade">
+                            🤖
+                        </span>
+                    )}
+                    <span className={`td-sym-side td-sym-side--${trade.action === "BUY" ? "b" : "s"}`}>
+                        {trade.action === "BUY" ? "B" : "S"}
                     </span>
-                )}
+
+                    {trade.symbol}
+                </span>
+                <span>
+                    {(isOptions || trade.tradingMode === "futures") && (
+                        <span
+                            style={{
+                                fontSize: 11,
+                                color: spotLtp != null ? "var(--txt3)" : "var(--txt4, #555)",
+                                marginLeft: 4
+                            }}
+                        >
+                            ₹{fmtPrice(window.innerWidth < 767 ? trade.spotEntry : spotLtp ?? trade.spotEntry)}
+                        </span>
+                    )}
+                </span>
                 {trade.tradingMode === "options" && trade.optionType && (
                     <span
                         className={`pill pill-sm ${trade.optionType === "CE" ? "pill-green" : "pill-red"}`}
@@ -269,9 +289,11 @@ function OpenTradeRow({ trade, onClose }) {
                     </span>
                 )}
             </td>
-            <td className="td-num">{fmtPrice(trade.entryPrice)}</td>
+            <td className="td-num td-entry mob-hide">{fmtPrice(trade.entryPrice)}</td>
             <td className="td-num">
-                <span ref={priceRef}>{fmtPrice(ltp ?? trade.entryPrice)}</span>
+                <span ref={priceRef} className="td-ltp">
+                    {fmtPrice(ltp ?? trade.entryPrice)}
+                </span>
             </td>
             <td className="td-num">
                 {trade.lots != null && trade.lotSize > 1 ? (
@@ -282,7 +304,7 @@ function OpenTradeRow({ trade, onClose }) {
                     trade.quantity
                 )}
             </td>
-            <td className="td-num td-sl">
+            <td className="td-num td-sl mob-hide">
                 {trade.tslActivated && (
                     <span className="paper-tsl-tag" title={`TSL armed — original SL ₹${trade.initialSl ?? "—"}`}>
                         🔒{" "}
@@ -291,7 +313,7 @@ function OpenTradeRow({ trade, onClose }) {
                 {trade.sl != null ? <>{fmtPrice(trade.sl)}</> : "—"}
                 {slHit && <span className="paper-hit-tag paper-hit-tag--sl"> 🛑</span>}
             </td>
-            <td className="td-num td-tgt">
+            <td className="td-num td-tgt mob-hide">
                 {trade.target != null ? <>{fmtPrice(trade.target)}</> : "—"}
                 {targetHit && <span className="paper-hit-tag paper-hit-tag--target"> 🎯</span>}
             </td>
@@ -299,8 +321,9 @@ function OpenTradeRow({ trade, onClose }) {
                 {unrealizedPnl != null ? `${unrealizedPnl >= 0 ? "+" : ""}₹${unrealizedPnl.toFixed(2)}` : "—"}
             </td>
             <td>
-                <button className="btn btn-ghost btn-sm" onClick={() => onClose(trade)}>
-                    Close
+                <button className="btn btn-ghost btn-sm paper-close-btn" onClick={() => onClose(trade)}>
+                    <span className="paper-close-label">Close</span>
+                    <span className="paper-close-icon">×</span>
                 </button>
             </td>
         </tr>
@@ -602,33 +625,58 @@ export default function PaperTradingPanel() {
             <BalanceCard balance={paperBalance} />
 
             <div className="paper-source-filter">
-                {[
-                    { id: "all", label: "All" },
-                    { id: "auto", label: "Auto" },
-                    { id: "scan", label: "Manual" }
-                ].map(({ id, label }) => (
-                    <button
-                        key={id}
-                        className={`paper-source-btn ${sourceFilter === id ? "paper-source-btn--active" : ""}`}
-                        onClick={() => setSourceFilter(id)}
+                {/* Pills — hidden on mobile */}
+                <div className="paper-filter-pills">
+                    {[
+                        { id: "all", label: "All" },
+                        { id: "auto", label: "Auto" },
+                        { id: "scan", label: "Manual" }
+                    ].map(({ id, label }) => (
+                        <button
+                            key={id}
+                            className={`paper-source-btn ${sourceFilter === id ? "paper-source-btn--active" : ""}`}
+                            onClick={() => setSourceFilter(id)}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                    <span style={{ borderLeft: "1px solid var(--border)", margin: "0 4px" }} />
+                    {[
+                        { id: "all", label: "All" },
+                        { id: "NSE", label: "NSE" },
+                        { id: "MCX", label: "MCX" }
+                    ].map(({ id, label }) => (
+                        <button
+                            key={`ex-${id}`}
+                            className={`paper-source-btn ${exchFilter === id ? "paper-source-btn--active" : ""}`}
+                            onClick={() => setExchFilter(id)}
+                        >
+                            {label}
+                        </button>
+                    ))}
+                </div>
+
+                {/* Dropdowns — shown only on mobile */}
+                <div className="paper-filter-selects">
+                    <select
+                        className="paper-filter-select"
+                        value={sourceFilter}
+                        onChange={e => setSourceFilter(e.target.value)}
                     >
-                        {label}
-                    </button>
-                ))}
-                <span style={{ borderLeft: "1px solid var(--border)", margin: "0 4px" }} />
-                {[
-                    { id: "all", label: "All" },
-                    { id: "NSE", label: "NSE" },
-                    { id: "MCX", label: "MCX" }
-                ].map(({ id, label }) => (
-                    <button
-                        key={`ex-${id}`}
-                        className={`paper-source-btn ${exchFilter === id ? "paper-source-btn--active" : ""}`}
-                        onClick={() => setExchFilter(id)}
+                        <option value="all">All Sources</option>
+                        <option value="auto">Auto</option>
+                        <option value="scan">Manual</option>
+                    </select>
+                    <select
+                        className="paper-filter-select"
+                        value={exchFilter}
+                        onChange={e => setExchFilter(e.target.value)}
                     >
-                        {label}
-                    </button>
-                ))}
+                        <option value="all">All Exchanges</option>
+                        <option value="NSE">NSE</option>
+                        <option value="MCX">MCX</option>
+                    </select>
+                </div>
             </div>
 
             {/* Stats */}
@@ -675,17 +723,28 @@ export default function PaperTradingPanel() {
                         <table className="kite-table">
                             <thead>
                                 <tr>
-                                    <SortTh label="Time" field="ts" sort={openSort} onSort={setOpenSort} />
-                                    <th>Action</th>
+                                    <SortTh
+                                        label="Time"
+                                        field="ts"
+                                        sort={openSort}
+                                        onSort={setOpenSort}
+                                        className="mob-hide"
+                                    />
+                                    <th className="mob-hide">Action</th>
                                     <SortTh label="Symbol" field="symbol" sort={openSort} onSort={setOpenSort} />
                                     <SortTh
-                                        label="Entry"
+                                        label={
+                                            <>
+                                                <span className="mob-hide">Entry</span>
+                                                <span className="mob-show">LTP</span>
+                                            </>
+                                        }
                                         field="entry"
                                         sort={openSort}
                                         onSort={setOpenSort}
                                         className="th-num"
                                     />
-                                    <th className="th-num">LTP</th>
+                                    <th className="th-num mob-hide">LTP</th>
                                     <SortTh
                                         label="Qty"
                                         field="qty"
@@ -698,14 +757,14 @@ export default function PaperTradingPanel() {
                                         field="sl"
                                         sort={openSort}
                                         onSort={setOpenSort}
-                                        className="th-num"
+                                        className="th-num mob-hide"
                                     />
                                     <SortTh
                                         label="Target"
                                         field="target"
                                         sort={openSort}
                                         onSort={setOpenSort}
-                                        className="th-num"
+                                        className="th-num mob-hide"
                                     />
                                     <th className="th-num">Live P&amp;L</th>
                                     <th></th>
@@ -736,8 +795,14 @@ export default function PaperTradingPanel() {
                         <table className="kite-table">
                             <thead>
                                 <tr>
-                                    <SortTh label="Closed" field="closedTs" sort={closedSort} onSort={setClosedSort} />
-                                    <th>Action</th>
+                                    <SortTh
+                                        label="Closed"
+                                        field="closedTs"
+                                        sort={closedSort}
+                                        onSort={setClosedSort}
+                                        className="mob-hide"
+                                    />
+                                    <th className="mob-hide">Action</th>
                                     <SortTh label="Symbol" field="symbol" sort={closedSort} onSort={setClosedSort} />
                                     <SortTh
                                         label="Entry"
@@ -751,7 +816,7 @@ export default function PaperTradingPanel() {
                                         field="exit"
                                         sort={closedSort}
                                         onSort={setClosedSort}
-                                        className="th-num"
+                                        className="th-num mob-hide"
                                     />
                                     <SortTh
                                         label="Qty"
@@ -772,15 +837,15 @@ export default function PaperTradingPanel() {
                             <tbody>
                                 {sortedClosed.map(t => (
                                     <tr key={t.id}>
-                                        <td className="td-mono">{fmt(t.closedTs)}</td>
-                                        <td>
+                                        <td className="td-mono mob-hide">{fmt(t.closedTs)}</td>
+                                        <td className="mob-hide">
                                             <span className={`pill ${t.action === "BUY" ? "pill-green" : "pill-red"}`}>
                                                 {t.action}
                                             </span>
                                         </td>
                                         <td className="td-symbol">{t.symbol}</td>
                                         <td className="td-num">{t.entryPrice}</td>
-                                        <td className="td-num">{t.exitPrice}</td>
+                                        <td className="td-num mob-hide">{t.exitPrice}</td>
                                         <td className="td-num">
                                             {t.lots != null && t.lotSize > 1 ? (
                                                 <span title={`${t.lots} lot${t.lots > 1 ? "s" : ""} × ${t.lotSize}`}>

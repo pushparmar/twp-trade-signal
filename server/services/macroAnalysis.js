@@ -258,6 +258,52 @@ async function _analyzeSilver() {
   };
 }
 
+async function _analyzeNaturalgas() {
+  const inst = getFrontMonthFutures('NATURALGAS', 'MCX');
+  if (!inst) return { error: 'Instrument cache not loaded or NATURALGAS not found on MCX', timeframes: [] };
+
+  const tfs = [];
+
+  const c15m = await candleStore.getCandles(inst.instrumentToken, '15minute');
+  const a15m = _analyze(c15m, '15m');
+  if (a15m) {
+    const { signal, ichi } = _ichiSignal(c15m);
+    tfs.push({ key: '15m', ...a15m, signal, ichi });
+  }
+
+  const c1h = await candleStore.getCandles(inst.instrumentToken, '60minute');
+  const a1h = _analyze(c1h, '1h');
+  if (a1h) {
+    const { signal, ichi } = _ichiSignal(c1h);
+    tfs.push({ key: '1h', ...a1h, signal, ichi });
+  }
+
+  if (c1h && c1h.length >= 8) {
+    const c4h = _to4H(c1h);
+    const a4h = _analyze(c4h, '4h');
+    if (a4h) {
+      const { signal, ichi } = _ichiSignal(c4h);
+      tfs.push({ key: '4h', ...a4h, signal, ichi });
+    }
+  }
+
+  const c1d = await candleStore.getCandles(inst.instrumentToken, 'day');
+  const a1d = _analyze(c1d, '1d');
+  if (a1d) {
+    const { signal, ichi } = _ichiSignal(c1d);
+    tfs.push({ key: '1d', ...a1d, signal, ichi });
+  }
+
+  return {
+    ...(_direction(tfs)),
+    instrumentToken: inst.instrumentToken,
+    currentPrice:    (a1d || a1h || a15m)?.current ?? null,
+    tradingsymbol:   inst.tradingsymbol,
+    expiry:          inst.expiry,
+    timeframes:      tfs,
+  };
+}
+
 async function _analyzeUsdinr() {
   const inst = getFrontMonthFutures('USDINR', 'CDS');
   if (!inst) return { error: 'Instrument cache not loaded or USDINR not found on CDS', timeframes: [] };
@@ -308,20 +354,21 @@ async function analyze() {
   // allSettled — one instrument's historical-API failure (e.g. user has no MCX
   // segment access) shouldn't kill the entire macro response.
   const results = await Promise.allSettled([
-    _analyzeVix(), _analyzeCrude(), _analyzeGold(), _analyzeSilver(), _analyzeUsdinr(),
+    _analyzeVix(), _analyzeCrude(), _analyzeGold(), _analyzeSilver(), _analyzeUsdinr(), _analyzeNaturalgas(),
   ]);
-  const [vixR, crudeR, goldR, silverR, usdinrR] = results;
+  const [vixR, crudeR, goldR, silverR, usdinrR, naturalgasR] = results;
   const unwrap = (r, label) => {
     if (r.status === 'fulfilled') return r.value;
     console.warn(`[MacroAnalysis] ${label} failed:`, r.reason?.message || r.reason);
     return { error: r.reason?.message || String(r.reason), timeframes: [] };
   };
   return {
-    vix:    unwrap(vixR,    'VIX'),
-    crude:  unwrap(crudeR,  'Crude'),
-    gold:   unwrap(goldR,   'Gold'),
-    silver: unwrap(silverR, 'Silver'),
-    usdinr: unwrap(usdinrR, 'USDINR'),
+    vix:         unwrap(vixR,         'VIX'),
+    crude:       unwrap(crudeR,       'Crude'),
+    gold:        unwrap(goldR,        'Gold'),
+    silver:      unwrap(silverR,      'Silver'),
+    usdinr:      unwrap(usdinrR,      'USDINR'),
+    naturalgas:  unwrap(naturalgasR,  'NaturalGas'),
   };
 }
 

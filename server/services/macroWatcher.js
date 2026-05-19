@@ -24,7 +24,7 @@ const _watchSet = new Set();
 // token → instrument key mapping: { 264969: 'vix', 12345: 'crude', ... }
 const _tokenToKey = new Map();
 
-// Latest live prices: { vix, crude, gold, silver, usdinr }
+// Latest live prices: { vix, crude, gold, silver, usdinr, naturalgas }
 const _prices = {};
 
 // Debounce handle so we don't flood SSE on every tick
@@ -85,10 +85,11 @@ function ensureSubscribed() {
  * Must be called after instrumentCache has loaded.
  */
 function start() {
-  const crudeInst  = getFrontMonthFutures('CRUDEOIL', 'MCX');
-  const goldInst   = getFrontMonthFutures('GOLD',     'MCX');
-  const silverInst = getFrontMonthFutures('SILVER',   'MCX');
-  const usdinrInst = getFrontMonthFutures('USDINR',   'CDS');
+  const crudeInst      = getFrontMonthFutures('CRUDEOIL',   'MCX');
+  const goldInst       = getFrontMonthFutures('GOLD',       'MCX');
+  const silverInst     = getFrontMonthFutures('SILVER',     'MCX');
+  const usdinrInst     = getFrontMonthFutures('USDINR',     'CDS');
+  const naturalgasInst = getFrontMonthFutures('NATURALGAS', 'MCX');
 
   const tokens = [
     VIX_TOKEN,
@@ -96,6 +97,7 @@ function start() {
     goldInst?.instrumentToken,
     silverInst?.instrumentToken,
     usdinrInst?.instrumentToken,
+    naturalgasInst?.instrumentToken,
   ].filter(Boolean);
 
   // Build fast-lookup set and token→key map for live price updates
@@ -106,11 +108,12 @@ function start() {
       _watchSet.add(`${token}:${interval}`);
     }
   }
-  _tokenToKey.set(VIX_TOKEN,                          'vix');
-  if (crudeInst)  _tokenToKey.set(crudeInst.instrumentToken,  'crude');
-  if (goldInst)   _tokenToKey.set(goldInst.instrumentToken,   'gold');
-  if (silverInst) _tokenToKey.set(silverInst.instrumentToken, 'silver');
-  if (usdinrInst) _tokenToKey.set(usdinrInst.instrumentToken, 'usdinr');
+  _tokenToKey.set(VIX_TOKEN,                                    'vix');
+  if (crudeInst)      _tokenToKey.set(crudeInst.instrumentToken,      'crude');
+  if (goldInst)       _tokenToKey.set(goldInst.instrumentToken,       'gold');
+  if (silverInst)     _tokenToKey.set(silverInst.instrumentToken,     'silver');
+  if (usdinrInst)     _tokenToKey.set(usdinrInst.instrumentToken,     'usdinr');
+  if (naturalgasInst) _tokenToKey.set(naturalgasInst.instrumentToken, 'naturalgas');
 
   // Cache tokens for later ensureSubscribed() calls
   _resolvedTokens = tokens;
@@ -158,16 +161,18 @@ function start() {
 
   const names = [
     'VIX',
-    crudeInst  ? 'Crude'  : null,
-    goldInst   ? 'Gold'   : null,
-    silverInst ? 'Silver' : null,
-    usdinrInst ? 'USDINR' : null,
+    crudeInst      ? 'Crude'      : null,
+    goldInst       ? 'Gold'       : null,
+    silverInst     ? 'Silver'     : null,
+    usdinrInst     ? 'USDINR'     : null,
+    naturalgasInst ? 'NaturalGas' : null,
   ].filter(Boolean).join(', ');
   console.log(`[MacroWatcher] Ready — watching ${names} on 15m / 1h / 1d (tokens: ${tokens.join(', ')})`);
-  if (!crudeInst)  console.warn('[MacroWatcher] CRUDEOIL not found in instrument cache (MCX)');
-  if (!goldInst)   console.warn('[MacroWatcher] GOLD not found in instrument cache (MCX)');
-  if (!silverInst) console.warn('[MacroWatcher] SILVER not found in instrument cache (MCX)');
-  if (!usdinrInst) console.warn('[MacroWatcher] USDINR not found in instrument cache (CDS)');
+  if (!crudeInst)      console.warn('[MacroWatcher] CRUDEOIL not found in instrument cache (MCX)');
+  if (!goldInst)       console.warn('[MacroWatcher] GOLD not found in instrument cache (MCX)');
+  if (!silverInst)     console.warn('[MacroWatcher] SILVER not found in instrument cache (MCX)');
+  if (!usdinrInst)     console.warn('[MacroWatcher] USDINR not found in instrument cache (CDS)');
+  if (!naturalgasInst) console.warn('[MacroWatcher] NATURALGAS not found in instrument cache (MCX)');
 }
 
 module.exports = { start, ensureSubscribed, onTick, onCandleClose };
