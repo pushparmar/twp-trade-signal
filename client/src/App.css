@@ -144,50 +144,62 @@ body {
 }
 
 /* Status badge */
-.sidebar-status {
+/* ── Sidebar connection status indicators ───────────────────────────────── */
+.sidebar-conn-status {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   margin: 0 12px 16px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
 }
-.status--live {
-  background: rgba(89, 160, 92, 0.1);
-  color: var(--green);
-}
-.status--offline {
-  background: rgba(215, 90, 74, 0.08);
-  color: var(--red);
+.sidebar-conn-status--collapsed {
+  align-items: center;
+  margin: 0 8px 16px;
+  gap: 6px;
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
+.conn-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.sidebar-conn-status--collapsed .conn-indicator {
+  padding: 4px;
+  justify-content: center;
+  background: none;
+}
+.conn-indicator--on  { background: rgba(89,160,92,.10); color: var(--green); }
+.conn-indicator--off { background: rgba(215,90,74,.08); color: var(--red); }
+
+.conn-indicator-dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot--live {
+.conn-indicator-dot--on {
   background: var(--green);
-  box-shadow: 0 0 8px var(--green);
+  box-shadow: 0 0 6px var(--green);
   animation: pulse-dot 2s infinite;
 }
-.status-dot--offline {
-  background: var(--red);
-}
+.conn-indicator-dot--off { background: var(--red); }
+
+.conn-indicator-icon { flex-shrink: 0; opacity: 0.8; }
+.conn-indicator-label { flex: 1; }
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
 
-.sidebar--collapsed .sidebar-status {
-  justify-content: center;
-  padding: 8px;
-  margin: 0 8px 16px;
-}
+/* Keep old single-status classes for any remaining references */
+.sidebar-status { display: none; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.status-dot--live { background: var(--green); }
+.status-dot--offline { background: var(--red); }
 
 /* Navigation */
 .sidebar-nav {

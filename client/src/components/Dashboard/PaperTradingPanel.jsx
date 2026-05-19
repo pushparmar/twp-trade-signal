@@ -144,75 +144,10 @@ function CloseTradeModal({ trade, onClose, onConfirm }) {
     );
 }
 
-function BalanceCard({ balance, onUpdate }) {
-    const [editing, setEditing] = useState(false);
-    const [inputVal, setInputVal] = useState("");
-    const inputRef = useRef(null);
-
-    function startEdit() {
-        setInputVal(String(balance.initial));
-        setEditing(true);
-        setTimeout(() => inputRef.current?.select(), 0);
-    }
-
-    async function confirm() {
-        const amount = Number(inputVal);
-        if (!amount || isNaN(amount) || amount <= 0) {
-            setEditing(false);
-            return;
-        }
-        await onUpdate(amount);
-        setEditing(false);
-    }
-
-    function handleKey(e) {
-        if (e.key === "Enter") confirm();
-        if (e.key === "Escape") setEditing(false);
-    }
-
+function BalanceCard({ balance }) {
     return (
         <div className="paper-balance-card">
             <div className="paper-balance-row">
-                <div className="paper-balance-item">
-                    <span className="paper-balance-label">Starting Balance</span>
-                    {editing ? (
-                        <div className="paper-balance-edit">
-                            <span className="paper-balance-currency">₹</span>
-                            <input
-                                ref={inputRef}
-                                type="number"
-                                className="paper-balance-input"
-                                value={inputVal}
-                                onChange={e => setInputVal(e.target.value)}
-                                onKeyDown={handleKey}
-                                onBlur={confirm}
-                            />
-                        </div>
-                    ) : (
-                        <div className="paper-balance-value-row">
-                            <span className="paper-balance-value">₹{balance.initial.toLocaleString("en-IN")}</span>
-                            <button
-                                className="paper-balance-edit-btn"
-                                onClick={startEdit}
-                                title="Edit starting balance"
-                            >
-                                <svg
-                                    width="13"
-                                    height="13"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                >
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                                </svg>
-                            </button>
-                        </div>
-                    )}
-                </div>
                 <div className="paper-balance-item paper-balance-item--available">
                     <span className="paper-balance-label">Available</span>
                     <span className="paper-balance-value">
@@ -597,7 +532,7 @@ function tradeExchange(t) {
 export default function PaperTradingPanel() {
     const paperTrades = useAppStore(s => s.paperTrades);
     const paperBalance = useAppStore(s => s.paperBalance);
-    const setPaperBalance = useAppStore(s => s.setPaperBalance);
+
     const updatePaperTrade = useAppStore(s => s.updatePaperTrade);
     const clearPaperTrades = useAppStore(s => s.clearPaperTrades);
     const [closingTrade, setClosingTrade] = useState(null);
@@ -605,15 +540,6 @@ export default function PaperTradingPanel() {
     const [exchFilter, setExchFilter] = useState("all");
     const [openSort, setOpenSort] = useState({ field: "ts", dir: "desc" });
     const [closedSort, setClosedSort] = useState({ field: "closedTs", dir: "desc" });
-
-    async function handleBalanceUpdate(amount) {
-        try {
-            const r = await api.post("/paper/balance", { amount });
-            setPaperBalance(r.data);
-        } catch (err) {
-            console.error("Failed to update balance:", err.message);
-        }
-    }
 
     let filtered = sourceFilter === "all" ? paperTrades : paperTrades.filter(t => t.source === sourceFilter);
     if (exchFilter !== "all") {
@@ -673,7 +599,7 @@ export default function PaperTradingPanel() {
     return (
         <div className="paper-trading-panel">
             <AutoTraderSettings />
-            <BalanceCard balance={paperBalance} onUpdate={handleBalanceUpdate} />
+            <BalanceCard balance={paperBalance} />
 
             <div className="paper-source-filter">
                 {[

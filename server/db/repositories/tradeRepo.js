@@ -299,4 +299,25 @@ async function patternWinRate() {
   }
 }
 
-module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, dailyPnl, patternWinRate };
+/**
+ * Sum of realized PnL across all CLOSED trades in MongoDB.
+ * Used on startup to restore the in-memory cumulative PnL counter so the
+ * paper balance is accurate even after Railway redeploys or config.json loss.
+ *
+ * @returns {Promise<number>}
+ */
+async function getCumulativePnl() {
+  if (!mongo.isReady()) return null; // null = not available, caller uses fallback
+  try {
+    const rows = await mongo.db().collection(COLLECTION).aggregate([
+      { $match: { status: 'CLOSED', pnl: { $ne: null } } },
+      { $group: { _id: null, total: { $sum: '$pnl' } } },
+    ]).toArray();
+    return Math.round((rows[0]?.total ?? 0) * 100) / 100;
+  } catch (err) {
+    console.warn('[tradeRepo] getCumulativePnl failed:', err.message);
+    return null;
+  }
+}
+
+module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getCumulativePnl, dailyPnl, patternWinRate };

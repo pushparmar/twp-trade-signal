@@ -89,11 +89,19 @@ async function poll() {
       // Back off and retry — the stale connection usually drops within seconds.
       _conflictRetries++;
       if (_conflictRetries > MAX_CONFLICT_RETRIES) {
-        console.error(`[Telegram] 409 conflict persists after ${MAX_CONFLICT_RETRIES} retries — stopping poller. Run deleteWebhook or kill the other process, then restart.`);
-        stop();
+        // Don't stop permanently — the competing instance may have died.
+        // Schedule a long recovery attempt so the poller self-heals.
+        const RECOVERY_MS = 3 * 60_000; // 3 minutes
+        console.warn(
+          `[Telegram] 409 conflict persists after ${MAX_CONFLICT_RETRIES} retries. ` +
+          `Pausing ${RECOVERY_MS / 60_000} min then auto-recovering. ` +
+          `Set DISABLE_TELEGRAM_POLLING=true in local .env if running alongside Railway.`,
+        );
+        _conflictRetries = 0;
+        pollTimeout = setTimeout(poll, RECOVERY_MS);
         return;
       }
-      console.warn(`[Telegram] 409 conflict — another instance is polling. Backing off ${CONFLICT_BACKOFF_MS / 1000}s (attempt ${_conflictRetries}/${MAX_CONFLICT_RETRIES}). Set DISABLE_TELEGRAM_POLLING=true in local .env if running alongside Railway.`);
+      console.warn(`[Telegram] 409 conflict — another instance is polling. Backing off ${CONFLICT_BACKOFF_MS / 1000}s (attempt ${_conflictRetries}/${MAX_CONFLICT_RETRIES}).`);
       pollTimeout = setTimeout(poll, CONFLICT_BACKOFF_MS);
       return; // skip schedulePoll() below
     }

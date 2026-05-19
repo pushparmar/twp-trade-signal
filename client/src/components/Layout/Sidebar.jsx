@@ -175,10 +175,37 @@ export default function Sidebar({
         </button>
       </div>
 
-      {/* Live status badge */}
-      <div className={`sidebar-status ${isLive ? 'status--live' : 'status--offline'}`}>
-        <span className={`status-dot ${isLive ? 'status-dot--live' : 'status-dot--offline'}`} />
-        {!collapsed && <span className="status-label">{isLive ? 'Live Trading' : 'Offline'}</span>}
+      {/* Connection status indicators */}
+      <div className={`sidebar-conn-status ${collapsed ? 'sidebar-conn-status--collapsed' : ''}`}>
+        <div
+          className={`conn-indicator ${isLive ? 'conn-indicator--on' : 'conn-indicator--off'}`}
+          title={isLive ? 'Telegram: polling active' : 'Telegram: stopped'}
+        >
+          <span className={`conn-indicator-dot ${isLive ? 'conn-indicator-dot--on' : 'conn-indicator-dot--off'}`} />
+          {!collapsed && (
+            <>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" className="conn-indicator-icon">
+                <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.12 14.12l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.828.44z"/>
+              </svg>
+              <span className="conn-indicator-label">Telegram</span>
+            </>
+          )}
+        </div>
+        <div
+          className={`conn-indicator ${tickerConnected ? 'conn-indicator--on' : 'conn-indicator--off'}`}
+          title={tickerConnected ? 'Kite ticker: connected' : 'Kite ticker: disconnected'}
+        >
+          <span className={`conn-indicator-dot ${tickerConnected ? 'conn-indicator-dot--on' : 'conn-indicator-dot--off'}`} />
+          {!collapsed && (
+            <>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="conn-indicator-icon">
+                <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                <polyline points="16 7 22 7 22 13" />
+              </svg>
+              <span className="conn-indicator-label">Kite Ticker</span>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Navigation */}
@@ -197,12 +224,6 @@ export default function Sidebar({
             )}
             {!collapsed && item.id === 'scanner' && scanCount > 0 && (
               <span className="nav-badge nav-badge--scan">{scanCount}</span>
-            )}
-            {item.id === 'market' && (
-              <span
-                className={`nav-ticker-dot ${tickerConnected ? 'nav-ticker-dot--on' : 'nav-ticker-dot--off'}`}
-                title={tickerConnected ? 'Ticker connected' : 'Ticker disconnected'}
-              />
             )}
           </button>
         ))}

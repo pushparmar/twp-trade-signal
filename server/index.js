@@ -133,6 +133,19 @@ app.listen(PORT, async () => {
       }
     }
 
+    // ── Restore cumulative PnL from MongoDB — authoritative source of truth ──
+    // MongoDB is the definitive record; overrides config.json so the balance
+    // survives Railway redeploys, persistent-volume wipes, and config loss.
+    try {
+      const dbPnl = await db.tradeRepo.getCumulativePnl();
+      if (dbPnl !== null) {
+        store.setCumulativePnl(dbPnl);
+        console.log(`[DB] Cumulative PnL loaded from MongoDB: ₹${dbPnl}`);
+      }
+    } catch (err) {
+      console.warn('[DB] Could not load cumulative PnL from MongoDB:', err.message);
+    }
+
     // ── Backfill: any trades already in memory but not yet in MongoDB ───────
     // Covers the race where a trade was placed during the brief window
     // BEFORE db.init() completed (mongo.isReady() was false at write time).

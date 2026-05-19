@@ -109,6 +109,9 @@ let _testMode = false;
 let _paperTrades = [];
 // Default starting balance: ₹1 crore (1,00,00,000)
 let _paperInitialBalance = 10_000_000;
+// Cumulative realized PnL — persists in config.json across restarts and "Clear All".
+// Incremented whenever a paper trade closes so the running balance is always correct.
+let _cumulativePnl = 0;
 
 // Persist current trades to disk after every mutation.
 function _saveTrades() {
@@ -117,6 +120,12 @@ function _saveTrades() {
   } catch (err) {
     console.warn('[store] Failed to persist trades:', err.message);
   }
+}
+
+function _saveCumulativePnl() {
+  const config = readConfig();
+  config.cumulativePnl = _cumulativePnl;
+  writeConfig(config);
 }
 
 // Load trades from the previous session on module boot.
@@ -132,26 +141,44 @@ function _saveTrades() {
   } catch (err) {
     console.warn('[store] Could not load trades from disk:', err.message);
   }
+
+  // Load cumulative PnL from config. On first run, bootstrap it from any closed
+  // trades already on disk so the migration from the old per-trade derivation is
+  // seamless.
+  try {
+    const config = readConfig();
+    if (typeof config.cumulativePnl === 'number') {
+      _cumulativePnl = config.cumulativePnl;
+    } else {
+      // First run: seed from existing closed trades so nothing is lost
+      _cumulativePnl = _paperTrades
+        .filter((t) => t.status === 'CLOSED')
+        .reduce((sum, t) => sum + (t.pnl || 0), 0);
+      _cumulativePnl = Math.round(_cumulativePnl * 100) / 100;
+      _saveCumulativePnl();
+    }
+  } catch {
+    _cumulativePnl = 0;
+  }
 }());
 
 function getTestMode() { return _testMode; }
 function setTestMode(enabled) { _testMode = enabled; }
 
 function getPaperInitialBalance() { return _paperInitialBalance; }
-function setPaperInitialBalance(amount) { _paperInitialBalance = amount; }
+function setPaperInitialBalance(amount) {
+  _paperInitialBalance = amount;
+}
 
 function getPaperBalance() {
   const invested = _paperTrades
     .filter((t) => t.status === 'OPEN')
     .reduce((sum, t) => sum + t.entryPrice * t.quantity, 0);
-  const realizedPnl = _paperTrades
-    .filter((t) => t.status === 'CLOSED')
-    .reduce((sum, t) => sum + (t.pnl || 0), 0);
   return {
-    initial: _paperInitialBalance,
-    available: Math.round((_paperInitialBalance - invested + realizedPnl) * 100) / 100,
-    invested: Math.round(invested * 100) / 100,
-    realizedPnl: Math.round(realizedPnl * 100) / 100,
+    initial:      _paperInitialBalance,
+    available:    Math.round((_paperInitialBalance + _cumulativePnl - invested) * 100) / 100,
+    invested:     Math.round(invested * 100) / 100,
+    realizedPnl:  Math.round(_cumulativePnl * 100) / 100,
   };
 }
 
@@ -192,6 +219,9 @@ function closePaperTrade(id, exitPrice) {
   trade.exitPrice = exitPrice;
   trade.pnl = Math.round(pnl * 100) / 100;
   trade.closedTs = Date.now();
+  // Persist realized PnL so balance survives restarts and "Clear All"
+  _cumulativePnl = Math.round((_cumulativePnl + trade.pnl) * 100) / 100;
+  _saveCumulativePnl();
   _saveTrades();
   return trade;
 }
@@ -205,10 +235,26 @@ function autoClosePaperTrades(symbol, exitPrice, exitAction) {
 }
 
 function getPaperTrades() { return _paperTrades; }
+
+// Overwrite cumulative PnL — used on startup to load the authoritative value
+// from MongoDB so the balance survives Railway redeploys and config.json loss.
+function setCumulativePnl(amount) {
+  _cumulativePnl = Math.round(amount * 100) / 100;
+  _saveCumulativePnl();
+}
+
+// Reset cumulative PnL to zero (keeps initial balance, wipes running score)
+function resetPaperBalance() {
+  _cumulativePnl = 0;
+  _saveCumulativePnl();
+}
+
 function clearPaperTrades() {
   _paperTrades = [];
   // Remove the current-session file so it doesn't reload on next boot
   try { fs.unlinkSync(TRADES_PATH); } catch { /* file may not exist — ignore */ }
+  // NOTE: _cumulativePnl is intentionally NOT reset here — realized PnL
+  // persists across Clear All so the running balance is always accurate.
 }
 
 // ── Watchlist (persisted) ────────────────────────────
@@ -248,7 +294,7 @@ function getAutoTraderSettings() {
   return {
     enabled:      config.autoTrader?.enabled      ?? true,
     tradingMode:  config.autoTrader?.tradingMode   ?? 'options',
-    sizingMode:   config.autoTrader?.sizingMode    ?? 'risk',
+    sizingMode:   config.autoTrader?.sizingMode    ?? 'fixed',
     riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,
     minProfit:    config.autoTrader?.minProfit     ?? 10_000,
     minRR:        config.autoTrader?.minRR         ?? 2.0,
@@ -275,7 +321,7 @@ module.exports = {
   getTelegramChatId, setTelegramChatId,
   getTestMode, setTestMode,
   addPaperTrade, closePaperTrade, updatePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
-  getPaperBalance, setPaperInitialBalance, getPaperInitialBalance,
+  getPaperBalance, setPaperInitialBalance, getPaperInitialBalance, setCumulativePnl, resetPaperBalance,
   getWatchlist, setWatchlist, addToWatchlist, removeFromWatchlist,
   getAutoTraderSettings, setAutoTraderSettings,
 };
