@@ -397,6 +397,7 @@ async function _runScanForInterval(interval) {
       const alertPayload = {
         token:             Number(inst.instrumentToken),
         label,
+        exchange:          inst.exchange,   // 'NSE' | 'MCX' — used by autoTrader market-hours gate
         interval,
         tfLabel,
         patternId,

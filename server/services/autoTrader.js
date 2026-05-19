@@ -92,12 +92,11 @@ function _onAlert(alert, source) {
   // Auto trades go in ONLY during live trading sessions:
   //   NSE: 09:15–15:30 IST  · MCX: 09:00–23:30 IST  · weekdays only
   //
-  // We don't know the exchange from the alert payload, so the safe rule is:
-  //   – If NEITHER market is open, never fire.
-  //   – If only MCX is open (after 15:30), only fire when the symbol looks like
-  //     an MCX instrument.  Otherwise it's an NSE stock that already closed.
+  // Prefer the explicit exchange field (backgroundScanner sets it).  Fall back
+  // to symbol-name regex for liveScanner alerts that may not carry it yet.
   const mcxSymbolHint = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
-  const isMcxSymbol   = mcxSymbolHint.test(String(alert.label ?? ''));
+  const isMcxSymbol   = alert.exchange === 'MCX'
+    || mcxSymbolHint.test(String(alert.label ?? ''));
   if (!isNseOpen() && !isMcxOpen()) return;                          // both closed
   if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;           // NSE closed, MCX open, NSE stock — skip
 
@@ -151,7 +150,7 @@ function _onAlert(alert, source) {
     // Instrument
     symbol:          alert.label || String(numToken),
     token:           numToken,
-    exchange:        alert.exchange ?? 'NSE',
+    exchange:        alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE'),
     // Order
     action,
     quantity:        pos.quantity,

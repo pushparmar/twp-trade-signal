@@ -40,23 +40,28 @@ function _istDateStr(now = Date.now()) {
 
 function archiveAndClear() {
   const store  = _store();
+  const hub    = _hub();
   const trades = store.getPaperTrades();
 
+  // Separate so OPEN trades can be carried forward to the new trading day.
+  const openTrades   = trades.filter((t) => t.status === 'OPEN');
+  const closedTrades = trades.filter((t) => t.status === 'CLOSED');
+
+  // ── Write archive file (ALL trades — useful for end-of-month analysis) ────
   if (trades.length > 0) {
     const dir      = _historyDir();
     const dateStr  = _istDateStr();
     const filePath = path.join(dir, `trades-${dateStr}.json`);
 
-    const closed   = trades.filter((t) => t.status === 'CLOSED');
-    const totalPnl = closed.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    const totalPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
 
     const payload = {
       date:       dateStr,
       archivedAt: new Date().toISOString(),
       summary: {
         total:    trades.length,
-        open:     trades.filter((t) => t.status === 'OPEN').length,
-        closed:   closed.length,
+        open:     openTrades.length,
+        closed:   closedTrades.length,
         totalPnl: +totalPnl.toFixed(2),
       },
       // Include every field relevant for pattern-level analysis
@@ -94,14 +99,29 @@ function archiveAndClear() {
     console.log('[TradeArchiver] No trades to archive today');
   }
 
-  // Clear server store + current-session file
-  _store().clearPaperTrades();
+  // ── Clear ALL trades from store + disk ────────────────────────────────────
+  store.clearPaperTrades();
 
-  // Broadcast to all connected browser tabs so they wipe localStorage too
-  _hub().broadcast('paper_trades_cleared', {});
-  _hub().broadcast('paper_balance', _store().getPaperBalance());
+  // Tell every browser tab to wipe its local state (closed trades are gone).
+  hub.broadcast('paper_trades_cleared', {});
 
-  console.log('[TradeArchiver] Daily 6 AM clear complete');
+  // ── Carry forward OPEN trades to the new trading day ─────────────────────
+  // OPEN positions are not day-specific — they stay active until SL/target/
+  // manual close.  Re-add them to the store and re-broadcast so every
+  // connected tab adds them back immediately.
+  if (openTrades.length > 0) {
+    for (const trade of openTrades) {
+      store.addPaperTrade(trade);
+      hub.broadcast('paper_trade', trade);
+    }
+    console.log(`[TradeArchiver] Carried forward ${openTrades.length} open trade(s) to new day`);
+  }
+
+  hub.broadcast('paper_balance', store.getPaperBalance());
+  console.log(
+    `[TradeArchiver] Daily 6 AM clear complete — ` +
+    `${closedTrades.length} closed archived, ${openTrades.length} open carried forward`,
+  );
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
