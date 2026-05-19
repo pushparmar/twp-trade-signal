@@ -29,10 +29,6 @@ function _kiteService() {
 const _closing = new Set();
 const _lastTickBroadcast = new Map();
 
-/**
- * For options trades, SL/target/TSL all operate in spot price space.
- * Use spotEntry (the underlying close) instead of entryPrice (the premium).
- */
 function _spotEntry(trade) {
   return trade.spotEntry ?? trade.entryPrice;
 }
@@ -174,67 +170,56 @@ function onTick(token, lastPrice) {
 
   const numToken = Number(token);
 
-  // Filter by token FIRST to keep this O(trades_for_token), not O(all_trades)
-  const underlyingTrades = store.getPaperTrades().filter(
+  // Match trades by underlying token OR derivative (futures) token
+  const openTrades = store.getPaperTrades().filter(
     (t) =>
       t.status === 'OPEN' &&
-      Number(t.token) === numToken &&
+      (Number(t.token) === numToken || Number(t.derivativeToken) === numToken) &&
       (t.source === 'auto' || t.source === 'scan'),
   );
-  if (underlyingTrades.length > 0) {
-    const settings = store.getAutoTraderSettings();
-    const now      = Date.now();
+  if (openTrades.length === 0) return;
 
-    for (const trade of underlyingTrades) {
+  const settings = store.getAutoTraderSettings();
+  const now      = Date.now();
+
+  for (const trade of openTrades) {
+    const isDerivativeTick = Number(trade.derivativeToken) === numToken;
+    const isUnderlyingTick = Number(trade.token) === numToken;
+
+    // For futures: SL/target/TSL checked against futures price (derivative tick)
+    if (trade.derivativeToken && isDerivativeTick) {
       _maybeTrail(trade, lastPrice, settings);
-
       const exit = _checkExit(trade, lastPrice);
       if (exit) {
         _closeTrade(trade, exit.closeAt, exit.reason);
         continue;
       }
+    }
 
-      // For non-options trades, broadcast PnL from underlying ticks
-      if (trade.tradingMode !== 'options') {
-        const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
-        if (now - lastBcast >= 500) {
-          _lastTickBroadcast.set(trade.id, now);
-          const unrealizedPnl = trade.action === 'BUY'
-            ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
-            : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
-          broadcast('paper_trade_tick', {
-            id:            trade.id,
-            token:         numToken,
-            ltp:           lastPrice,
-            unrealizedPnl: +unrealizedPnl.toFixed(2),
-          });
-        }
+    // For trades without derivativeToken (legacy/spot), check against underlying
+    if (!trade.derivativeToken && isUnderlyingTick) {
+      _maybeTrail(trade, lastPrice, settings);
+      const exit = _checkExit(trade, lastPrice);
+      if (exit) {
+        _closeTrade(trade, exit.closeAt, exit.reason);
+        continue;
       }
     }
-  }
 
-  // ── Derivative token ticks: premium-based PnL for options trades ──────
-  const derivativeTrades = store.getPaperTrades().filter(
-    (t) =>
-      t.status === 'OPEN' &&
-      t.tradingMode === 'options' &&
-      Number(t.derivativeToken) === numToken &&
-      (t.source === 'auto' || t.source === 'scan'),
-  );
-  if (derivativeTrades.length > 0) {
-    const now = Date.now();
-    for (const trade of derivativeTrades) {
+    // Broadcast PnL — prefer derivative tick for futures trades
+    const shouldBroadcast = trade.derivativeToken ? isDerivativeTick : isUnderlyingTick;
+    if (shouldBroadcast) {
       const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
       if (now - lastBcast >= 500) {
         _lastTickBroadcast.set(trade.id, now);
-        // For options, action is always BUY (buy CE or buy PE)
-        const unrealizedPnl = (lastPrice - trade.entryPrice) * (trade.quantity ?? 1);
+        const unrealizedPnl = trade.action === 'BUY'
+          ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
+          : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
         broadcast('paper_trade_tick', {
           id:            trade.id,
           token:         Number(trade.token),
           ltp:           lastPrice,
           unrealizedPnl: +unrealizedPnl.toFixed(2),
-          isDerivativeTick: true,
         });
       }
     }

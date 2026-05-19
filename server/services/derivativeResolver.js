@@ -15,6 +15,12 @@ async function resolve(alert, tradingMode) {
     return null;
   }
 
+  // MCX commodities: the alert token IS a futures token already (no separate
+  // equity instrument). Look it up in instrumentCache directly.
+  if (alert.exchange === 'MCX') {
+    return _resolveMcxFutures(alert);
+  }
+
   const stock = foStockRegistry.getByToken(alert.token);
   if (!stock) {
     console.log(`[DerivativeResolver] Token ${alert.token} (${alert.label}) not in F&O registry — skipping`);
@@ -25,6 +31,39 @@ async function resolve(alert, tradingMode) {
     return _resolveFutures(stock, alert);
   }
   return _resolveOptions(stock, alert);
+}
+
+async function _resolveMcxFutures(alert) {
+  const inst = instrumentCache.getByToken(alert.token);
+  if (!inst) {
+    console.warn(`[DerivativeResolver] MCX token ${alert.token} not found in instrument cache`);
+    return null;
+  }
+
+  let premium = null;
+  try {
+    const ltpKey = `MCX:${inst.tradingsymbol}`;
+    const ltpData = await kiteService.getLTP([ltpKey]);
+    premium = ltpData[ltpKey]?.last_price ?? null;
+  } catch (err) {
+    console.warn(`[DerivativeResolver] MCX LTP failed for ${inst.tradingsymbol}:`, err.message);
+  }
+
+  if (!premium) {
+    premium = alert.close;
+  }
+
+  return {
+    instrument:         inst,
+    premium,
+    derivativeSymbol:   inst.tradingsymbol,
+    derivativeToken:    inst.instrumentToken,
+    derivativeExchange: 'MCX',
+    lotSize:            inst.lotSize || 1,
+    optionType:         null,
+    strike:             null,
+    expiry:             inst.expiry || null,
+  };
 }
 
 async function _resolveFutures(stock, alert) {

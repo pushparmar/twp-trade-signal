@@ -33,6 +33,40 @@ function pnlColor(pnl) {
     return pnl >= 0 ? "pnl-positive" : "pnl-negative";
 }
 
+function SortTh({ label, field, sort, onSort, className }) {
+    const active = sort.field === field;
+    const arrow = active ? (sort.dir === "asc" ? " ▲" : " ▼") : "";
+    return (
+        <th
+            className={`${className || ""} th-sortable`}
+            style={{ cursor: "pointer", userSelect: "none" }}
+            onClick={() =>
+                onSort({
+                    field,
+                    dir: active && sort.dir === "asc" ? "desc" : "asc"
+                })
+            }
+        >
+            {label}
+            {arrow}
+        </th>
+    );
+}
+
+function sortTrades(trades, sort, getValue) {
+    if (!sort.field) return trades;
+    const sorted = [...trades].sort((a, b) => {
+        const va = getValue(a, sort.field);
+        const vb = getValue(b, sort.field);
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (typeof va === "string") return va.localeCompare(vb);
+        return va - vb;
+    });
+    return sort.dir === "desc" ? sorted.reverse() : sorted;
+}
+
 function CloseTradeModal({ trade, onClose, onConfirm }) {
     const [exitPrice, setExitPrice] = useState(trade.entryPrice || "");
     const suggested = trade.target || trade.sl || trade.entryPrice;
@@ -212,13 +246,13 @@ function BalanceCard({ balance, onUpdate }) {
 function OpenTradeRow({ trade, onClose }) {
     const tradeTick = useAppStore(s => s.tradeTicks[trade.id]);
     const tick = useAppStore(s => s.ticks[trade.token]);
-    const derivativeTick = useAppStore(s => trade.derivativeToken ? s.ticks[trade.derivativeToken] : null);
+    const derivativeTick = useAppStore(s => (trade.derivativeToken ? s.ticks[trade.derivativeToken] : null));
 
     const isOptions = trade.tradingMode === "options";
     const spotLtp = tick?.lastPrice ?? null;
     // For options: prefer live tradeTick, fall back to seeded derivative closing price
-    const premiumLtp = tradeTick?.isDerivativeTick ? tradeTick.ltp : (derivativeTick?.lastPrice ?? null);
-    const ltp = isOptions ? premiumLtp : (tradeTick?.ltp ?? spotLtp);
+    const premiumLtp = tradeTick?.isDerivativeTick ? tradeTick.ltp : derivativeTick?.lastPrice ?? null;
+    const ltp = isOptions ? premiumLtp : tradeTick?.ltp ?? spotLtp;
     // SL/target always checked against spot price
     const monitorLtp = spotLtp;
 
@@ -276,7 +310,13 @@ function OpenTradeRow({ trade, onClose }) {
             <td className="td-symbol">
                 {trade.symbol}
                 {(isOptions || trade.tradingMode === "futures") && (
-                    <span style={{ fontSize: 11, color: spotLtp != null ? "var(--txt3)" : "var(--txt4, #555)", marginLeft: 4 }}>
+                    <span
+                        style={{
+                            fontSize: 11,
+                            color: spotLtp != null ? "var(--txt3)" : "var(--txt4, #555)",
+                            marginLeft: 4
+                        }}
+                    >
                         ₹{fmtPrice(spotLtp ?? trade.spotEntry)}
                     </span>
                 )}
@@ -545,6 +585,15 @@ function AutoTraderSettings() {
     );
 }
 
+const MCX_RE = /^(CRUDE|NATURAL|BRENT|GOLD|SILVER|COPPER|ZINC|LEAD|NICKEL|ALUMIN|MENTHA|CASTOR|COTTON|CARDAM)/i;
+
+function tradeExchange(t) {
+    const ex = (t.exchange || t.derivativeExchange || "").toUpperCase();
+    if (ex === "MCX") return "MCX";
+    if (ex === "NSE" || ex === "NFO" || ex === "BSE" || ex === "BFO" || ex === "CDS") return "NSE";
+    return MCX_RE.test(t.symbol ?? "") ? "MCX" : "NSE";
+}
+
 export default function PaperTradingPanel() {
     const paperTrades = useAppStore(s => s.paperTrades);
     const paperBalance = useAppStore(s => s.paperBalance);
@@ -553,6 +602,9 @@ export default function PaperTradingPanel() {
     const clearPaperTrades = useAppStore(s => s.clearPaperTrades);
     const [closingTrade, setClosingTrade] = useState(null);
     const [sourceFilter, setSourceFilter] = useState("all");
+    const [exchFilter, setExchFilter] = useState("all");
+    const [openSort, setOpenSort] = useState({ field: "ts", dir: "desc" });
+    const [closedSort, setClosedSort] = useState({ field: "closedTs", dir: "desc" });
 
     async function handleBalanceUpdate(amount) {
         try {
@@ -563,9 +615,10 @@ export default function PaperTradingPanel() {
         }
     }
 
-    const filtered = sourceFilter === "all"
-        ? paperTrades
-        : paperTrades.filter(t => t.source === sourceFilter);
+    let filtered = sourceFilter === "all" ? paperTrades : paperTrades.filter(t => t.source === sourceFilter);
+    if (exchFilter !== "all") {
+        filtered = filtered.filter(t => tradeExchange(t) === exchFilter);
+    }
     const openTrades = filtered.filter(t => t.status === "OPEN");
     const closedTrades = filtered.filter(t => t.status === "CLOSED");
 
@@ -595,7 +648,27 @@ export default function PaperTradingPanel() {
         clearPaperTrades();
     }
 
-    const openByTF = groupByTF(openTrades);
+    const openGetVal = (t, f) => {
+        if (f === "ts") return t.ts;
+        if (f === "symbol") return t.symbol;
+        if (f === "entry") return t.entryPrice;
+        if (f === "qty") return t.quantity;
+        if (f === "sl") return t.sl;
+        if (f === "target") return t.target;
+        return null;
+    };
+    const sortedOpen = sortTrades(openTrades, openSort, openGetVal);
+
+    const closedGetVal = (t, f) => {
+        if (f === "closedTs") return t.closedTs;
+        if (f === "symbol") return t.symbol;
+        if (f === "entry") return t.entryPrice;
+        if (f === "exit") return t.exitPrice;
+        if (f === "qty") return t.quantity;
+        if (f === "pnl") return t.pnl;
+        return null;
+    };
+    const sortedClosed = sortTrades(closedTrades, closedSort, closedGetVal);
 
     return (
         <div className="paper-trading-panel">
@@ -606,12 +679,26 @@ export default function PaperTradingPanel() {
                 {[
                     { id: "all", label: "All" },
                     { id: "auto", label: "Auto" },
-                    { id: "scan", label: "Manual" },
+                    { id: "scan", label: "Manual" }
                 ].map(({ id, label }) => (
                     <button
                         key={id}
                         className={`paper-source-btn ${sourceFilter === id ? "paper-source-btn--active" : ""}`}
                         onClick={() => setSourceFilter(id)}
+                    >
+                        {label}
+                    </button>
+                ))}
+                <span style={{ borderLeft: "1px solid var(--border)", margin: "0 4px" }} />
+                {[
+                    { id: "all", label: "All" },
+                    { id: "NSE", label: "NSE" },
+                    { id: "MCX", label: "MCX" }
+                ].map(({ id, label }) => (
+                    <button
+                        key={`ex-${id}`}
+                        className={`paper-source-btn ${exchFilter === id ? "paper-source-btn--active" : ""}`}
+                        onClick={() => setExchFilter(id)}
                     >
                         {label}
                     </button>
@@ -658,40 +745,53 @@ export default function PaperTradingPanel() {
                     <h3 className="section-title">
                         Active Trades <span className="count-badge">{openTrades.length}</span>
                     </h3>
-                    {openByTF.map(({ tf, label, trades: tfTrades }) => (
-                        <div key={tf} className="paper-tf-group">
-                            <div className="paper-tf-header">
-                                <span className="paper-tf-pill">{tf}</span>
-                                <span className="paper-tf-name">{label}</span>
-                                <span className="paper-tf-count">
-                                    {tfTrades.length} trade{tfTrades.length !== 1 ? "s" : ""}
-                                </span>
-                            </div>
-                            <div className="kite-table-wrap">
-                                <table className="kite-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Time</th>
-                                            <th>Action</th>
-                                            <th>Symbol</th>
-                                            <th className="th-num">Entry</th>
-                                            <th className="th-num">LTP</th>
-                                            <th className="th-num">Qty</th>
-                                            <th className="th-num">SL</th>
-                                            <th className="th-num">Target</th>
-                                            <th className="th-num">Live P&amp;L</th>
-                                            <th></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {tfTrades.map(t => (
-                                            <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-                    ))}
+                    <div className="kite-table-wrap">
+                        <table className="kite-table">
+                            <thead>
+                                <tr>
+                                    <SortTh label="Time" field="ts" sort={openSort} onSort={setOpenSort} />
+                                    <th>Action</th>
+                                    <SortTh label="Symbol" field="symbol" sort={openSort} onSort={setOpenSort} />
+                                    <SortTh
+                                        label="Entry"
+                                        field="entry"
+                                        sort={openSort}
+                                        onSort={setOpenSort}
+                                        className="th-num"
+                                    />
+                                    <th className="th-num">LTP</th>
+                                    <SortTh
+                                        label="Qty"
+                                        field="qty"
+                                        sort={openSort}
+                                        onSort={setOpenSort}
+                                        className="th-num"
+                                    />
+                                    <SortTh
+                                        label="SL"
+                                        field="sl"
+                                        sort={openSort}
+                                        onSort={setOpenSort}
+                                        className="th-num"
+                                    />
+                                    <SortTh
+                                        label="Target"
+                                        field="target"
+                                        sort={openSort}
+                                        onSort={setOpenSort}
+                                        className="th-num"
+                                    />
+                                    <th className="th-num">Live P&amp;L</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {sortedOpen.map(t => (
+                                    <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             )}
 
@@ -710,17 +810,41 @@ export default function PaperTradingPanel() {
                         <table className="kite-table">
                             <thead>
                                 <tr>
-                                    <th>Closed</th>
+                                    <SortTh label="Closed" field="closedTs" sort={closedSort} onSort={setClosedSort} />
                                     <th>Action</th>
-                                    <th>Symbol</th>
-                                    <th className="th-num">Entry</th>
-                                    <th className="th-num">Exit</th>
-                                    <th className="th-num">Qty</th>
-                                    <th className="th-num">P&L</th>
+                                    <SortTh label="Symbol" field="symbol" sort={closedSort} onSort={setClosedSort} />
+                                    <SortTh
+                                        label="Entry"
+                                        field="entry"
+                                        sort={closedSort}
+                                        onSort={setClosedSort}
+                                        className="th-num"
+                                    />
+                                    <SortTh
+                                        label="Exit"
+                                        field="exit"
+                                        sort={closedSort}
+                                        onSort={setClosedSort}
+                                        className="th-num"
+                                    />
+                                    <SortTh
+                                        label="Qty"
+                                        field="qty"
+                                        sort={closedSort}
+                                        onSort={setClosedSort}
+                                        className="th-num"
+                                    />
+                                    <SortTh
+                                        label="P&L"
+                                        field="pnl"
+                                        sort={closedSort}
+                                        onSort={setClosedSort}
+                                        className="th-num"
+                                    />
                                 </tr>
                             </thead>
                             <tbody>
-                                {closedTrades.map(t => (
+                                {sortedClosed.map(t => (
                                     <tr key={t.id}>
                                         <td className="td-mono">{fmt(t.closedTs)}</td>
                                         <td>
