@@ -189,4 +189,9 @@ function getStats() {
   };
 }
 
-module.exports = { load, build, getAll, isStale, getStats };
+function getByToken(token) {
+  const numToken = Number(token);
+  return _stocks.find((s) => s.instrumentToken === numToken) || null;
+}
+
+module.exports = { load, build, getAll, getByToken, isStale, getStats };

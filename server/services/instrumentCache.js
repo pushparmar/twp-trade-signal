@@ -214,6 +214,27 @@ function getFutureNames() {
   return [...seen].sort();
 }
 
+function getNearestATMOption(name, exchange, spotPrice, optionType) {
+  const today = new Date().toISOString().split('T')[0];
+  const candidates = _instruments.filter(
+    (i) =>
+      i.name === name &&
+      i.exchange === exchange &&
+      i.instrumentType === optionType &&
+      (!i.expiry || i.expiry >= today),
+  );
+  if (!candidates.length) return null;
+
+  const expiries = [...new Set(candidates.map((i) => i.expiry).filter(Boolean))].sort();
+  const nearest = expiries[0];
+  const expiryFiltered = candidates.filter((i) => i.expiry === nearest);
+
+  expiryFiltered.sort(
+    (a, b) => Math.abs(a.strike - spotPrice) - Math.abs(b.strike - spotPrice),
+  );
+  return expiryFiltered[0] || null;
+}
+
 function isLoaded() {
   return _instruments.length > 0;
 }
@@ -226,4 +247,4 @@ function getCount() {
   return _instruments.length;
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getFutureNames, isLoaded, getLastLoaded, getCount };
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, isLoaded, getLastLoaded, getCount };

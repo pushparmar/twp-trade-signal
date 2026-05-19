@@ -18,17 +18,15 @@ const store         = require('../store');
 const { broadcast } = require('../sseHub');
 const db            = require('../db');
 
-// Lazy-require kiteTicker to avoid circular dep (kiteTicker requires this module).
 function _ticker() {
   return require('./kiteTicker');
 }
 
-// Per-trade close-claim guard — prevents double-close when multiple ticks
-// arrive in the same JS event loop frame.
-const _closing = new Set();
+function _kiteService() {
+  return require('./kiteService');
+}
 
-// Throttle live-tick SSE broadcasts to once every 500 ms per trade so we
-// don't flood the SSE queue.  Map<tradeId, lastBroadcastMs>
+const _closing = new Set();
 const _lastTickBroadcast = new Map();
 
 /**
@@ -98,41 +96,59 @@ function _checkExit(trade, ltp) {
   return null;
 }
 
-/**
- * Close a trade and sync everywhere.  Idempotent — a second call for the same
- * id is a no-op (closePaperTrade returns null when already CLOSED).
- */
-function _closeTrade(trade, closeAt, reason) {
+async function _closeTrade(trade, closeAt, reason) {
   if (_closing.has(trade.id)) return;
   _closing.add(trade.id);
 
-  const closed = store.closePaperTrade(trade.id, closeAt);
+  let exitPrice = closeAt;
+
+  // For options trades, fetch current option premium for accurate PnL
+  if (trade.tradingMode === 'options' && trade.derivativeSymbol) {
+    try {
+      const ltpKey = `${trade.derivativeExchange}:${trade.derivativeSymbol}`;
+      const ltpData = await _kiteService().getLTP([ltpKey]);
+      const premiumNow = ltpData[ltpKey]?.last_price;
+      if (premiumNow != null) {
+        exitPrice = premiumNow;
+      } else {
+        exitPrice = trade.entryPrice;
+      }
+    } catch (err) {
+      console.warn(`[TradeWatcher] Option LTP fetch failed for ${trade.derivativeSymbol}:`, err.message);
+      exitPrice = trade.entryPrice;
+    }
+  }
+
+  const closed = store.closePaperTrade(trade.id, exitPrice);
   if (!closed) { _closing.delete(trade.id); return; }
 
-  // Clean up per-trade tick-throttle entry so the Map doesn't grow forever.
   _lastTickBroadcast.delete(trade.id);
 
   broadcast('paper_trade_update', closed);
   broadcast('paper_balance',      store.getPaperBalance());
   db.tradeRepo.closeTrade(closed);
 
-  // Unsubscribe token if no other open trade or watchlist entry still needs it
+  // Unsubscribe tokens if no longer needed
   try {
-    const numToken   = Number(closed.token);
-    const stillOpen  = store.getPaperTrades().some(
-      (t) => t.status === 'OPEN' && Number(t.token) === numToken,
-    );
-    const inWatchlist = store.getWatchlist().some(
-      (w) => Number(w.instrumentToken) === numToken,
-    );
-    if (!stillOpen && !inWatchlist) _ticker().unsubscribe([numToken]);
+    const tokensToCheck = [Number(closed.token)];
+    if (closed.derivativeToken) tokensToCheck.push(Number(closed.derivativeToken));
+
+    for (const tk of tokensToCheck) {
+      const stillNeeded = store.getPaperTrades().some(
+        (t) => t.status === 'OPEN' && (Number(t.token) === tk || Number(t.derivativeToken) === tk),
+      );
+      const inWatchlist = store.getWatchlist().some(
+        (w) => Number(w.instrumentToken) === tk,
+      );
+      if (!stillNeeded && !inWatchlist) _ticker().unsubscribe([tk]);
+    }
   } catch { /* ticker may not be connected */ }
 
   const emoji = reason === 'TARGET' ? '🎯' : reason === 'TSL' ? '🔒' : '🛑';
   console.log(
     `[TradeWatcher] ${emoji} ${reason} — ${closed.symbol} ` +
     `[${closed.tfLabel ?? closed.interval ?? '-'}] ${closed.action} ` +
-    `entry=₹${closed.entryPrice} exit=₹${closeAt} pnl=₹${closed.pnl}`,
+    `entry=₹${closed.entryPrice} exit=₹${exitPrice} pnl=₹${closed.pnl}`,
   );
 
   setTimeout(() => _closing.delete(trade.id), 1_000);
@@ -140,7 +156,6 @@ function _closeTrade(trade, closeAt, reason) {
 
 /**
  * Called on every Kite tick from kiteTicker.js.
- * Synchronous and fast — hundreds of ticks/sec across all subscriptions.
  *
  * @param {number} token      Instrument token
  * @param {number} lastPrice  Live price (tick.last_price)
@@ -149,42 +164,64 @@ function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
   const numToken   = Number(token);
-  const openTrades = store.getPaperTrades().filter(
-    (t) =>
-      t.status   === 'OPEN' &&
-      Number(t.token) === numToken &&
-      (t.source === 'auto' || t.source === 'scan'),
+  const allOpen    = store.getPaperTrades().filter(
+    (t) => t.status === 'OPEN' && (t.source === 'auto' || t.source === 'scan'),
   );
-  if (openTrades.length === 0) return;
 
-  const settings = store.getAutoTraderSettings();
-  const now      = Date.now();
+  // ── Underlying token ticks: SL/target monitoring + TSL ────────────────
+  const underlyingTrades = allOpen.filter((t) => Number(t.token) === numToken);
+  if (underlyingTrades.length > 0) {
+    const settings = store.getAutoTraderSettings();
+    const now      = Date.now();
 
-  for (const trade of openTrades) {
-    _maybeTrail(trade, lastPrice, settings);
+    for (const trade of underlyingTrades) {
+      _maybeTrail(trade, lastPrice, settings);
 
-    const exit = _checkExit(trade, lastPrice);
-    if (exit) {
-      // SL or target hit — close and unsubscribe (see _closeTrade).
-      _closeTrade(trade, exit.closeAt, exit.reason);
-      continue; // trade is now closed; skip live-tick broadcast
+      const exit = _checkExit(trade, lastPrice);
+      if (exit) {
+        _closeTrade(trade, exit.closeAt, exit.reason);
+        continue;
+      }
+
+      // For non-options trades, broadcast PnL from underlying ticks
+      if (trade.tradingMode !== 'options') {
+        const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
+        if (now - lastBcast >= 500) {
+          _lastTickBroadcast.set(trade.id, now);
+          const unrealizedPnl = trade.action === 'BUY'
+            ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
+            : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
+          broadcast('paper_trade_tick', {
+            id:            trade.id,
+            token:         numToken,
+            ltp:           lastPrice,
+            unrealizedPnl: +unrealizedPnl.toFixed(2),
+          });
+        }
+      }
     }
+  }
 
-    // ── Throttled live-tick SSE (≤ once per 500 ms per trade) ────────────
-    // Lets the Dashboard update unrealised P&L in real time without flooding
-    // the SSE queue.
-    const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
-    if (now - lastBcast >= 500) {
-      _lastTickBroadcast.set(trade.id, now);
-      const unrealizedPnl = trade.action === 'BUY'
-        ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
-        : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
-      broadcast('paper_trade_tick', {
-        id:            trade.id,
-        token:         numToken,
-        ltp:           lastPrice,
-        unrealizedPnl: +unrealizedPnl.toFixed(2),
-      });
+  // ── Derivative token ticks: premium-based PnL for options trades ──────
+  const derivativeTrades = allOpen.filter(
+    (t) => t.tradingMode === 'options' && Number(t.derivativeToken) === numToken,
+  );
+  if (derivativeTrades.length > 0) {
+    const now = Date.now();
+    for (const trade of derivativeTrades) {
+      const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
+      if (now - lastBcast >= 500) {
+        _lastTickBroadcast.set(trade.id, now);
+        // For options, action is always BUY (buy CE or buy PE)
+        const unrealizedPnl = (lastPrice - trade.entryPrice) * (trade.quantity ?? 1);
+        broadcast('paper_trade_tick', {
+          id:            trade.id,
+          token:         Number(trade.token),
+          ltp:           lastPrice,
+          unrealizedPnl: +unrealizedPnl.toFixed(2),
+          isDerivativeTick: true,
+        });
+      }
     }
   }
 }

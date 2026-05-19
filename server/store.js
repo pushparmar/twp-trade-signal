@@ -247,12 +247,10 @@ function getAutoTraderSettings() {
   const config = readConfig();
   return {
     enabled:      config.autoTrader?.enabled      ?? true,
-    // Testing mode — quantity is hard-coded to 1; risk/profit kept for future
-    // when we re-enable rupee-risk sizing.
+    tradingMode:  config.autoTrader?.tradingMode   ?? 'options',
+    sizingMode:   config.autoTrader?.sizingMode    ?? 'risk',
     riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,
     minProfit:    config.autoTrader?.minProfit     ?? 10_000,
-    // Minimum reward:risk ratio.  2.0 = at least 2:1 R:R required.
-    // Max R:R is uncapped — pattern's natural target is used as-is.
     minRR:        config.autoTrader?.minRR         ?? 2.0,
     // Trailing Stop Loss — moves SL up (BUY) or down (SELL) as price moves
     // favourably.  Activated once unrealised profit ≥ tslTriggerR × initial risk.

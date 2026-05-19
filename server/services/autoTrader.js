@@ -28,6 +28,7 @@ const { broadcast }     = require('../sseHub');
 const alertBus          = require('./alertBus');
 const kiteTicker        = require('./kiteTicker');
 const db                = require('../db');
+const derivativeResolver = require('./derivativeResolver');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
@@ -40,31 +41,44 @@ function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-// ── Trade qualifier (testing mode) ───────────────────────────────────────────
+// ── Trade qualifier ──────────────────────────────────────────────────────────
+
+function _round2(v) { return Math.round(v * 100) / 100; }
 
 /**
- * Check whether a setup qualifies for auto-trade in testing mode.
- * Position size is fixed at 1 unit so we can sample every pattern firing
- * and rely on the Analytics tab to determine which patterns work.
- *
- * @param {number} entry  Last candle close — used as entry proxy
- * @param {number} sl     Stop-loss price from the Ichimoku engine
- * @param {number} target Target price from the Ichimoku engine
- * @param {number} minRR  Minimum acceptable reward:risk ratio (default 2.0)
- * @returns {{ quantity, riskPerUnit, potentialProfit, rrRatio } | null}
+ * @param {number} entry        Entry price (spot close)
+ * @param {number} sl           Stop-loss from the pattern engine
+ * @param {number} target       Target from the pattern engine
+ * @param {number} minRR        Minimum reward:risk ratio
+ * @param {number} lotSize      Exchange lot size for the instrument
+ * @param {number} riskPerTrade Max risk in rupees per trade
+ * @param {string} sizingMode   'risk' | 'fixed'
+ * @returns {{ lots, lotSize, quantity, riskPerUnit, potentialProfit, rrRatio } | null}
  */
-function _qualifyTrade(entry, sl, target, minRR) {
+function _qualifyTrade(entry, sl, target, minRR, lotSize, riskPerTrade, sizingMode) {
   const riskPerUnit = Math.abs(entry - sl);
-  if (riskPerUnit < 0.01) return null; // SL too tight — likely data issue
+  if (riskPerUnit < 0.01) return null;
 
   const rrRatio = Math.abs(target - entry) / riskPerUnit;
   if (rrRatio < minRR) return null;
 
+  let lots;
+  if (sizingMode === 'fixed') {
+    lots = 1;
+  } else {
+    const riskPerLot = riskPerUnit * lotSize;
+    lots = Math.max(1, Math.floor(riskPerTrade / riskPerLot));
+  }
+
+  const quantity = lots * lotSize;
+
   return {
-    quantity:        1,
-    riskPerUnit:     Math.round(riskPerUnit  * 100) / 100,
-    potentialProfit: Math.round(Math.abs(target - entry) * 100) / 100,
-    rrRatio:         Math.round(rrRatio      * 100) / 100,
+    lots,
+    lotSize,
+    quantity,
+    riskPerUnit:     _round2(riskPerUnit),
+    potentialProfit: _round2(Math.abs(target - entry) * quantity),
+    rrRatio:         _round2(rrRatio),
   };
 }
 
@@ -72,33 +86,29 @@ function _qualifyTrade(entry, sl, target, minRR) {
 
 /**
  * Invoked for every alert emitted on alertBus.
- * Runs all guards, sizes the position, and places the paper trade.
+ * Runs all guards, resolves the derivative instrument, sizes the position,
+ * and places the paper trade.
  *
  * @param {object} alert   The full alert payload (same shape as scan_alert SSE)
  * @param {string} source  'background' | 'live' | 'manual'
  */
-function _onAlert(alert, source) {
+async function _onAlert(alert, source) {
   // ── 1. Feature gate ──────────────────────────────────────────────────────
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
 
   // ── 2. Required fields ───────────────────────────────────────────────────
-  const entry    = alert.close;     // last candle close = entry proxy
+  const entry    = alert.close;
   const { sl, target, token, interval, patternId, signal } = alert;
 
   if (!entry || !sl || !target || !token || !signal) return;
 
   // ── 2.5  Market-hours gate ────────────────────────────────────────────────
-  // Auto trades go in ONLY during live trading sessions:
-  //   NSE: 09:15–15:30 IST  · MCX: 09:00–23:30 IST  · weekdays only
-  //
-  // Prefer the explicit exchange field (backgroundScanner sets it).  Fall back
-  // to symbol-name regex for liveScanner alerts that may not carry it yet.
   const mcxSymbolHint = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
   const isMcxSymbol   = alert.exchange === 'MCX'
     || mcxSymbolHint.test(String(alert.label ?? ''));
-  if (!isNseOpen() && !isMcxOpen()) return;                          // both closed
-  if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;           // NSE closed, MCX open, NSE stock — skip
+  if (!isNseOpen() && !isMcxOpen()) return;
+  if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;
 
   const numToken = Number(token);
 
@@ -108,11 +118,7 @@ function _onAlert(alert, source) {
   const lastFired = _dedup.get(dedupKey);
   if (lastFired && lastFired === today) return;
 
-  // ── 4. No stacking — skip if ANY OPEN trade already exists for this
-  //       (token, interval) slot, regardless of source.  Re-entries fired
-  //       by the scanner while a previous trade is still working must NOT
-  //       create a duplicate order — we wait for the existing one to close
-  //       (SL, target, TSL, or manual) before opening another.
+  // ── 4. No stacking ───────────────────────────────────────────────────────
   const alreadyOpen = store.getPaperTrades().some(
     (t) =>
       t.status   === 'OPEN'  &&
@@ -124,8 +130,15 @@ function _onAlert(alert, source) {
     return;
   }
 
-  // ── 5. Qualify the trade (testing mode: quantity=1, R:R ≥ minRR) ─────────
-  const pos = _qualifyTrade(entry, sl, target, settings.minRR);
+  // ── 5. Resolve derivative instrument ──────────────────────────────────────
+  const resolved = await derivativeResolver.resolve(alert, settings.tradingMode);
+  if (!resolved) return;
+
+  // ── 6. Qualify the trade with real lot sizing ─────────────────────────────
+  const pos = _qualifyTrade(
+    entry, sl, target, settings.minRR,
+    resolved.lotSize, settings.riskPerTrade, settings.sizingMode,
+  );
   if (!pos) {
     const rrRatio = (Math.abs(target - entry) / Math.abs(entry - sl)).toFixed(2);
     console.log(
@@ -135,40 +148,64 @@ function _onAlert(alert, source) {
     return;
   }
 
-  // ── 6. Claim the dedup slot BEFORE creating the trade ─────────────────────
+  // ── 6.5 Capital check ────────────────────────────────────────────────────
+  const derivativeEntry = settings.tradingMode === 'options'
+    ? resolved.premium
+    : (resolved.premium || Number(entry));
+  const cost = pos.quantity * derivativeEntry;
+  const balance = store.getPaperBalance();
+  if (cost > balance.available) {
+    console.log(
+      `[AutoTrader] ⏭  ${alert.label ?? token} — insufficient balance ` +
+      `(need ₹${_round2(cost)}, have ₹${_round2(balance.available)})`,
+    );
+    return;
+  }
+
+  // ── 7. Claim the dedup slot ───────────────────────────────────────────────
   _dedup.set(dedupKey, today);
 
   const action = signal === 'bullish' ? 'BUY' : 'SELL';
 
-  // ── 7. Build trade object ─────────────────────────────────────────────────
+  // ── 8. Build trade object ─────────────────────────────────────────────────
   const trade = {
     id:              uuidv4(),
     ts:              Date.now(),
-    // Source markers — 'auto' identifies it as auto-placed; autoSource tells which scanner
     source:          'auto',
     autoSource:      source,
-    // Instrument
+    // Underlying instrument
     symbol:          alert.label || String(numToken),
     token:           numToken,
     exchange:        alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE'),
-    // Order
+    // Derivative instrument
+    tradingMode:     settings.tradingMode,
+    derivativeSymbol:   resolved.derivativeSymbol,
+    derivativeToken:    resolved.derivativeToken,
+    derivativeExchange: resolved.derivativeExchange,
+    optionType:      resolved.optionType ?? null,
+    strike:          resolved.strike ?? null,
+    expiry:          resolved.expiry ?? null,
+    premium:         resolved.premium ?? null,
+    // Order sizing
     action,
     quantity:        pos.quantity,
-    lots:            1,
-    lotSize:         1,
-    entryPrice:      Number(entry),
+    lots:            pos.lots,
+    lotSize:         pos.lotSize,
+    // Entry: premium for options, futures LTP for futures
+    entryPrice:      derivativeEntry,
+    spotEntry:       Number(entry),
     exitPrice:       null,
-    // sl moves as TSL trails; initialSl is preserved for R-multiple analytics
+    // SL/target in spot price terms (monitoring uses underlying)
     sl:              Number(sl),
     initialSl:       Number(sl),
     target:          Number(target),
-    // TSL state — set when trailing stop activates
+    // TSL state
     tslActivated:    false,
     peakPrice:       Number(entry),
     status:          'OPEN',
     pnl:             null,
     closedTs:        null,
-    // Pattern context — preserved for analytics
+    // Pattern context
     patternId:       patternId       ?? null,
     patternLabel:    alert.patternLabel ?? null,
     signal,
@@ -181,26 +218,30 @@ function _onAlert(alert, source) {
     targetSource:    alert.targetSource ?? null,
   };
 
-  // ── 8. Persist + broadcast ────────────────────────────────────────────────
+  // ── 9. Persist + broadcast ────────────────────────────────────────────────
   store.addPaperTrade(trade);
   broadcast('paper_trade', trade);
   broadcast('paper_balance', store.getPaperBalance());
 
-  // Subscribe token to Kite ticker so SL/target auto-close gets live prices
+  // Subscribe underlying + derivative token to live ticker
   try {
-    kiteTicker.subscribe([numToken]);
+    const tokens = [numToken];
+    if (resolved.derivativeToken) tokens.push(resolved.derivativeToken);
+    kiteTicker.subscribe(tokens);
   } catch (err) {
-    console.warn(`[AutoTrader] Could not subscribe token ${numToken}:`, err.message);
+    console.warn(`[AutoTrader] Could not subscribe tokens:`, err.message);
   }
 
-  // Mirror to MongoDB — fire-and-forget
   db.tradeRepo.upsertTrade(trade);
 
+  const modeTag = settings.tradingMode === 'options'
+    ? `${resolved.optionType} ₹${resolved.strike} prem=₹${resolved.premium}`
+    : `FUT ₹${derivativeEntry}`;
   console.log(
-    `[AutoTrader] 🤖 ${action} ${trade.symbol} ` +
+    `[AutoTrader] 🤖 ${action} ${trade.symbol} ${modeTag} ` +
     `[${alert.tfLabel ?? interval}] ${patternId} ` +
-    `entry=₹${entry} sl=₹${sl} target=₹${target} ` +
-    `R:R=${pos.rrRatio} qty=${pos.quantity} [${source}]`,
+    `spot=₹${entry} sl=₹${sl} tgt=₹${target} ` +
+    `R:R=${pos.rrRatio} ${pos.lots}L×${pos.lotSize}=${pos.quantity}qty [${source}]`,
   );
 }
 
@@ -208,7 +249,11 @@ function _onAlert(alert, source) {
 
 /** Start listening for scan alerts. Call once after store is loaded. */
 function start() {
-  alertBus.on('alert', _onAlert);
+  alertBus.on('alert', (alert, source) => {
+    _onAlert(alert, source).catch((err) => {
+      console.error('[AutoTrader] _onAlert error:', err.message);
+    });
+  });
   console.log('[AutoTrader] Started — will auto-place paper trades on scan alerts');
 }
 

@@ -227,7 +227,17 @@ function OpenTradeRow({ trade, onClose }) {
           )}
         </div>
       </td>
-      <td className="td-symbol">{trade.symbol}</td>
+      <td className="td-symbol">
+        {trade.symbol}
+        {trade.tradingMode === 'options' && trade.optionType && (
+          <span className={`pill pill-sm ${trade.optionType === 'CE' ? 'pill-green' : 'pill-red'}`} style={{ marginLeft: 4, fontSize: 10 }}>
+            {trade.strike} {trade.optionType}
+          </span>
+        )}
+        {trade.tradingMode === 'futures' && trade.derivativeSymbol && (
+          <span className="pill pill-sm pill-blue" style={{ marginLeft: 4, fontSize: 10 }}>FUT</span>
+        )}
+      </td>
       <td className="td-num">{fmtPrice(trade.entryPrice)}</td>
       <td className="td-num">
         <span ref={priceRef}>
@@ -310,19 +320,24 @@ function AutoTraderSettings() {
     const rr   = Number(rrStr);
     const trig = Number(trigStr);
     const dist = Number(distStr);
+    const risk = Number(riskStr);
     const updates = {};
     if (rr   > 0) updates.minRR        = rr;
     if (trig > 0) updates.tslTriggerR  = trig;
     if (dist > 0) updates.tslDistanceR = dist;
+    if (risk > 0) updates.riskPerTrade = risk;
     if (Object.keys(updates).length) await patch(updates);
     setEditing(false);
   }
+
+  const [riskStr, setRiskStr] = useState('');
 
   function startEdit() {
     if (!settings) return;
     setRrStr(String(settings.minRR));
     setTrigStr(String(settings.tslTriggerR));
     setDistStr(String(settings.tslDistanceR));
+    setRiskStr(String(settings.riskPerTrade));
     setEditing(true);
   }
 
@@ -336,7 +351,37 @@ function AutoTraderSettings() {
         <span className={`at-settings-pill ${settings.enabled ? 'at-settings-pill--on' : 'at-settings-pill--off'}`}>
           {settings.enabled ? 'ON' : 'OFF'}
         </span>
-        <span className="at-settings-mode" title="Testing mode — every qualifying alert places 1 unit">qty 1</span>
+        {settings.enabled && (
+          <>
+            <div className="at-mode-group" role="tablist">
+              {['futures', 'options'].map((mode) => (
+                <button
+                  key={mode}
+                  className={`at-mode-btn ${settings.tradingMode === mode ? 'is-active' : ''}`}
+                  onClick={() => patch({ tradingMode: mode })}
+                  disabled={saving}
+                  type="button"
+                >
+                  {mode === 'futures' ? 'FUT' : 'OPT'}
+                </button>
+              ))}
+            </div>
+            <div className="at-mode-group" role="tablist">
+              {['risk', 'fixed'].map((mode) => (
+                <button
+                  key={mode}
+                  className={`at-mode-btn ${settings.sizingMode === mode ? 'is-active' : ''}`}
+                  onClick={() => patch({ sizingMode: mode })}
+                  disabled={saving}
+                  type="button"
+                  title={mode === 'risk' ? `Risk-based sizing (₹${settings.riskPerTrade}/trade)` : 'Fixed 1 lot per trade'}
+                >
+                  {mode === 'risk' ? 'RISK' : '1LOT'}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {settings.enabled && !editing && (
@@ -366,6 +411,8 @@ function AutoTraderSettings() {
         <div className="at-settings-edit">
           <label className="at-edit-label">Min R:R</label>
           <input className="at-edit-input" type="number" step="0.1" value={rrStr}   onChange={(e) => setRrStr(e.target.value)}   placeholder="2.0" />
+          <label className="at-edit-label">Risk/Trade (₹)</label>
+          <input className="at-edit-input" type="number" step="100" value={riskStr} onChange={(e) => setRiskStr(e.target.value)} placeholder="5000" />
           <label className="at-edit-label">TSL trig (R)</label>
           <input className="at-edit-input" type="number" step="0.1" value={trigStr} onChange={(e) => setTrigStr(e.target.value)} placeholder="1.0" />
           <label className="at-edit-label">TSL dist (R)</label>

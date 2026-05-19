@@ -91,6 +91,17 @@ function upsertTrade(trade) {
     signal:       trade.signal                   ?? null,
     interval:     trade.interval                 ?? null,
     tfLabel:      trade.tfLabel                  ?? null,
+    // Derivative instrument
+    tradingMode:       trade.tradingMode          ?? null,
+    derivativeSymbol:  trade.derivativeSymbol     ?? null,
+    derivativeToken:   trade.derivativeToken      ?? null,
+    derivativeExchange: trade.derivativeExchange  ?? null,
+    optionType:        trade.optionType           ?? null,
+    strike:            trade.strike               ?? null,
+    expiry:            trade.expiry               ?? null,
+    premium:           trade.premium              ?? null,
+    spotEntry:         trade.spotEntry            ?? null,
+    initialSl:         trade.initialSl            ?? null,
     // Source
     source:       trade.source                   ?? null,
     // Timestamps
@@ -179,17 +190,33 @@ async function getOpenTrades() {
       entryPrice:      doc.entryPrice      ?? 0,
       exitPrice:       doc.exitPrice       ?? null,
       sl:              doc.sl              ?? null,
+      initialSl:       doc.initialSl       ?? doc.sl ?? null,
       target:          doc.target          ?? null,
       status:          'OPEN',
       pnl:             null,
       closedTs:        null,
+      // Derivative fields
+      tradingMode:        doc.tradingMode        ?? null,
+      derivativeSymbol:   doc.derivativeSymbol   ?? null,
+      derivativeToken:    doc.derivativeToken    ?? null,
+      derivativeExchange: doc.derivativeExchange ?? null,
+      optionType:         doc.optionType         ?? null,
+      strike:             doc.strike             ?? null,
+      expiry:             doc.expiry             ?? null,
+      premium:            doc.premium            ?? null,
+      spotEntry:          doc.spotEntry          ?? null,
+      // Pattern + risk
       patternId:       doc.patternId       ?? null,
       patternLabel:    doc.patternLabel    ?? null,
       signal:          doc.signal          ?? null,
       interval:        doc.interval        ?? null,
       tfLabel:         doc.tfLabel         ?? null,
-      riskAmount:      doc.riskAmount      ?? null,
+      riskPerUnit:     doc.riskPerUnit     ?? null,
+      rrRatio:         doc.rrRatio         ?? null,
       potentialProfit: doc.potentialProfit ?? null,
+      targetSource:    doc.targetSource    ?? null,
+      tslActivated:    doc.tslActivated    ?? false,
+      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getOpenTrades failed:', err.message);
