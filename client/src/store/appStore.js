@@ -20,8 +20,8 @@ const useAppStore = create(
   tradeTicks: {},      // { [tradeId]: { ltp, unrealizedPnl } } — per-trade live feed from tradeWatcher
   tickerConnected: false,
   ichiSignals: {},  // { [`${token}:${interval}`]: ichimokuSignals } — pushed by server on candle close
-  macroData: null,         // { vix, crude, gold, silver, usdinr } — pushed by server on every macro candle close
-  macroPrices: null,       // { vix, crude, gold, silver, usdinr } — live price pushed on every tick
+  macroData: null,         // { vix, crude, gold, silver, usdinr, naturalgas } — pushed by server on every macro candle close
+  macroPrices: null,       // { vix, crude, gold, silver, usdinr, naturalgas } — live price pushed on every tick
   selectedInstrument: null, // { type, key?, token, label, sublabel? } — instrument selected in sidebar
 
   setPollingStatus: (pollingStatus) => set({ pollingStatus }),

@@ -134,14 +134,15 @@ export default function MacroPanel() {
   if (error)   return <div style={{ padding: 32, color: '#ef4444', textAlign: 'center' }}>{error}</div>;
   if (!macroData) return null;
 
-  const { vix, crude, gold, silver, usdinr } = macroData;
+  const { vix, crude, gold, silver, usdinr, naturalgas } = macroData;
 
   // Read live price from ticks ref — falls back to last analysis price.
-  const vixLive    = ticksRef.current[vix?.instrumentToken]?.lastPrice    ?? vix?.currentVix;
-  const crudeLive  = ticksRef.current[crude?.instrumentToken]?.lastPrice  ?? crude?.currentPrice;
-  const goldLive   = ticksRef.current[gold?.instrumentToken]?.lastPrice   ?? gold?.currentPrice;
-  const silverLive = ticksRef.current[silver?.instrumentToken]?.lastPrice ?? silver?.currentPrice;
-  const usdinrLive = ticksRef.current[usdinr?.instrumentToken]?.lastPrice ?? usdinr?.currentPrice;
+  const vixLive        = ticksRef.current[vix?.instrumentToken]?.lastPrice        ?? vix?.currentVix;
+  const crudeLive      = ticksRef.current[crude?.instrumentToken]?.lastPrice      ?? crude?.currentPrice;
+  const goldLive       = ticksRef.current[gold?.instrumentToken]?.lastPrice       ?? gold?.currentPrice;
+  const silverLive     = ticksRef.current[silver?.instrumentToken]?.lastPrice     ?? silver?.currentPrice;
+  const usdinrLive     = ticksRef.current[usdinr?.instrumentToken]?.lastPrice     ?? usdinr?.currentPrice;
+  const naturalgasLive = ticksRef.current[naturalgas?.instrumentToken]?.lastPrice ?? naturalgas?.currentPrice;
 
   return (
     <div style={{ padding: '0 4px' }}>
@@ -199,6 +200,15 @@ export default function MacroPanel() {
               direction={usdinr?.direction}
               confidence={usdinr?.confidence ?? 0}
               timeframes={usdinr?.timeframes}
+              showZone={false}
+            />
+            <InstrumentRow
+              label="Natural Gas"
+              sublabel={naturalgas?.tradingsymbol ?? ''}
+              livePrice={naturalgasLive}
+              direction={naturalgas?.direction}
+              confidence={naturalgas?.confidence ?? 0}
+              timeframes={naturalgas?.timeframes}
               showZone={false}
             />
           </tbody>
