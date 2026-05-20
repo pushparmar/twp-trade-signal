@@ -240,7 +240,7 @@ function _onAlert(alert, source) {
     source:          'auto',
     autoSource:      source,
     // Instrument (share)
-    symbol:          alert.label || String(numToken),
+    symbol:          alert.tradingsymbol || alert.label || String(numToken),
     token:           numToken,
     exchange:        tradeExchange,
     // Order sizing

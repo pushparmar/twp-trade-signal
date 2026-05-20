@@ -257,6 +257,11 @@ function OpenTradeRow({ trade, onClose }) {
 
                     {trade.symbol}
                 </span>
+                {trade.patternLabel && (
+                    <span className="td-sym-pattern" title={trade.patternId ?? trade.patternLabel}>
+                        {trade.patternLabel}
+                    </span>
+                )}
                 {trade.sl != null && (
                     <span className="td-sym-sl mob-only">
                         {trade.tslActivated ? "🔒" : "SL"} ₹{fmtPrice(trade.sl)}
@@ -890,6 +895,11 @@ export default function PaperTradingPanel() {
                                         <td className="td-symbol">
                                             {t.source === "auto" && <span className="td-sym-bot" title="Auto trade">🤖</span>}
                                             {t.symbol}
+                                            {t.patternLabel && (
+                                                <span className="td-sym-pattern" title={t.patternId ?? t.patternLabel}>
+                                                    {t.patternLabel}
+                                                </span>
+                                            )}
                                         </td>
                                         <td className="td-tf">
                                             {t.tfLabel ? (

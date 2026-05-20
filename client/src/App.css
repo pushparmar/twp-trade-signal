@@ -4393,6 +4393,19 @@ body {
 .paper-close-icon { display: none; }
 .td-sym-bot  { display: inline; font-size: 12px; margin-right: 3px; vertical-align: middle; }
 .td-sym-side { display: none; }
+/* Pattern sub-label below symbol name */
+.td-sym-pattern {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--txt3);
+  margin-top: 2px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
 /* SL shown below symbol on mobile only */
 .td-sym-sl   { display: none; }
 .mob-only    { display: none !important; }

@@ -47,6 +47,9 @@ const TF_LABEL = {
 // token (number) → display label, e.g. 256265 → 'NIFTY 50'
 const _tokenLabel = new Map();
 
+// token (number) → actual tradingsymbol, e.g. 12345 → 'CRUDEOIL25MAYFUT'
+const _tokenTradingsymbol = new Map();
+
 // token (number) → exchange string — used to pick the right market-hours gate
 // 'NSE' / 'BSE' → isNseOpen()   |   'MCX' → isMcxOpen()
 const _exchangeMap = new Map();
@@ -134,6 +137,7 @@ async function _runAndAlert(token, interval, candles) {
     broadcast('scan_alert', {
       token:         Number(token),
       label,
+      tradingsymbol: _tokenTradingsymbol.get(Number(token)) ?? null,
       interval,
       tfLabel,
       patternId,
@@ -195,15 +199,37 @@ function start() {
   // ── Macro instruments ─────────────────────────────────────────────────
   _tokenLabel.set(VIX_TOKEN, 'India VIX'); _exchangeMap.set(VIX_TOKEN, 'NSE');
 
-  const crudeInst  = getFrontMonthFutures('CRUDEOIL', 'MCX');
-  const goldInst   = getFrontMonthFutures('GOLD',     'MCX');
-  const silverInst = getFrontMonthFutures('SILVER',   'MCX');
-  const usdinrInst = getFrontMonthFutures('USDINR',   'CDS');
+  const crudeInst      = getFrontMonthFutures('CRUDEOIL',   'MCX');
+  const goldInst       = getFrontMonthFutures('GOLD',       'MCX');
+  const silverInst     = getFrontMonthFutures('SILVER',     'MCX');
+  const naturalgasInst = getFrontMonthFutures('NATURALGAS', 'MCX');
+  const usdinrInst     = getFrontMonthFutures('USDINR',     'CDS');
 
-  if (crudeInst)  { _tokenLabel.set(crudeInst.instrumentToken,  `Crude Oil (${crudeInst.tradingsymbol})`);   _exchangeMap.set(crudeInst.instrumentToken,  'MCX'); }
-  if (goldInst)   { _tokenLabel.set(goldInst.instrumentToken,   `Gold (${goldInst.tradingsymbol})`);         _exchangeMap.set(goldInst.instrumentToken,   'MCX'); }
-  if (silverInst) { _tokenLabel.set(silverInst.instrumentToken, `Silver (${silverInst.tradingsymbol})`);     _exchangeMap.set(silverInst.instrumentToken, 'MCX'); }
-  if (usdinrInst) { _tokenLabel.set(usdinrInst.instrumentToken, `USD/INR (${usdinrInst.tradingsymbol})`);    _exchangeMap.set(usdinrInst.instrumentToken, 'NSE'); }
+  if (crudeInst) {
+    _tokenLabel.set(crudeInst.instrumentToken, `Crude Oil`);
+    _tokenTradingsymbol.set(crudeInst.instrumentToken, crudeInst.tradingsymbol);
+    _exchangeMap.set(crudeInst.instrumentToken, 'MCX');
+  }
+  if (goldInst) {
+    _tokenLabel.set(goldInst.instrumentToken, `Gold`);
+    _tokenTradingsymbol.set(goldInst.instrumentToken, goldInst.tradingsymbol);
+    _exchangeMap.set(goldInst.instrumentToken, 'MCX');
+  }
+  if (silverInst) {
+    _tokenLabel.set(silverInst.instrumentToken, `Silver`);
+    _tokenTradingsymbol.set(silverInst.instrumentToken, silverInst.tradingsymbol);
+    _exchangeMap.set(silverInst.instrumentToken, 'MCX');
+  }
+  if (naturalgasInst) {
+    _tokenLabel.set(naturalgasInst.instrumentToken, `Natural Gas`);
+    _tokenTradingsymbol.set(naturalgasInst.instrumentToken, naturalgasInst.tradingsymbol);
+    _exchangeMap.set(naturalgasInst.instrumentToken, 'MCX');
+  }
+  if (usdinrInst) {
+    _tokenLabel.set(usdinrInst.instrumentToken, `USD/INR`);
+    _tokenTradingsymbol.set(usdinrInst.instrumentToken, usdinrInst.tradingsymbol);
+    _exchangeMap.set(usdinrInst.instrumentToken, 'NSE');
+  }
 
   // ── Pre-seed candle buffers for every watched token × interval ─────────
   // Without this, getCandlesSync() always returns null for macro tokens and
