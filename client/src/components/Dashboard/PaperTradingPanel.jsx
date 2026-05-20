@@ -850,7 +850,10 @@ export default function PaperTradingPanel() {
                                                 {t.action}
                                             </span>
                                         </td>
-                                        <td className="td-symbol">{t.symbol}</td>
+                                        <td className="td-symbol">
+                                            {t.source === "auto" && <span className="td-sym-bot" title="Auto trade">🤖</span>}
+                                            {t.symbol}
+                                        </td>
                                         <td className="td-num">{t.entryPrice}</td>
                                         <td className="td-num mob-hide">{t.exitPrice}</td>
                                         <td className="td-num">

@@ -185,9 +185,30 @@ function onTick(token, lastPrice) {
   for (const trade of openTrades) {
     const isDerivativeTick = Number(trade.derivativeToken) === numToken;
     const isUnderlyingTick = Number(trade.token) === numToken;
+    const isOptions = trade.tradingMode === 'options';
 
-    // For futures: SL/target/TSL checked against futures price (derivative tick)
-    if (trade.derivativeToken && isDerivativeTick) {
+    // SL/target/TSL monitoring — price series must match what trade.sl/target represent:
+    //   Options : trade.sl/target are SPOT levels → check against spot (underlying) tick
+    //   Futures : trade.sl/target are SPOT levels → check against futures tick (≈ spot)
+    //   Legacy  : no derivative → check against underlying tick
+    if (isOptions && isUnderlyingTick) {
+      // Options: monitor via spot price so ₹30 premium is never compared to ₹1,180 SL
+      _maybeTrail(trade, lastPrice, settings);
+      const exit = _checkExit(trade, lastPrice);
+      if (exit) {
+        _closeTrade(trade, exit.closeAt, exit.reason);
+        continue;
+      }
+    } else if (!isOptions && trade.derivativeToken && isDerivativeTick) {
+      // Futures: futures price tracks spot closely — use it directly
+      _maybeTrail(trade, lastPrice, settings);
+      const exit = _checkExit(trade, lastPrice);
+      if (exit) {
+        _closeTrade(trade, exit.closeAt, exit.reason);
+        continue;
+      }
+    } else if (!trade.derivativeToken && isUnderlyingTick) {
+      // Legacy spot trade
       _maybeTrail(trade, lastPrice, settings);
       const exit = _checkExit(trade, lastPrice);
       if (exit) {
@@ -196,17 +217,7 @@ function onTick(token, lastPrice) {
       }
     }
 
-    // For trades without derivativeToken (legacy/spot), check against underlying
-    if (!trade.derivativeToken && isUnderlyingTick) {
-      _maybeTrail(trade, lastPrice, settings);
-      const exit = _checkExit(trade, lastPrice);
-      if (exit) {
-        _closeTrade(trade, exit.closeAt, exit.reason);
-        continue;
-      }
-    }
-
-    // Broadcast PnL — prefer derivative tick for futures trades
+    // Broadcast PnL — always use derivative tick (premium for options, futures price for futures)
     const shouldBroadcast = trade.derivativeToken ? isDerivativeTick : isUnderlyingTick;
     if (shouldBroadcast) {
       const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
