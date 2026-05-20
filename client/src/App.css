@@ -4358,7 +4358,11 @@ body {
 .paper-close-icon { display: none; }
 .td-sym-bot  { display: none; }
 .td-sym-side { display: none; }
+/* SL shown below symbol on mobile only */
+.td-sym-sl   { display: none; }
+.mob-only    { display: none !important; }
 @media (max-width: 768px) {
+  .mob-only  { display: inline !important; }
   .paper-close-label { display: none; }
   .paper-close-icon  { display: inline; font-size: 16px; line-height: 1; }
   .paper-close-btn   { padding: 2px 6px; min-width: 28px; }
@@ -4383,6 +4387,14 @@ body {
   }
   .td-sym-side--b { background: rgba(74,222,128,0.15); color: #4ade80; }
   .td-sym-side--s { background: rgba(248,113,113,0.15); color: #f87171; }
+
+  .td-sym-sl {
+    display: block;
+    font-size: 10px;
+    color: var(--txt3);
+    margin-top: 2px;
+    line-height: 1.2;
+  }
 }
 
 .paper-auto-badge {

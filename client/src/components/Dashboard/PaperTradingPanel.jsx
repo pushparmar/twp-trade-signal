@@ -289,6 +289,12 @@ function OpenTradeRow({ trade, onClose }) {
                         FUT
                     </span>
                 )}
+                {trade.sl != null && (
+                    <span className="td-sym-sl mob-only">
+                        {trade.tslActivated ? "🔒" : "SL"} ₹{fmtPrice(trade.sl)}
+                        {slHit && " 🛑"}
+                    </span>
+                )}
             </td>
             <td className="td-num td-entry mob-hide">{fmtPrice(trade.entryPrice)}</td>
             <td className="td-num">
