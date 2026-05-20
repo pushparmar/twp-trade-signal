@@ -200,14 +200,25 @@ function AppShell() {
       .then((r) => setPaperTrades(r.data))
       .catch(() => {})
       .finally(() => {
-        // Secondary sync: pull OPEN trades directly from MongoDB.
-        api.get('/paper/open-from-db').then((r) => {
+        // Secondary sync: pull recent trades (open + closed) from MongoDB.
+        // Merges by id — adds missing trades and updates any whose status
+        // changed since the primary /paper fetch (e.g. closed on another device).
+        api.get('/paper/recent-from-db').then((r) => {
           if (!r.data?.length) return;
           const current = useAppStore.getState().paperTrades || [];
-          const existingIds = new Set(current.map((t) => t.id));
-          const missing = r.data.filter((t) => !existingIds.has(t.id));
-          if (missing.length) {
-            setPaperTrades([...missing, ...current]);
+          const currentMap = new Map(current.map((t) => [t.id, t]));
+          let changed = false;
+          for (const t of r.data) {
+            const existing = currentMap.get(t.id);
+            if (!existing || existing.status !== t.status) {
+              currentMap.set(t.id, t);
+              changed = true;
+            }
+          }
+          if (changed) {
+            // Sort by ts desc to match server order
+            const merged = [...currentMap.values()].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+            setPaperTrades(merged);
           }
         }).catch(() => {});
 

@@ -104,6 +104,43 @@ router.get('/open-from-db', async (req, res) => {
 });
 
 /**
+ * GET /api/paper/recent-from-db
+ * Returns the most recent 200 trades (any status) from MongoDB.
+ * Used by the client on mount to fully sync the order book across devices —
+ * both OPEN and CLOSED trades are included so a fresh device sees the same
+ * state as one that has been running since the trades were placed.
+ * Returns [] (not an error) when MongoDB is not configured.
+ */
+router.get('/recent-from-db', async (req, res) => {
+  try {
+    const trades = await db.tradeRepo.getRecentTrades(200);
+    // Restore any trades missing from the in-memory store (e.g. server restart
+    // without persistent disk, or race between boot and first client connect).
+    const current = getPaperTrades();
+    const existingIds = new Set(current.map((t) => t.id));
+    const restored = [];
+    for (const t of trades) {
+      if (!existingIds.has(t.id)) {
+        addPaperTrade(t);
+        if (t.status === 'OPEN') {
+          _subscribeTradeToken(t.token);
+          if (t.derivativeToken) _subscribeTradeToken(t.derivativeToken);
+        }
+        restored.push(t);
+      }
+    }
+    if (restored.length > 0) {
+      console.log(`[Paper] Restored ${restored.length} trade(s) from MongoDB into memory`);
+      for (const t of restored.filter((t) => t.status === 'OPEN')) broadcast('paper_trade', t);
+      broadcast('paper_balance', getPaperBalance());
+    }
+    res.json(trades);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/paper/db-stats
  * Quick diagnostic — counts trades + open/closed split in MongoDB so the user
  * can verify writes are actually landing without opening Atlas.

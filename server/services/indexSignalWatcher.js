@@ -269,4 +269,11 @@ function stop() {
   _dedup.clear();
 }
 
-module.exports = { start, stop, onCandleClose };
+function clearDedup() {
+  const count = _dedup.size;
+  _dedup.clear();
+  console.log(`[IndexSignalWatcher] clearDedup — cleared ${count} entries`);
+  return count;
+}
+
+module.exports = { start, stop, onCandleClose, clearDedup };

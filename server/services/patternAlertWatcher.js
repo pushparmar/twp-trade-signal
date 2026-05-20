@@ -224,4 +224,11 @@ function start() {
   console.log(`[PatternAlert] Patterns: ${patterns}`);
 }
 
-module.exports = { start, onCandleClose };
+function clearDedup() {
+  const count = _dedup.size;
+  _dedup.clear();
+  console.log(`[PatternAlert] clearDedup — cleared ${count} entries`);
+  return count;
+}
+
+module.exports = { start, onCandleClose, clearDedup };

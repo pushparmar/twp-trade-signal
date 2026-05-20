@@ -224,6 +224,72 @@ async function getOpenTrades() {
   }
 }
 
+/**
+ * Fetch the most recent trades (any status) from MongoDB.
+ * Used on server boot and client sync to restore the full order book
+ * — open AND closed — so every device sees the same state.
+ *
+ * @param {number} [limit=200]  Max number of records to return
+ * @returns {Promise<Array>}
+ */
+async function getRecentTrades(limit = 200) {
+  if (!mongo.isReady()) return [];
+  try {
+    const docs = await mongo.db().collection(COLLECTION)
+      .find({})
+      .sort({ openedAt: -1 })
+      .limit(limit)
+      .toArray();
+
+    return docs.map((doc) => ({
+      id:              doc.tradeId,
+      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
+      source:          doc.source          ?? 'auto',
+      autoSource:      doc.autoSource      ?? null,
+      symbol:          doc.symbol          ?? '',
+      token:           doc.token           ?? null,
+      exchange:        doc.exchange        ?? 'NSE',
+      action:          doc.action          ?? 'BUY',
+      quantity:        doc.quantity        ?? 1,
+      lots:            doc.lots            ?? 1,
+      lotSize:         doc.lotSize         ?? 1,
+      entryPrice:      doc.entryPrice      ?? 0,
+      exitPrice:       doc.exitPrice       ?? null,
+      sl:              doc.sl              ?? null,
+      initialSl:       doc.initialSl       ?? doc.sl ?? null,
+      target:          doc.target          ?? null,
+      status:          doc.status          ?? 'OPEN',
+      pnl:             doc.pnl             ?? null,
+      closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
+      // Derivative fields
+      tradingMode:        doc.tradingMode        ?? null,
+      derivativeSymbol:   doc.derivativeSymbol   ?? null,
+      derivativeToken:    doc.derivativeToken    ?? null,
+      derivativeExchange: doc.derivativeExchange ?? null,
+      optionType:         doc.optionType         ?? null,
+      strike:             doc.strike             ?? null,
+      expiry:             doc.expiry             ?? null,
+      premium:            doc.premium            ?? null,
+      spotEntry:          doc.spotEntry          ?? null,
+      // Pattern + risk
+      patternId:       doc.patternId       ?? null,
+      patternLabel:    doc.patternLabel    ?? null,
+      signal:          doc.signal          ?? null,
+      interval:        doc.interval        ?? null,
+      tfLabel:         doc.tfLabel         ?? null,
+      riskPerUnit:     doc.riskPerUnit     ?? null,
+      rrRatio:         doc.rrRatio         ?? null,
+      potentialProfit: doc.potentialProfit ?? null,
+      targetSource:    doc.targetSource    ?? null,
+      tslActivated:    doc.tslActivated    ?? false,
+      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
+    }));
+  } catch (err) {
+    console.warn('[tradeRepo] getRecentTrades failed:', err.message);
+    return [];
+  }
+}
+
 // ── Analytics helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -320,4 +386,4 @@ async function getCumulativePnl() {
   }
 }
 
-module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getCumulativePnl, dailyPnl, patternWinRate };
+module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getRecentTrades, getCumulativePnl, dailyPnl, patternWinRate };

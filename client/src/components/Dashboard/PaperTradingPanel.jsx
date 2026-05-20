@@ -67,8 +67,8 @@ function sortTrades(trades, sort, getValue) {
     return sort.dir === "desc" ? sorted.reverse() : sorted;
 }
 
-function CloseTradeModal({ trade, onClose, onConfirm }) {
-    const [exitPrice, setExitPrice] = useState(trade.entryPrice || "");
+function CloseTradeModal({ trade, currentLtp, onClose, onConfirm }) {
+    const [exitPrice, setExitPrice] = useState(currentLtp ?? trade.entryPrice ?? "");
     const suggested = trade.target || trade.sl || trade.entryPrice;
 
     const pnl = exitPrice
@@ -192,9 +192,10 @@ function OpenTradeRow({ trade, onClose }) {
 
     const isOptions = trade.tradingMode === "options";
     const spotLtp = tick?.lastPrice ?? null;
-    // For options: prefer live tradeTick, fall back to seeded derivative closing price
-    const premiumLtp = tradeTick?.isDerivativeTick ? tradeTick.ltp : derivativeTick?.lastPrice ?? null;
-    const ltp = isOptions ? premiumLtp : tradeTick?.ltp ?? spotLtp;
+    // For options: prefer live tradeTick (premium broadcast), fall back to seeded derivative price
+    const premiumLtp = tradeTick?.ltp ?? derivativeTick?.lastPrice ?? null;
+    // For futures: prefer live tick, then seeded derivative (futures) price, then spot
+    const ltp = isOptions ? premiumLtp : tradeTick?.ltp ?? derivativeTick?.lastPrice ?? spotLtp;
     // SL/target always checked against spot price
     const monitorLtp = spotLtp;
 
@@ -321,7 +322,7 @@ function OpenTradeRow({ trade, onClose }) {
                 {unrealizedPnl != null ? `${unrealizedPnl >= 0 ? "+" : ""}₹${unrealizedPnl.toFixed(2)}` : "—"}
             </td>
             <td>
-                <button className="btn btn-ghost btn-sm paper-close-btn" onClick={() => onClose(trade)}>
+                <button className="btn btn-ghost btn-sm paper-close-btn" onClick={() => onClose(trade, ltp)}>
                     <span className="paper-close-label">Close</span>
                     <span className="paper-close-icon">×</span>
                 </button>
@@ -583,7 +584,7 @@ export default function PaperTradingPanel() {
     async function handleCloseTrade(exitPrice) {
         if (!closingTrade) return;
         try {
-            const r = await api.post(`/paper/${closingTrade.id}/close`, { exitPrice });
+            const r = await api.post(`/paper/${closingTrade.trade.id}/close`, { exitPrice });
             updatePaperTrade(r.data);
         } catch (err) {
             console.error("Failed to close trade:", err.message);
@@ -772,7 +773,7 @@ export default function PaperTradingPanel() {
                             </thead>
                             <tbody>
                                 {sortedOpen.map(t => (
-                                    <OpenTradeRow key={t.id} trade={t} onClose={setClosingTrade} />
+                                    <OpenTradeRow key={t.id} trade={t} onClose={(t, ltp) => setClosingTrade({ trade: t, ltp })} />
                                 ))}
                             </tbody>
                         </table>
@@ -878,7 +879,8 @@ export default function PaperTradingPanel() {
 
             {closingTrade && (
                 <CloseTradeModal
-                    trade={closingTrade}
+                    trade={closingTrade.trade}
+                    currentLtp={closingTrade.ltp}
                     onClose={() => setClosingTrade(null)}
                     onConfirm={handleCloseTrade}
                 />

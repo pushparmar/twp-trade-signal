@@ -17,10 +17,15 @@
 const fs   = require('fs');
 const path = require('path');
 
-// Lazy-require store and sseHub to avoid circular dependencies at module load.
-// Both are available by the time archiveAndClear() is called at runtime.
-function _store()  { return require('../store'); }
-function _hub()    { return require('../sseHub'); }
+// Lazy-require everything to avoid circular dependencies at module load time.
+// All modules are available by the time archiveAndClear() runs at 6 AM IST.
+function _store()               { return require('../store'); }
+function _hub()                 { return require('../sseHub'); }
+function _backgroundScanner()   { return require('./backgroundScanner'); }
+function _liveScanner()         { return require('./liveScanner'); }
+function _patternAlertWatcher() { return require('./patternAlertWatcher'); }
+function _autoTrader()          { return require('./autoTrader'); }
+function _indexSignalWatcher()  { return require('./indexSignalWatcher'); }
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
 
@@ -41,6 +46,26 @@ function _istDateStr(now = Date.now()) {
 function archiveAndClear() {
   const store  = _store();
   const hub    = _hub();
+
+  // ── Reset all per-day dedup maps so every scanner fires fresh each session ──
+  // Without this, signals blocked after their first fire would never appear
+  // in Telegram again even though a new trading day started.
+  try {
+    const counts = {
+      bg:      _backgroundScanner().clearDedup(),
+      live:    _liveScanner().clearDedup(),
+      pattern: _patternAlertWatcher().clearDedup(),
+      trader:  _autoTrader().clearDedup(),
+      index:   _indexSignalWatcher().clearDedup(),
+    };
+    console.log(
+      `[TradeArchiver] Dedup cleared — bg:${counts.bg} live:${counts.live} ` +
+      `pattern:${counts.pattern} trader:${counts.trader} index:${counts.index} entries`,
+    );
+  } catch (err) {
+    console.warn('[TradeArchiver] Could not clear dedup maps:', err.message);
+  }
+
   const trades = store.getPaperTrades();
 
   // Separate so OPEN trades can be carried forward to the new trading day.

@@ -111,17 +111,20 @@ app.listen(PORT, async () => {
       return;
     }
 
-    // ── Restore OPEN trades from MongoDB if disk file was missing ───────────
+    // ── Restore recent trades from MongoDB if disk file was missing ─────────
+    // Restores both OPEN and CLOSED trades so every device sees the same
+    // order book regardless of when it loads.
     if (store.getPaperTrades().length === 0) {
       try {
-        const openFromMongo = await db.tradeRepo.getOpenTrades();
-        if (openFromMongo.length > 0) {
-          for (const trade of openFromMongo) store.addPaperTrade(trade);
-          console.log(`[DB] Restored ${openFromMongo.length} open trade(s) from MongoDB`);
+        const recentFromMongo = await db.tradeRepo.getRecentTrades(200);
+        if (recentFromMongo.length > 0) {
+          for (const trade of recentFromMongo) store.addPaperTrade(trade);
+          const open = recentFromMongo.filter((t) => t.status === 'OPEN');
+          console.log(`[DB] Restored ${recentFromMongo.length} trade(s) from MongoDB (${open.length} open)`);
 
           const rawTokens = [
-            ...openFromMongo.map((t) => t.token),
-            ...openFromMongo.map((t) => t.derivativeToken),
+            ...open.map((t) => t.token),
+            ...open.map((t) => t.derivativeToken),
           ].filter(Boolean).map(Number);
           const tokens = [...new Set(rawTokens)];
           if (tokens.length > 0) {
@@ -129,7 +132,7 @@ app.listen(PORT, async () => {
           }
         }
       } catch (err) {
-        console.warn('[DB] Could not restore open trades from MongoDB:', err.message);
+        console.warn('[DB] Could not restore trades from MongoDB:', err.message);
       }
     }
 
