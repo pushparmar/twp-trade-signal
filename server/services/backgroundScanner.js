@@ -267,13 +267,14 @@ function _buildUniverse() {
   }
 
   // ── MCX macro instruments ─────────────────────────────────────────────────
-  // Add Crude Oil, Gold, Silver so MCX alerts fire during MCX hours (09:00–23:30 IST).
+  // Add Crude Oil, Gold, Silver, Natural Gas so MCX alerts fire during MCX hours (09:00–23:30 IST).
   // These are covered by patternAlertWatcher via live KiteTicker ticks, but adding
   // them here ensures the scheduled bg scan also catches candle-close setups.
   const MCX_MACROS = [
-    ['CRUDEOIL', 'Crude Oil'],
-    ['GOLD',     'Gold'],
-    ['SILVER',   'Silver'],
+    ['CRUDEOIL',   'Crude Oil'],
+    ['GOLD',       'Gold'],
+    ['SILVER',     'Silver'],
+    ['NATURALGAS', 'Natural Gas'],
   ];
   for (const [symbol, label] of MCX_MACROS) {
     try {
