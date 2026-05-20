@@ -264,6 +264,11 @@ function OpenTradeRow({ trade, onClose }) {
                     </span>
                 )}
             </td>
+            <td className="td-tf">
+                {trade.tfLabel ? (
+                    <span className={`pill-tf pill-tf--${trade.tfLabel}`}>{trade.tfLabel}</span>
+                ) : "—"}
+            </td>
             <td className="td-num td-entry mob-hide">{fmtPrice(trade.entryPrice)}</td>
             <td className="td-num">
                 <span ref={priceRef} className="td-ltp">
@@ -769,6 +774,7 @@ export default function PaperTradingPanel() {
                                     />
                                     <th className="mob-hide">Action</th>
                                     <SortTh label="Symbol" field="symbol" sort={openSort} onSort={setOpenSort} />
+                                    <th className="th-tf">TF</th>
                                     <SortTh
                                         label={
                                             <>
@@ -841,6 +847,7 @@ export default function PaperTradingPanel() {
                                     />
                                     <th className="mob-hide">Action</th>
                                     <SortTh label="Symbol" field="symbol" sort={closedSort} onSort={setClosedSort} />
+                                    <th className="th-tf">TF</th>
                                     <SortTh
                                         label="Entry"
                                         field="entry"
@@ -883,6 +890,11 @@ export default function PaperTradingPanel() {
                                         <td className="td-symbol">
                                             {t.source === "auto" && <span className="td-sym-bot" title="Auto trade">🤖</span>}
                                             {t.symbol}
+                                        </td>
+                                        <td className="td-tf">
+                                            {t.tfLabel ? (
+                                                <span className={`pill-tf pill-tf--${t.tfLabel}`}>{t.tfLabel}</span>
+                                            ) : "—"}
                                         </td>
                                         <td className="td-num">{t.entryPrice}</td>
                                         <td className="td-num mob-hide">{t.exitPrice}</td>
