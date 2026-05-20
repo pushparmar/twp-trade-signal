@@ -188,16 +188,10 @@ function BalanceCard({ balance }) {
 function OpenTradeRow({ trade, onClose }) {
     const tradeTick = useAppStore(s => s.tradeTicks[trade.id]);
     const tick = useAppStore(s => s.ticks[trade.token]);
-    const derivativeTick = useAppStore(s => (trade.derivativeToken ? s.ticks[trade.derivativeToken] : null));
 
-    const isOptions = trade.tradingMode === "options";
     const spotLtp = tick?.lastPrice ?? null;
-    // For options: prefer live tradeTick (premium broadcast), fall back to seeded derivative price
-    const premiumLtp = tradeTick?.ltp ?? derivativeTick?.lastPrice ?? null;
-    // For futures: prefer live tick, then seeded derivative (futures) price, then spot
-    const ltp = isOptions ? premiumLtp : tradeTick?.ltp ?? derivativeTick?.lastPrice ?? spotLtp;
-    // SL/target always checked against spot price
-    const monitorLtp = spotLtp;
+    const ltp = tradeTick?.ltp ?? spotLtp;
+    const monitorLtp = ltp;
 
     const priceRef = useRef(null);
     const prevRef = useRef(null);
@@ -263,32 +257,6 @@ function OpenTradeRow({ trade, onClose }) {
 
                     {trade.symbol}
                 </span>
-                <span>
-                    {(isOptions || trade.tradingMode === "futures") && (
-                        <span
-                            style={{
-                                fontSize: 11,
-                                color: spotLtp != null ? "var(--txt3)" : "var(--txt4, #555)",
-                                marginLeft: 4
-                            }}
-                        >
-                            ₹{fmtPrice(window.innerWidth < 767 ? trade.spotEntry : spotLtp ?? trade.spotEntry)}
-                        </span>
-                    )}
-                </span>
-                {trade.tradingMode === "options" && trade.optionType && (
-                    <span
-                        className={`pill pill-sm ${trade.optionType === "CE" ? "pill-green" : "pill-red"}`}
-                        style={{ marginLeft: 4, fontSize: 10 }}
-                    >
-                        {trade.strike} {trade.optionType}
-                    </span>
-                )}
-                {trade.tradingMode === "futures" && trade.derivativeSymbol && (
-                    <span className="pill pill-sm pill-blue" style={{ marginLeft: 4, fontSize: 10 }}>
-                        FUT
-                    </span>
-                )}
                 {trade.sl != null && (
                     <span className="td-sym-sl mob-only">
                         {trade.tslActivated ? "🔒" : "SL"} ₹{fmtPrice(trade.sl)}
@@ -394,7 +362,7 @@ function AutoTraderSettings() {
     const [settings, setSettings] = useState(null);
     const [saving, setSaving] = useState(false);
     const [editing, setEditing] = useState(false);
-    const [rrStr, setRrStr] = useState("");
+    const [profitStr, setProfitStr] = useState("");
     const [trigStr, setTrigStr] = useState("");
     const [distStr, setDistStr] = useState("");
 
@@ -434,15 +402,15 @@ function AutoTraderSettings() {
     }
 
     async function saveEdits() {
-        const rr = Number(rrStr);
-        const trig = Number(trigStr);
-        const dist = Number(distStr);
-        const risk = Number(riskStr);
+        const profit = Number(profitStr);
+        const trig   = Number(trigStr);
+        const dist   = Number(distStr);
+        const risk   = Number(riskStr);
         const updates = {};
-        if (rr > 0) updates.minRR = rr;
-        if (trig > 0) updates.tslTriggerR = trig;
-        if (dist > 0) updates.tslDistanceR = dist;
-        if (risk > 0) updates.riskPerTrade = risk;
+        if (profit > 0) updates.minProfit = profit;
+        if (trig > 0)   updates.tslTriggerR  = trig;
+        if (dist > 0)   updates.tslDistanceR = dist;
+        if (risk > 0)   updates.riskPerTrade = risk;
         if (Object.keys(updates).length) await patch(updates);
         setEditing(false);
     }
@@ -451,7 +419,7 @@ function AutoTraderSettings() {
 
     function startEdit() {
         if (!settings) return;
-        setRrStr(String(settings.minRR));
+        setProfitStr(String(settings.minProfit));
         setTrigStr(String(settings.tslTriggerR));
         setDistStr(String(settings.tslDistanceR));
         setRiskStr(String(settings.riskPerTrade));
@@ -473,46 +441,20 @@ function AutoTraderSettings() {
                     {settings.enabled ? "ON" : "OFF"}
                 </span>
                 {settings.enabled && (
-                    <>
-                        <div className="at-mode-group" role="tablist">
-                            {["futures", "options"].map(mode => (
-                                <button
-                                    key={mode}
-                                    className={`at-mode-btn ${settings.tradingMode === mode ? "is-active" : ""}`}
-                                    onClick={() => patch({ tradingMode: mode })}
-                                    disabled={saving}
-                                    type="button"
-                                >
-                                    {mode === "futures" ? "FUT" : "OPT"}
-                                </button>
-                            ))}
-                        </div>
-                        <div className="at-mode-group" role="tablist">
-                            {["risk", "fixed"].map(mode => (
-                                <button
-                                    key={mode}
-                                    className={`at-mode-btn ${settings.sizingMode === mode ? "is-active" : ""}`}
-                                    onClick={() => patch({ sizingMode: mode })}
-                                    disabled={saving}
-                                    type="button"
-                                    title={
-                                        mode === "risk"
-                                            ? `Risk-based sizing (₹${settings.riskPerTrade}/trade)`
-                                            : "Fixed 1 lot per trade"
-                                    }
-                                >
-                                    {mode === "risk" ? "RISK" : "1LOT"}
-                                </button>
-                            ))}
-                        </div>
-                    </>
+                    <span
+                        className="at-sizing-hint"
+                        title={`NSE: risk-based (₹${settings.riskPerTrade}/trade, ≥₹${settings.minProfit} profit) · MCX: 1 lot per trade`}
+                        style={{ fontSize: 11, color: "var(--txt3)" }}
+                    >
+                        NSE risk ₹{(settings.riskPerTrade / 1000).toFixed(0)}k · MCX 1 lot
+                    </span>
                 )}
             </div>
 
             {settings.enabled && !editing && (
                 <div className="at-settings-risk">
-                    <span className="at-risk-label">Min R:R</span>
-                    <span className="at-risk-val">1:{settings.minRR}</span>
+                    <span className="at-risk-label">Min profit</span>
+                    <span className="at-risk-val">₹{(settings.minProfit / 1000).toFixed(0)}k</span>
                     <span className="at-risk-sep">·</span>
                     <span className="at-risk-label">TSL</span>
                     <button
@@ -543,23 +485,23 @@ function AutoTraderSettings() {
 
             {editing && (
                 <div className="at-settings-edit">
-                    <label className="at-edit-label">Min R:R</label>
-                    <input
-                        className="at-edit-input"
-                        type="number"
-                        step="0.1"
-                        value={rrStr}
-                        onChange={e => setRrStr(e.target.value)}
-                        placeholder="2.0"
-                    />
                     <label className="at-edit-label">Risk/Trade (₹)</label>
                     <input
                         className="at-edit-input"
                         type="number"
-                        step="100"
+                        step="500"
                         value={riskStr}
                         onChange={e => setRiskStr(e.target.value)}
-                        placeholder="5000"
+                        placeholder="10000"
+                    />
+                    <label className="at-edit-label">Min Profit (₹)</label>
+                    <input
+                        className="at-edit-input"
+                        type="number"
+                        step="500"
+                        value={profitStr}
+                        onChange={e => setProfitStr(e.target.value)}
+                        placeholder="20000"
                     />
                     <label className="at-edit-label">TSL trig (R)</label>
                     <input

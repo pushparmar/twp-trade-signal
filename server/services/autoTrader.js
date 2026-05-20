@@ -24,12 +24,13 @@
  *   • stop()   — unsubscribes; called on graceful shutdown
  */
 
-const { v4: uuidv4 } = require('uuid');
-const store          = require('../store');
-const { broadcast }  = require('../sseHub');
-const alertBus       = require('./alertBus');
-const kiteTicker     = require('./kiteTicker');
-const db             = require('../db');
+const { v4: uuidv4 }  = require('uuid');
+const store           = require('../store');
+const { broadcast }   = require('../sseHub');
+const alertBus        = require('./alertBus');
+const kiteTicker      = require('./kiteTicker');
+const db              = require('../db');
+const instrumentCache = require('./instrumentCache');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
@@ -60,29 +61,48 @@ function _istDateStr() {
 function _round2(v) { return Math.round(v * 100) / 100; }
 
 /**
- * @param {number} entry         Share entry price
+ * Per-exchange sizing:
+ *   NSE → risk-based.  quantity = floor(riskPerTrade / riskPerUnit).
+ *         Example: entry=100, sl=95 → 10000/5 = 2000 shares (risk ≈ ₹10k).
+ *         Must clear minProfit (e.g. ≥₹20k expected gain on target).
+ *   MCX → lot-based.  quantity = lotSize (1 lot of the commodity contract).
+ *         No R:R or profit gate — every signal trades 1 lot.
+ *
+ * @param {number} entry         Entry price
  * @param {number} sl            Stop-loss from the pattern engine
  * @param {number} target        Target from the pattern engine
- * @param {number} minRR         Minimum reward:risk ratio
- * @param {number} riskPerTrade  Max risk in rupees per trade
- * @param {string} sizingMode    'risk' | 'fixed'
+ * @param {object} settings      autoTrader settings (riskPerTrade, minProfit)
+ * @param {string} exchange      'NSE' | 'MCX'
+ * @param {number} lotSize       Exchange lot size (used for MCX)
  * @returns {{ quantity, riskPerUnit, potentialProfit, rrRatio } | null}
  */
-function _qualifyTrade(entry, sl, target, minRR, riskPerTrade, sizingMode) {
+function _qualifyTrade(entry, sl, target, settings, exchange, lotSize) {
   const riskPerUnit = Math.abs(entry - sl);
   if (riskPerUnit < 0.01) return null;
 
   const rrRatio = Math.abs(target - entry) / riskPerUnit;
-  if (rrRatio < minRR) return null;
+  const isMcx   = exchange === 'MCX';
 
-  const quantity = sizingMode === 'fixed'
-    ? 1
-    : Math.max(1, Math.floor(riskPerTrade / riskPerUnit));
+  // MCX takes every signal at 1 lot — no R:R / profit gating.
+  if (isMcx) {
+    const quantity = Math.max(1, lotSize || 1);
+    return {
+      quantity,
+      riskPerUnit:     _round2(riskPerUnit),
+      potentialProfit: _round2(Math.abs(target - entry) * quantity),
+      rrRatio:         _round2(rrRatio),
+    };
+  }
+
+  // NSE: size by ₹riskPerTrade, gate on minProfit.
+  const quantity        = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
+  const potentialProfit = Math.abs(target - entry) * quantity;
+  if (potentialProfit < settings.minProfit) return null;
 
   return {
     quantity,
     riskPerUnit:     _round2(riskPerUnit),
-    potentialProfit: _round2(Math.abs(target - entry) * quantity),
+    potentialProfit: _round2(potentialProfit),
     rrRatio:         _round2(rrRatio),
   };
 }
@@ -171,16 +191,27 @@ function _onAlert(alert, source) {
     }
   }
 
-  // ── 5. Qualify trade — risk sizing on share price ────────────────────────
+  // ── 5. Qualify trade — risk-sized for NSE, lot-sized for MCX ─────────────
+  const tradeExchange = alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE');
+  // MCX alerts already carry the futures token, so the lot size lives in the
+  // instrument cache.  NSE cash equity doesn't have lots — pass 1 as the noop.
+  let lotSize = 1;
+  if (tradeExchange === 'MCX') {
+    const mcxInst = instrumentCache.getByToken(numToken);
+    lotSize = mcxInst?.lotSize || 1;
+  }
+
   const pos = _qualifyTrade(
-    usedEntry, usedSl, usedTarget, settings.minRR,
-    settings.riskPerTrade, settings.sizingMode,
+    usedEntry, usedSl, usedTarget, settings, tradeExchange, lotSize,
   );
   if (!pos) {
-    const rrRatio = (Math.abs(usedTarget - usedEntry) / Math.abs(usedEntry - usedSl)).toFixed(2);
+    // Only NSE can be skipped now — MCX always qualifies (1 lot, no gates).
+    const riskPerUnit = Math.abs(usedEntry - usedSl);
+    const qty         = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
+    const potential   = (Math.abs(usedTarget - usedEntry) * qty).toFixed(0);
     console.log(
-      `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — ` +
-      `skipped: R:R=${rrRatio} < minRR=${settings.minRR}`,
+      `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) [${tradeExchange}] — ` +
+      `skipped: profit≈₹${potential} < minProfit ₹${settings.minProfit}`,
     );
     return;
   }
@@ -211,10 +242,11 @@ function _onAlert(alert, source) {
     // Instrument (share)
     symbol:          alert.label || String(numToken),
     token:           numToken,
-    exchange:        alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE'),
+    exchange:        tradeExchange,
     // Order sizing
     action,
     quantity:        pos.quantity,
+    lotSize:         lotSize,
     // Entry / SL / target — all share-price levels
     entryPrice:      shareEntry,
     exitPrice:       null,
@@ -256,11 +288,14 @@ function _onAlert(alert, source) {
   db.tradeRepo.upsertTrade(trade);
 
   const mtfTag = mtfSource ? ` ⚡MTF(${mtfSource})` : '';
+  const qtyTag = tradeExchange === 'MCX'
+    ? `${pos.quantity}qty (1 lot × ${lotSize})`
+    : `${pos.quantity}qty`;
   console.log(
-    `[AutoTrader] 🤖 ${action} ${trade.symbol} @ ₹${shareEntry} ` +
+    `[AutoTrader] 🤖 ${action} ${trade.symbol} [${tradeExchange}] @ ₹${shareEntry} ` +
     `[${alert.tfLabel ?? interval}] ${patternId}${mtfTag} ` +
     `sl=₹${usedSl} tgt=₹${usedTarget} ` +
-    `R:R=${pos.rrRatio} qty=${pos.quantity} [${source}]`,
+    `R:R=${pos.rrRatio} profit≈₹${pos.potentialProfit} ${qtyTag} [${source}]`,
   );
 }
 

@@ -318,15 +318,15 @@ function getAutoTraderSettings() {
   const config = readConfig();
   return {
     enabled:      config.autoTrader?.enabled      ?? true,
-    tradingMode:  config.autoTrader?.tradingMode   ?? 'options',
-    sizingMode:   config.autoTrader?.sizingMode    ?? 'fixed',
-    riskPerTrade: config.autoTrader?.riskPerTrade  ?? 5_000,
-    minProfit:    config.autoTrader?.minProfit     ?? 10_000,
+    // NSE: ₹10k risk → ≥₹20k profit (R:R 1:2 minimum)
+    // MCX: lot-based, R:R enforced; profit threshold informational only
+    riskPerTrade: config.autoTrader?.riskPerTrade  ?? 10_000,
+    minProfit:    config.autoTrader?.minProfit     ?? 20_000,
     minRR:        config.autoTrader?.minRR         ?? 2.0,
     // Trailing Stop Loss — moves SL up (BUY) or down (SELL) as price moves
     // favourably.  Activated once unrealised profit ≥ tslTriggerR × initial risk.
     // After activation, SL trails tslDistanceR × initial-risk behind the peak.
-    tslEnabled:   config.autoTrader?.tslEnabled    ?? false,
+    tslEnabled:   config.autoTrader?.tslEnabled    ?? true,
     tslTriggerR:  config.autoTrader?.tslTriggerR   ?? 1.0,
     tslDistanceR: config.autoTrader?.tslDistanceR  ?? 0.5,
   };

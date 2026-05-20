@@ -1,0 +1,33 @@
+[
+  {
+    "id": "f71d185d-7171-439e-9069-b0c0fcb5e6aa",
+    "ts": 1779274008872,
+    "source": "auto",
+    "autoSource": "background",
+    "symbol": "Gold",
+    "token": 117574919,
+    "exchange": "MCX",
+    "action": "BUY",
+    "quantity": 1,
+    "entryPrice": 159371,
+    "exitPrice": 159168.5,
+    "sl": 159168.5,
+    "initialSl": 159168.5,
+    "target": 160378,
+    "mtfSource": null,
+    "tslActivated": false,
+    "peakPrice": 159371,
+    "status": "CLOSED",
+    "pnl": -202.5,
+    "closedTs": 1779275679781,
+    "patternId": "kumo-breakout",
+    "patternLabel": "Kumo Breakout",
+    "signal": "bullish",
+    "interval": "15minute",
+    "tfLabel": "15m",
+    "riskPerUnit": 202.5,
+    "rrRatio": 4.97,
+    "potentialProfit": 1007,
+    "targetSource": "swing"
+  }
+]

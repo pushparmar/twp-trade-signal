@@ -17,25 +17,11 @@ router.get('/settings', (req, res) => {
 });
 
 router.post('/settings', (req, res) => {
-  const { enabled, riskPerTrade, minProfit, tradingMode, sizingMode, minRR } = req.body;
+  const { enabled, riskPerTrade, minProfit, minRR } = req.body;
   const updates = {};
 
   if (enabled !== undefined) {
     updates.enabled = !!enabled;
-  }
-
-  if (tradingMode !== undefined) {
-    if (!['futures', 'options'].includes(tradingMode)) {
-      return res.status(400).json({ error: 'tradingMode must be "futures" or "options"' });
-    }
-    updates.tradingMode = tradingMode;
-  }
-
-  if (sizingMode !== undefined) {
-    if (!['risk', 'fixed'].includes(sizingMode)) {
-      return res.status(400).json({ error: 'sizingMode must be "risk" or "fixed"' });
-    }
-    updates.sizingMode = sizingMode;
   }
 
   if (riskPerTrade !== undefined) {
@@ -66,7 +52,7 @@ router.post('/settings', (req, res) => {
   broadcast('auto_trader_settings', settings);
 
   const state = settings.enabled ? 'ENABLED' : 'DISABLED';
-  console.log(`[AutoTrader] Settings updated — ${state}, mode=${settings.tradingMode}, sizing=${settings.sizingMode}, risk=₹${settings.riskPerTrade}`);
+  console.log(`[AutoTrader] Settings updated — ${state}, risk=₹${settings.riskPerTrade}, minProfit=₹${settings.minProfit}, minRR=${settings.minRR}`);
 
   res.json(settings);
 });
