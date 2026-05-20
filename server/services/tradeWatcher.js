@@ -28,6 +28,9 @@ function _kiteService() {
 
 const _closing = new Set();
 const _lastTickBroadcast = new Map();
+// Last known options/futures premium for each trade — updated on every derivative tick.
+// Used in _closeTrade so we never need a blocking LTP fetch on the hot path.
+const _lastDerivativeLtp = new Map(); // tradeId → lastPrice
 
 function _spotEntry(trade) {
   return trade.spotEntry ?? trade.entryPrice;
@@ -107,20 +110,29 @@ async function _closeTrade(trade, closeAt, reason) {
 
   let exitPrice = closeAt;
 
-  // For options trades, fetch current option premium for accurate PnL
-  if (trade.tradingMode === 'options' && trade.derivativeSymbol) {
-    try {
-      const ltpKey = `${trade.derivativeExchange}:${trade.derivativeSymbol}`;
-      const ltpData = await _kiteService().getLTP([ltpKey]);
-      const premiumNow = ltpData[ltpKey]?.last_price;
-      if (premiumNow != null) {
-        exitPrice = premiumNow;
-      } else {
+  // For derivative trades (options or futures), use the most recently cached premium.
+  // This avoids a blocking LTP fetch that can fail when the Kite token is stale.
+  // Fallback chain: cached tick → live API fetch → entryPrice (last resort / 0 PnL)
+  if (trade.derivativeToken) {
+    const cached = _lastDerivativeLtp.get(trade.id);
+    if (cached != null) {
+      exitPrice = cached;
+    } else if (trade.tradingMode === 'options' && trade.derivativeSymbol) {
+      // No cached tick yet (trade just placed) — try a one-shot API fetch
+      try {
+        const ltpKey  = `${trade.derivativeExchange}:${trade.derivativeSymbol}`;
+        const ltpData = await _kiteService().getLTP([ltpKey]);
+        const premiumNow = ltpData[ltpKey]?.last_price;
+        if (premiumNow != null) {
+          exitPrice = premiumNow;
+        } else {
+          console.warn(`[TradeWatcher] Options LTP null for ${trade.derivativeSymbol} — using entry price`);
+          exitPrice = trade.entryPrice;
+        }
+      } catch (err) {
+        console.warn(`[TradeWatcher] Option LTP fetch failed for ${trade.derivativeSymbol}:`, err.message);
         exitPrice = trade.entryPrice;
       }
-    } catch (err) {
-      console.warn(`[TradeWatcher] Option LTP fetch failed for ${trade.derivativeSymbol}:`, err.message);
-      exitPrice = trade.entryPrice;
     }
   }
 
@@ -128,6 +140,7 @@ async function _closeTrade(trade, closeAt, reason) {
   if (!closed) { _closing.delete(trade.id); return; }
 
   _lastTickBroadcast.delete(trade.id);
+  _lastDerivativeLtp.delete(trade.id);
 
   broadcast('paper_trade_update', closed);
   broadcast('paper_balance',      store.getPaperBalance());
@@ -140,7 +153,8 @@ async function _closeTrade(trade, closeAt, reason) {
 
     for (const tk of tokensToCheck) {
       const stillNeeded = store.getPaperTrades().some(
-        (t) => t.status === 'OPEN' && (Number(t.token) === tk || Number(t.derivativeToken) === tk),
+        (t) => (t.status === 'OPEN' || t.status === 'PENDING') &&
+               (Number(t.token) === tk || Number(t.derivativeToken) === tk),
       );
       const inWatchlist = store.getWatchlist().some(
         (w) => Number(w.instrumentToken) === tk,
@@ -169,6 +183,39 @@ function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
   const numToken = Number(token);
+
+  // ── Pending order activation ─────────────────────────────────────────────────
+  // PENDING trades only match on the underlying token (trigger is always a spot level).
+  const pendingTrades = store.getPaperTrades().filter(
+    (t) =>
+      t.status === 'PENDING' &&
+      Number(t.token) === numToken &&
+      t.triggerPrice != null,
+  );
+  for (const trade of pendingTrades) {
+    const triggered =
+      trade.triggerDir === 'above'
+        ? lastPrice >= trade.triggerPrice
+        : lastPrice <= trade.triggerPrice;
+    if (!triggered) continue;
+
+    const activated = store.activatePendingTrade(trade.id);
+    if (!activated) continue;
+
+    // Subscribe derivative token now that trade goes live
+    if (activated.derivativeToken) {
+      try { _ticker().subscribe([Number(activated.derivativeToken)]); } catch { /* ticker may not be ready */ }
+    }
+
+    broadcast('paper_trade_update', activated);
+    broadcast('paper_balance', store.getPaperBalance());
+    db.tradeRepo.upsertTrade(activated);
+
+    console.log(
+      `[TradeWatcher] ⚡ TRIGGERED — ${activated.symbol} ${activated.action}` +
+      ` @ ₹${activated.entryPrice} (trigger ₹${activated.triggerPrice}, ltp ₹${lastPrice})`,
+    );
+  }
 
   // Match trades by underlying token OR derivative (futures) token
   const openTrades = store.getPaperTrades().filter(
@@ -215,6 +262,11 @@ function onTick(token, lastPrice) {
         _closeTrade(trade, exit.closeAt, exit.reason);
         continue;
       }
+    }
+
+    // Cache derivative price so _closeTrade can use it without a blocking API call
+    if (isDerivativeTick && trade.derivativeToken) {
+      _lastDerivativeLtp.set(trade.id, lastPrice);
     }
 
     // Broadcast PnL — always use derivative tick (premium for options, futures price for futures)

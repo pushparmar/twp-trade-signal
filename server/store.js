@@ -209,6 +209,31 @@ function updatePaperTrade(id, fields) {
   return trade;
 }
 
+/**
+ * Transition a PENDING order to OPEN when its trigger price is hit.
+ * Mutates in-place and persists to disk.
+ */
+function activatePendingTrade(id) {
+  const trade = _paperTrades.find((t) => t.id === id);
+  if (!trade || trade.status !== 'PENDING') return null;
+  trade.status      = 'OPEN';
+  trade.activatedTs = Date.now();
+  _saveTrades();
+  return trade;
+}
+
+/**
+ * Remove a PENDING order without generating any PnL.
+ * Returns true when cancelled, false when not found or not PENDING.
+ */
+function cancelPendingTrade(id) {
+  const idx = _paperTrades.findIndex((t) => t.id === id && t.status === 'PENDING');
+  if (idx === -1) return false;
+  _paperTrades.splice(idx, 1);
+  _saveTrades();
+  return true;
+}
+
 function closePaperTrade(id, exitPrice) {
   const trade = _paperTrades.find((t) => t.id === id);
   if (!trade || trade.status !== 'OPEN') return null;
@@ -320,7 +345,7 @@ module.exports = {
   getTelegramBotToken, setTelegramBotToken,
   getTelegramChatId, setTelegramChatId,
   getTestMode, setTestMode,
-  addPaperTrade, closePaperTrade, updatePaperTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
+  addPaperTrade, closePaperTrade, updatePaperTrade, activatePendingTrade, cancelPendingTrade, autoClosePaperTrades, getPaperTrades, clearPaperTrades,
   getPaperBalance, setPaperInitialBalance, getPaperInitialBalance, setCumulativePnl, resetPaperBalance,
   getWatchlist, setWatchlist, addToWatchlist, removeFromWatchlist,
   getAutoTraderSettings, setAutoTraderSettings,

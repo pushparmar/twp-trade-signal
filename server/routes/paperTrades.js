@@ -1,7 +1,7 @@
 const express     = require('express');
 const fs          = require('fs');
 const path        = require('path');
-const { addPaperTrade, getPaperTrades, closePaperTrade, updatePaperTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
+const { addPaperTrade, getPaperTrades, closePaperTrade, updatePaperTrade, cancelPendingTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
 const { broadcast }   = require('../sseHub');
 const kiteTicker  = require('../services/kiteTicker');
 const kiteService = require('../services/kiteService');
@@ -30,10 +30,11 @@ function _subscribeTradeToken(token) {
 function _unsubscribeIfUnneeded(token) {
   if (!token) return;
   const num = Number(token);
+  // Keep subscribed for both OPEN and PENDING (pending needs ticks to detect trigger)
   const stillOpen = getPaperTrades().some(
-    (t) => t.status === 'OPEN' && Number(t.token) === num,
+    (t) => (t.status === 'OPEN' || t.status === 'PENDING') && Number(t.token) === num,
   );
-  if (stillOpen) return; // another open trade still needs this token
+  if (stillOpen) return; // another active trade still needs this token
 
   const inWatchlist = getWatchlist().some((w) => Number(w.instrumentToken) === num);
   if (inWatchlist) return; // watchlist display needs it
@@ -122,9 +123,9 @@ router.get('/recent-from-db', async (req, res) => {
     for (const t of trades) {
       if (!existingIds.has(t.id)) {
         addPaperTrade(t);
-        if (t.status === 'OPEN') {
+        if (t.status === 'OPEN' || t.status === 'PENDING') {
           _subscribeTradeToken(t.token);
-          if (t.derivativeToken) _subscribeTradeToken(t.derivativeToken);
+          if (t.status === 'OPEN' && t.derivativeToken) _subscribeTradeToken(t.derivativeToken);
         }
         restored.push(t);
       }
@@ -276,6 +277,21 @@ router.post('/:id/close', (req, res) => {
   // Mirror closed trade to MongoDB — fire-and-forget
   db.tradeRepo.closeTrade(trade);
   res.json(trade);
+});
+
+/**
+ * DELETE /api/paper/:id
+ * Cancel a PENDING order — removes it from the store and unsubscribes the token
+ * if no other trade or watchlist entry needs it.
+ * Returns 404 when the trade is not found or is not in PENDING state.
+ */
+router.delete('/:id', (req, res) => {
+  const cancelled = cancelPendingTrade(req.params.id);
+  if (!cancelled) return res.status(404).json({ error: 'Pending order not found' });
+  // Let all clients know the trade is gone
+  broadcast('paper_trade_cancelled', { id: req.params.id });
+  broadcast('paper_balance', getPaperBalance());
+  res.json({ ok: true });
 });
 
 router.delete('/', (req, res) => {

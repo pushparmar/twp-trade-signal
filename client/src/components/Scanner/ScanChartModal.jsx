@@ -23,7 +23,7 @@ const TF_OPTIONS = [
 
 const STRENGTH_EMOJI = { strong: '💪', neutral: '➡️', weak: '⚠️' };
 
-export default function ScanChartModal({ alert, onClose }) {
+export default function ScanChartModal({ alert, onClose, onBuy }) {
   // Start at the alert's TF — user can switch to compare other timeframes
   const [interval, setInterval] = useState(alert?.interval || '15minute');
 
@@ -126,6 +126,24 @@ export default function ScanChartModal({ alert, onClose }) {
             label={alert.label}
           />
         </div>
+
+        {/* ── Paper trade buttons (bottom-right) ─────────────────────── */}
+        {onBuy && (
+          <div className="scan-modal-trade-row">
+            <button
+              className="btn btn-sm scan-modal-buy-btn"
+              onClick={() => { onBuy({ alert, action: 'BUY' }); onClose(); }}
+            >
+              Paper BUY
+            </button>
+            <button
+              className="btn btn-sm scan-modal-sell-btn"
+              onClick={() => { onBuy({ alert, action: 'SELL' }); onClose(); }}
+            >
+              Paper SELL
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

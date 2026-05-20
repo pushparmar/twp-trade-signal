@@ -410,7 +410,8 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
   function handleConfirm() {
     if (!valid) return;
     // Pass both lots/lotSize (for display) and actual quantity (for P&L)
-    onConfirm({ entryPrice: entry, lots, lotSize, quantity: actualQty, sl, target });
+    // Also pass currentLtp so the parent can decide whether to make this a pending order
+    onConfirm({ entryPrice: entry, lots, lotSize, quantity: actualQty, sl, target, currentLtp: ltp });
   }
 
   function handleOverlayClick(e) {
@@ -1455,11 +1456,21 @@ export default function ScanAlertsPage() {
   // Called when the modal's "Confirm BUY" button is clicked.
   // Creates the paper trade with all user-specified fields.
   // quantity = lots × lotSize (actual number of shares for P&L calculation)
-  const handleConfirmBuy = useCallback(({ entryPrice, lots, lotSize, quantity, sl, target }) => {
+  const handleConfirmBuy = useCallback(({ entryPrice, lots, lotSize, quantity, sl, target, currentLtp }) => {
     const alert = buyModalData?.alert;
     if (!alert) return;
 
     const action = buyModalData?.action ?? 'BUY';
+
+    // If the user's entry price is ≥ ₹0.50 away from live LTP, create a pending
+    // order that activates only when price reaches the trigger level.
+    const isPending = currentLtp != null && Math.abs(entryPrice - currentLtp) >= 0.5;
+    // triggerDir: 'below' means fire when ltp ≤ triggerPrice (buy dip / sell breakdown)
+    //             'above' means fire when ltp ≥ triggerPrice (buy breakout / sell rally)
+    const triggerDir = isPending
+      ? (entryPrice < currentLtp ? 'below' : 'above')
+      : null;
+
     const trade = {
       id:           `scan-${Date.now()}-${alert.token}`,
       ts:           Date.now(),
@@ -1474,7 +1485,9 @@ export default function ScanAlertsPage() {
       sl,
       target,
       targets:      [],
-      status:       'OPEN',
+      status:       isPending ? 'PENDING' : 'OPEN',
+      triggerPrice: isPending ? entryPrice : null,
+      triggerDir,
       exitPrice:    null,
       pnl:          null,
       closedTs:     null,
@@ -1488,7 +1501,13 @@ export default function ScanAlertsPage() {
     };
 
     addPaperTrade(trade);
-    addToast({ type: 'buy', message: `Paper ${action} — ${alert.label} @ ₹${fmt(entryPrice)}` });
+
+    if (isPending) {
+      const dir = triggerDir === 'above' ? 'rises to' : 'drops to';
+      addToast({ type: 'info', message: `⏳ Pending — ${alert.label} ${action} triggers when price ${dir} ₹${entryPrice}` });
+    } else {
+      addToast({ type: 'buy', message: `Paper ${action} — ${alert.label} @ ₹${fmt(entryPrice)}` });
+    }
     setBuyModalData(null);
 
     // Persist to server so trades-current.json stays current for the daily 6 AM archive.
@@ -1594,7 +1613,11 @@ export default function ScanAlertsPage() {
 
       {/* ── Chart modal (opens on row click) ────────────────────────────── */}
       {chartAlert && (
-        <ScanChartModal alert={chartAlert} onClose={() => setChartAlert(null)} />
+        <ScanChartModal
+          alert={chartAlert}
+          onClose={() => setChartAlert(null)}
+          onBuy={handleBuy}
+        />
       )}
 
       {/* ── Paper buy modal (opens on Paper BUY click in paper mode) ─────── */}

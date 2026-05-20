@@ -337,6 +337,56 @@ function OpenTradeRow({ trade, onClose }) {
     );
 }
 
+// ── Pending order row ─────────────────────────────────────────────────────────
+function PendingOrderRow({ trade, onCancel }) {
+    const tick = useAppStore(s => s.ticks[trade.token]);
+    const ltp = tick?.lastPrice ?? null;
+
+    const dirLabel = trade.triggerDir === 'above' ? '↑ ≥' : '↓ ≤';
+    const dist = ltp != null ? Math.abs(ltp - trade.triggerPrice).toFixed(2) : null;
+
+    return (
+        <tr className="paper-row--pending">
+            <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
+            <td className="td-symbol">
+                <span className={`td-sym-side td-sym-side--${trade.action === "BUY" ? "b" : "s"}`}>
+                    {trade.action === "BUY" ? "B" : "S"}
+                </span>
+                {trade.symbol}
+                <span className="paper-pending-badge">⏳</span>
+            </td>
+            <td className="td-num">
+                <span title={`Triggers when price ${trade.triggerDir === 'above' ? '≥' : '≤'} ₹${fmtPrice(trade.triggerPrice)}`}>
+                    {dirLabel} ₹{fmtPrice(trade.triggerPrice)}
+                </span>
+                {ltp != null && dist != null && (
+                    <span style={{ fontSize: 10, color: "var(--txt3)", display: "block" }}>
+                        LTP ₹{fmtPrice(ltp)} · ₹{dist} away
+                    </span>
+                )}
+            </td>
+            <td className="td-num mob-hide">{trade.sl != null ? fmtPrice(trade.sl) : "—"}</td>
+            <td className="td-num mob-hide">{trade.target != null ? fmtPrice(trade.target) : "—"}</td>
+            <td className="td-num">
+                {trade.lots != null && trade.lotSize > 1
+                    ? <span title={`${trade.lots} lot${trade.lots > 1 ? "s" : ""} × ${trade.lotSize}`}>{trade.lots}L</span>
+                    : trade.quantity
+                }
+            </td>
+            <td>
+                <button
+                    className="btn btn-ghost btn-sm paper-close-btn"
+                    onClick={() => onCancel(trade.id)}
+                    title="Cancel pending order"
+                >
+                    <span className="paper-close-label">Cancel</span>
+                    <span className="paper-close-icon">×</span>
+                </button>
+            </td>
+        </tr>
+    );
+}
+
 // ── Auto-trader settings strip ────────────────────────────────────────────────
 // Testing-mode UI: shows the simplified controls relevant for sampling every
 // pattern firing (quantity is always 1, no rupee-risk filter applied).
@@ -564,6 +614,7 @@ export default function PaperTradingPanel() {
     const paperBalance = useAppStore(s => s.paperBalance);
 
     const updatePaperTrade = useAppStore(s => s.updatePaperTrade);
+    const removePaperTrade = useAppStore(s => s.removePaperTrade);
     const clearPaperTrades = useAppStore(s => s.clearPaperTrades);
     const [closingTrade, setClosingTrade] = useState(null);
     const [sourceFilter, setSourceFilter] = useState("all");
@@ -575,8 +626,16 @@ export default function PaperTradingPanel() {
     if (exchFilter !== "all") {
         filtered = filtered.filter(t => tradeExchange(t) === exchFilter);
     }
+    const pendingTrades = filtered.filter(t => t.status === "PENDING");
     const openTrades = filtered.filter(t => t.status === "OPEN");
     const closedTrades = filtered.filter(t => t.status === "CLOSED");
+
+    async function handleCancelPending(id) {
+        try {
+            await api.delete(`/paper/${id}`);
+        } catch { /* server may be unreachable — still remove locally */ }
+        removePaperTrade(id);
+    }
 
     const invested = openTrades.reduce((sum, t) => sum + t.entryPrice * t.quantity, 0);
     const realizedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
@@ -719,6 +778,35 @@ export default function PaperTradingPanel() {
                     <span className="paper-stat-label">Potential (at target)</span>
                 </div>
             </div>
+
+            {/* Pending orders — waiting for trigger price to be hit */}
+            {pendingTrades.length > 0 && (
+                <div className="dash-section">
+                    <h3 className="section-title">
+                        Pending Orders <span className="count-badge">{pendingTrades.length}</span>
+                    </h3>
+                    <div className="kite-table-wrap">
+                        <table className="kite-table">
+                            <thead>
+                                <tr>
+                                    <th className="mob-hide">Time</th>
+                                    <th>Symbol</th>
+                                    <th className="th-num">Trigger ₹</th>
+                                    <th className="th-num mob-hide">SL</th>
+                                    <th className="th-num mob-hide">Target</th>
+                                    <th className="th-num">Qty</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {pendingTrades.map(t => (
+                                    <PendingOrderRow key={t.id} trade={t} onCancel={handleCancelPending} />
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
 
             {/* Active trades — grouped by timeframe, live LTP and unrealized P&L per row */}
             {openTrades.length > 0 && (

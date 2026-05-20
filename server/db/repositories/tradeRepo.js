@@ -104,6 +104,10 @@ function upsertTrade(trade) {
     initialSl:         trade.initialSl            ?? null,
     // Source
     source:       trade.source                   ?? null,
+    // Pending/trigger order fields
+    triggerPrice: trade.triggerPrice             ?? null,
+    triggerDir:   trade.triggerDir               ?? null,
+    activatedTs:  trade.activatedTs              ?? null,
     // Timestamps
     openedAt:     new Date(trade.ts || Date.now()),
     closedAt:     trade.closedTs ? new Date(trade.closedTs) : null,
@@ -283,6 +287,10 @@ async function getRecentTrades(limit = 200) {
       targetSource:    doc.targetSource    ?? null,
       tslActivated:    doc.tslActivated    ?? false,
       peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
+      // Pending/trigger order fields
+      triggerPrice:    doc.triggerPrice    ?? null,
+      triggerDir:      doc.triggerDir      ?? null,
+      activatedTs:     doc.activatedTs     ?? null,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getRecentTrades failed:', err.message);

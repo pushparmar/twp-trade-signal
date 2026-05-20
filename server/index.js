@@ -119,12 +119,16 @@ app.listen(PORT, async () => {
         const recentFromMongo = await db.tradeRepo.getRecentTrades(200);
         if (recentFromMongo.length > 0) {
           for (const trade of recentFromMongo) store.addPaperTrade(trade);
-          const open = recentFromMongo.filter((t) => t.status === 'OPEN');
-          console.log(`[DB] Restored ${recentFromMongo.length} trade(s) from MongoDB (${open.length} open)`);
+          const open    = recentFromMongo.filter((t) => t.status === 'OPEN');
+          const pending = recentFromMongo.filter((t) => t.status === 'PENDING');
+          console.log(`[DB] Restored ${recentFromMongo.length} trade(s) from MongoDB (${open.length} open, ${pending.length} pending)`);
 
+          // Subscribe underlying tokens for both OPEN and PENDING trades;
+          // derivative tokens only for OPEN (pending hasn't filled yet).
           const rawTokens = [
             ...open.map((t) => t.token),
             ...open.map((t) => t.derivativeToken),
+            ...pending.map((t) => t.token),
           ].filter(Boolean).map(Number);
           const tokens = [...new Set(rawTokens)];
           if (tokens.length > 0) {

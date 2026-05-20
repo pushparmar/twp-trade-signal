@@ -55,7 +55,8 @@ const useAppStore = create(
 
   addPaperTrade: (trade) =>
     set((state) => {
-      const cost = (trade.entryPrice ?? 0) * (trade.quantity ?? 1);
+      // PENDING orders are not yet filled — don't deduct balance until activation
+      const cost = trade.status === 'PENDING' ? 0 : (trade.entryPrice ?? 0) * (trade.quantity ?? 1);
       const newBalance = {
         ...state.paperBalance,
         available: state.paperBalance.available - cost,
@@ -69,14 +70,34 @@ const useAppStore = create(
 
   updatePaperTrade: (updated) =>
     set((state) => {
+      const old = state.paperTrades.find((t) => t.id === updated.id);
+      let paperBalance = state.paperBalance;
+
+      // PENDING → OPEN: deduct cost now that the order is filled
+      if (old?.status === 'PENDING' && updated.status === 'OPEN') {
+        const cost = (updated.entryPrice ?? 0) * (updated.quantity ?? 1);
+        paperBalance = {
+          ...state.paperBalance,
+          available: state.paperBalance.available - cost,
+          invested:  state.paperBalance.invested  + cost,
+        };
+      }
+
       const tradeTicks = updated.status === 'CLOSED'
         ? Object.fromEntries(Object.entries(state.tradeTicks).filter(([k]) => k !== updated.id))
         : state.tradeTicks;
       return {
         paperTrades: state.paperTrades.map((t) => t.id === updated.id ? updated : t),
         tradeTicks,
+        paperBalance,
       };
     }),
+
+  // Remove a single trade by id (used for cancelled pending orders)
+  removePaperTrade: (id) =>
+    set((state) => ({
+      paperTrades: state.paperTrades.filter((t) => t.id !== id),
+    })),
 
   updateTradeTick: (data) =>
     set((state) => ({

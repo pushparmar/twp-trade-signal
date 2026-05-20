@@ -9,6 +9,7 @@ export default function useSSE() {
   const setPollingStatus = useAppStore((s) => s.setPollingStatus);
   const addPaperTrade = useAppStore((s) => s.addPaperTrade);
   const updatePaperTrade = useAppStore((s) => s.updatePaperTrade);
+  const removePaperTrade = useAppStore((s) => s.removePaperTrade);
   const clearPaperTrades = useAppStore((s) => s.clearPaperTrades);
   const setTestMode = useAppStore((s) => s.setTestMode);
   const setPaperBalance = useAppStore((s) => s.setPaperBalance);
@@ -38,18 +39,28 @@ export default function useSSE() {
     es.addEventListener('paper_trade', (e) => {
       const trade = JSON.parse(e.data);
       addPaperTrade(trade);
-      if (trade.source !== 'auto') {
+      if (trade.source !== 'auto' && trade.status !== 'PENDING') {
         addToast({
           type: trade.action === 'BUY' ? 'buy' : 'sell',
           message: `${trade.action} matched — ${trade.symbol} [${trade.tfLabel ?? trade.interval ?? ''}] @ ₹${trade.entryPrice}`,
         });
       }
     });
-    es.addEventListener('paper_trade_update', (e) => updatePaperTrade(JSON.parse(e.data)));
+    es.addEventListener('paper_trade_update', (e) => {
+      const updated = JSON.parse(e.data);
+      updatePaperTrade(updated);
+      // Toast when a pending order triggers
+      if (updated.status === 'OPEN' && updated.triggerPrice != null) {
+        addToast({
+          type: updated.action === 'BUY' ? 'buy' : 'sell',
+          message: `⚡ Triggered — ${updated.symbol} ${updated.action} @ ₹${updated.entryPrice}`,
+        });
+      }
+    });
+    es.addEventListener('paper_trade_cancelled', (e) => removePaperTrade(JSON.parse(e.data).id));
     es.addEventListener('paper_trades_cleared', () => clearPaperTrades());
     es.addEventListener('test_mode', (e) => setTestMode(JSON.parse(e.data).testMode));
     es.addEventListener('paper_balance', (e) => setPaperBalance(JSON.parse(e.data)));
-    // paper_trade_pending is informational — no state needed, toast handled on paper_trade fill
 
     es.addEventListener('tick', (e) => updateTick(JSON.parse(e.data)));
     es.addEventListener('ticker_status', (e) => setTickerConnected(JSON.parse(e.data).connected));
@@ -63,5 +74,5 @@ export default function useSSE() {
     es.addEventListener('paper_trade_tick', (e) => updateTradeTick(JSON.parse(e.data)));
 
     return () => es.close();
-  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData, addScanAlert, updateTradeTick]);
+  }, [addSignal, addOrder, updateOrder, attachGTT, setPollingStatus, addPaperTrade, updatePaperTrade, removePaperTrade, clearPaperTrades, setTestMode, setPaperBalance, addToast, updateTick, setTickerConnected, setIchiSignal, setMacroData, addScanAlert, updateTradeTick]);
 }
