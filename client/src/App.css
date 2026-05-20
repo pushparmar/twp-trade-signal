@@ -4391,7 +4391,7 @@ body {
 
 /* ── AUTO trade badge ─────────────────────────────────────────────────────── */
 .paper-close-icon { display: none; }
-.td-sym-bot  { display: none; }
+.td-sym-bot  { display: inline; font-size: 12px; margin-right: 3px; vertical-align: middle; }
 .td-sym-side { display: none; }
 /* SL shown below symbol on mobile only */
 .td-sym-sl   { display: none; }
@@ -4402,13 +4402,6 @@ body {
   .paper-close-icon  { display: inline; font-size: 16px; line-height: 1; }
   .paper-close-btn   { padding: 2px 6px; min-width: 28px; }
 
-  .td-sym-bot {
-    display: inline;
-    font-size: 11px;
-    margin-right: 3px;
-    vertical-align: middle;
-    line-height: 1;
-  }
   .td-sym-side {
     display: inline-block;
     font-size: 9px;

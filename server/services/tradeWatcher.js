@@ -3,9 +3,16 @@
  *
  * Server-side SL / Target / Trailing-SL handler.
  *
- * Simple rule: once a trade is placed and the token is subscribed to the live
- * ticker, every tick's lastPrice is checked against SL and target.  That's it.
- * No OHLC, no day high/low, no running-extreme map.  Live price is authoritative.
+ * SL / Target exit rule:
+ *   Only triggers when a 15-minute candle CLOSES beyond the level — wick
+ *   touches are ignored.  TSL trailing still runs on every tick so the SL
+ *   moves up/down responsively, but the close decision waits for candle close.
+ *
+ * Price levels per trading mode:
+ *   Futures → trade.sl/target are stored as futures-adjusted levels (spot + basis).
+ *             Futures candle close is compared against futures SL/target. ✓
+ *   Options → trade.sl/target are spot levels; spot candle close is monitored. ✓
+ *   Spot    → trade.sl/target are spot levels; spot candle close is monitored. ✓
  *
  * Output:
  *   • broadcast('paper_trade_update', closedTrade)
@@ -26,11 +33,39 @@ function _kiteService() {
   return require('./kiteService');
 }
 
-const _closing = new Set();
+const _closing           = new Set();
 const _lastTickBroadcast = new Map();
-// Last known options/futures premium for each trade — updated on every derivative tick.
-// Used in _closeTrade so we never need a blocking LTP fetch on the hot path.
-const _lastDerivativeLtp = new Map(); // tradeId → lastPrice
+// Last known derivative (option premium / futures price) per trade — updated on
+// every derivative tick.  Used by _closeTrade so exit PnL is always based on
+// a real market price, not the spot SL/target level.
+const _lastDerivativeLtp = new Map(); // tradeId → lastDerivativePrice
+
+// ── 15-minute candle close tracking ─────────────────────────────────────────
+// SL / Target checks fire only on candle CLOSE to avoid wick-triggered exits.
+const CANDLE_MS        = 15 * 60_000;
+const _tokenSlot       = new Map(); // instrumentToken → current 15m slot start (ms)
+const _tokenClosePrice = new Map(); // instrumentToken → last tick price in current slot
+
+function _15mSlot(nowMs) {
+  return Math.floor(nowMs / CANDLE_MS) * CANDLE_MS;
+}
+
+/**
+ * Update the per-token 15m candle tracker and return the close price of the
+ * candle that JUST ended, or null if no boundary was crossed on this tick.
+ */
+function _trackCandle(token, lastPrice) {
+  const slot = _15mSlot(Date.now());
+  const prev = _tokenSlot.get(token);
+  // A boundary is crossed when we move into a new 15m slot AND we had seen
+  // at least one previous tick (prev != null).
+  const closePrice = (prev != null && prev !== slot)
+    ? _tokenClosePrice.get(token) ?? null
+    : null;
+  _tokenSlot.set(token, slot);
+  _tokenClosePrice.set(token, lastPrice);
+  return closePrice;
+}
 
 function _spotEntry(trade) {
   return trade.spotEntry ?? trade.entryPrice;
@@ -39,6 +74,7 @@ function _spotEntry(trade) {
 /**
  * Move the stop-loss favourably when TSL is enabled and the profit threshold
  * has been crossed.  Mutates trade in-place and persists to store + MongoDB.
+ * Runs on every tick (not just candle close) for responsive trailing.
  *
  * @returns {boolean} true when SL was moved
  */
@@ -88,18 +124,18 @@ function _maybeTrail(trade, ltp, settings) {
 }
 
 /**
- * Check if the current live price hits SL or target.
- * Uses lastPrice only — no OHLC, no day extremes.
+ * Check if the candle-close price breaches SL or target.
+ * Called only when a 15m candle closes — wick-only touches never trigger this.
  *
  * @returns {{ closeAt: number, reason: string } | null}
  */
-function _checkExit(trade, ltp) {
+function _checkExit(trade, candleClose) {
   if (trade.action === 'BUY') {
-    if (trade.sl     != null && ltp <= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
-    if (trade.target != null && ltp >= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
+    if (trade.sl     != null && candleClose <= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
+    if (trade.target != null && candleClose >= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
   } else if (trade.action === 'SELL') {
-    if (trade.sl     != null && ltp >= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
-    if (trade.target != null && ltp <= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
+    if (trade.sl     != null && candleClose >= trade.sl)     return { closeAt: trade.sl,     reason: trade.tslActivated ? 'TSL' : 'SL' };
+    if (trade.target != null && candleClose <= trade.target) return { closeAt: trade.target, reason: 'TARGET' };
   }
   return null;
 }
@@ -110,29 +146,38 @@ async function _closeTrade(trade, closeAt, reason) {
 
   let exitPrice = closeAt;
 
-  // For derivative trades (options or futures), use the most recently cached premium.
-  // This avoids a blocking LTP fetch that can fail when the Kite token is stale.
-  // Fallback chain: cached tick → live API fetch → entryPrice (last resort / 0 PnL)
   if (trade.derivativeToken) {
+    // Fallback chain for derivative trades:
+    //   1. Cached tick price  — always the most current option/futures premium
+    //   2. Live API fetch     — for options when no tick has arrived yet
+    //   3. entryPrice         — absolute last resort (0 PnL); NEVER use closeAt
+    //                          (it's a spot level, not the derivative price)
     const cached = _lastDerivativeLtp.get(trade.id);
     if (cached != null) {
       exitPrice = cached;
-    } else if (trade.tradingMode === 'options' && trade.derivativeSymbol) {
-      // No cached tick yet (trade just placed) — try a one-shot API fetch
-      try {
-        const ltpKey  = `${trade.derivativeExchange}:${trade.derivativeSymbol}`;
-        const ltpData = await _kiteService().getLTP([ltpKey]);
-        const premiumNow = ltpData[ltpKey]?.last_price;
-        if (premiumNow != null) {
-          exitPrice = premiumNow;
-        } else {
-          console.warn(`[TradeWatcher] Options LTP null for ${trade.derivativeSymbol} — using entry price`);
-          exitPrice = trade.entryPrice;
+    } else {
+      const hasSymbol = trade.derivativeSymbol && trade.derivativeExchange;
+      if (hasSymbol) {
+        try {
+          const ltpKey     = `${trade.derivativeExchange}:${trade.derivativeSymbol}`;
+          const ltpData    = await _kiteService().getLTP([ltpKey]);
+          const premiumNow = ltpData[ltpKey]?.last_price;
+          if (premiumNow != null) {
+            exitPrice = premiumNow;
+          } else {
+            console.warn(`[TradeWatcher] Derivative LTP null for ${trade.derivativeSymbol}`);
+            // For options: spot SL level as exit price gives absurd PnL (e.g. ₹1150 vs ₹50 premium)
+            exitPrice = trade.tradingMode === 'options' ? trade.entryPrice : closeAt;
+          }
+        } catch (err) {
+          console.warn(`[TradeWatcher] Derivative LTP fetch failed: ${err.message}`);
+          exitPrice = trade.tradingMode === 'options' ? trade.entryPrice : closeAt;
         }
-      } catch (err) {
-        console.warn(`[TradeWatcher] Option LTP fetch failed for ${trade.derivativeSymbol}:`, err.message);
+      } else if (trade.tradingMode === 'options') {
+        // No symbol at all — cannot use spot closeAt as options exit price
         exitPrice = trade.entryPrice;
       }
+      // Futures with no symbol: closeAt ≈ futures price, acceptable fallback
     }
   }
 
@@ -184,8 +229,13 @@ function onTick(token, lastPrice) {
 
   const numToken = Number(token);
 
-  // ── Pending order activation ─────────────────────────────────────────────────
-  // PENDING trades only match on the underlying token (trigger is always a spot level).
+  // ── 15m candle boundary detection ────────────────────────────────────────
+  // Returns the close price of the candle that just ended, or null if still
+  // within the same 15-minute window.  SL/target checks run ONLY when this
+  // is non-null — wick touches within a candle never trigger an exit.
+  const candleClosePrice = _trackCandle(numToken, lastPrice);
+
+  // ── Pending order activation (tick-based — limit orders fill immediately) ─
   const pendingTrades = store.getPaperTrades().filter(
     (t) =>
       t.status === 'PENDING' &&
@@ -202,7 +252,6 @@ function onTick(token, lastPrice) {
     const activated = store.activatePendingTrade(trade.id);
     if (!activated) continue;
 
-    // Subscribe derivative token now that trade goes live
     if (activated.derivativeToken) {
       try { _ticker().subscribe([Number(activated.derivativeToken)]); } catch { /* ticker may not be ready */ }
     }
@@ -217,7 +266,7 @@ function onTick(token, lastPrice) {
     );
   }
 
-  // Match trades by underlying token OR derivative (futures) token
+  // Match open trades by underlying token OR derivative token
   const openTrades = store.getPaperTrades().filter(
     (t) =>
       t.status === 'OPEN' &&
@@ -232,44 +281,42 @@ function onTick(token, lastPrice) {
   for (const trade of openTrades) {
     const isDerivativeTick = Number(trade.derivativeToken) === numToken;
     const isUnderlyingTick = Number(trade.token) === numToken;
-    const isOptions = trade.tradingMode === 'options';
+    const isOptions        = trade.tradingMode === 'options';
 
-    // SL/target/TSL monitoring — price series must match what trade.sl/target represent:
-    //   Options : trade.sl/target are SPOT levels → check against spot (underlying) tick
-    //   Futures : trade.sl/target are SPOT levels → check against futures tick (≈ spot)
-    //   Legacy  : no derivative → check against underlying tick
-    if (isOptions && isUnderlyingTick) {
-      // Options: monitor via spot price so ₹30 premium is never compared to ₹1,180 SL
+    // ── TSL trailing + SL/Target exit ────────────────────────────────────────
+    // Options  → spot tick: trade.sl/target are spot levels, spot is monitored
+    // Futures  → derivative tick: trade.sl/target are futures-adjusted levels
+    //            (spot + basis stored at trade creation), futures price monitored
+    // Spot     → underlying tick (no derivativeToken)
+    const isMonitorTick =
+      (isOptions && isUnderlyingTick) ||
+      (!isOptions && trade.derivativeToken && isDerivativeTick) ||
+      (!trade.derivativeToken && isUnderlyingTick);
+
+    if (isMonitorTick) {
       _maybeTrail(trade, lastPrice, settings);
-      const exit = _checkExit(trade, lastPrice);
-      if (exit) {
-        _closeTrade(trade, exit.closeAt, exit.reason);
-        continue;
-      }
-    } else if (!isOptions && trade.derivativeToken && isDerivativeTick) {
-      // Futures: futures price tracks spot closely — use it directly
-      _maybeTrail(trade, lastPrice, settings);
-      const exit = _checkExit(trade, lastPrice);
-      if (exit) {
-        _closeTrade(trade, exit.closeAt, exit.reason);
-        continue;
-      }
-    } else if (!trade.derivativeToken && isUnderlyingTick) {
-      // Legacy spot trade
-      _maybeTrail(trade, lastPrice, settings);
-      const exit = _checkExit(trade, lastPrice);
+    }
+
+    // ── SL / Target exit — fires only on 15m candle CLOSE ────────────────────
+    // candleClosePrice is the close of whichever candle this tick belongs to.
+    // For futures: futures candle close vs futures-adjusted SL/target ✓
+    // For options: spot candle close vs spot SL/target ✓
+    if (candleClosePrice != null && isMonitorTick) {
+      const exit = _checkExit(trade, candleClosePrice);
       if (exit) {
         _closeTrade(trade, exit.closeAt, exit.reason);
         continue;
       }
     }
 
-    // Cache derivative price so _closeTrade can use it without a blocking API call
+    // ── Derivative LTP cache — updated on every derivative tick ─────────────
+    // _closeTrade reads this to compute PnL from real option premium,
+    // not from the spot SL/target level.
     if (isDerivativeTick && trade.derivativeToken) {
       _lastDerivativeLtp.set(trade.id, lastPrice);
     }
 
-    // Broadcast PnL — always use derivative tick (premium for options, futures price for futures)
+    // ── Live PnL broadcast — throttled to 500 ms per trade ──────────────────
     const shouldBroadcast = trade.derivativeToken ? isDerivativeTick : isUnderlyingTick;
     if (shouldBroadcast) {
       const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;

@@ -3,12 +3,10 @@
  *
  * Automatically places paper trades when scan alerts arrive.
  *
- * Testing-mode position sizing:
- *   ┌──────────────────────────────────────────────────────────┐
- *   │  quantity = 1 (fixed — generates max samples for analysis)│
- *   │  Require R:R ≥ minRR (default 2.0)                       │
- *   │  No max R:R cap — pattern's natural target is used as-is │
- *   └──────────────────────────────────────────────────────────┘
+ * SPOT / CASH ONLY (options + futures resolution disabled).
+ *   Entry, SL, and target are all spot price levels straight from the alert.
+ *   tradeWatcher's spot path runs because trade.derivativeToken is null.
+ *   Re-enable derivativeResolver call in step 5 to bring back options/futures.
  *
  * Guards:
  *   • autoTrader.enabled must be true (off by default — user opts in)
@@ -185,14 +183,17 @@ async function _onAlert(alert, source) {
     }
   }
 
-  // ── 5. Resolve derivative instrument ──────────────────────────────────────
-  const resolved = await derivativeResolver.resolve(alert, settings.tradingMode);
-  if (!resolved) return;
+  // ── 5. (DISABLED) Derivative resolution ──────────────────────────────────
+  // Auto-trader currently runs on SPOT/CASH only.  Re-enable this block to
+  // route alerts to options / futures via derivativeResolver again.
+  // const resolved = await derivativeResolver.resolve(alert, settings.tradingMode);
+  // if (!resolved) return;
 
-  // ── 6. Qualify the trade with real lot sizing ─────────────────────────────
+  // ── 6. Qualify the trade — spot mode uses lotSize=1 ──────────────────────
+  const lotSize = 1;
   const pos = _qualifyTrade(
     usedEntry, usedSl, usedTarget, settings.minRR,
-    resolved.lotSize, settings.riskPerTrade, settings.sizingMode,
+    lotSize, settings.riskPerTrade, settings.sizingMode,
   );
   if (!pos) {
     const rrRatio = (Math.abs(usedTarget - usedEntry) / Math.abs(usedEntry - usedSl)).toFixed(2);
@@ -203,12 +204,10 @@ async function _onAlert(alert, source) {
     return;
   }
 
-  // ── 6.5 Capital check ────────────────────────────────────────────────────
-  const derivativeEntry = settings.tradingMode === 'options'
-    ? resolved.premium
-    : (resolved.premium || Number(usedEntry));
-  const cost = pos.quantity * derivativeEntry;
-  const balance = store.getPaperBalance();
+  // ── 6.5 Capital check (spot) ─────────────────────────────────────────────
+  const spotEntry = Number(usedEntry);
+  const cost      = pos.quantity * spotEntry;
+  const balance   = store.getPaperBalance();
   if (cost > balance.available) {
     console.log(
       `[AutoTrader] ⏭  ${alert.label ?? token} — insufficient balance ` +
@@ -222,7 +221,9 @@ async function _onAlert(alert, source) {
 
   const action = signal === 'bullish' ? 'BUY' : 'SELL';
 
-  // ── 8. Build trade object ─────────────────────────────────────────────────
+  // ── 8. Build trade object (SPOT/CASH only) ───────────────────────────────
+  // Derivative-related fields kept as null so tradeWatcher's spot path runs
+  // (it triggers when !trade.derivativeToken && isUnderlyingTick).
   const trade = {
     id:              uuidv4(),
     ts:              Date.now(),
@@ -232,32 +233,31 @@ async function _onAlert(alert, source) {
     symbol:          alert.label || String(numToken),
     token:           numToken,
     exchange:        alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE'),
-    // Derivative instrument
-    tradingMode:     settings.tradingMode,
-    derivativeSymbol:   resolved.derivativeSymbol,
-    derivativeToken:    resolved.derivativeToken,
-    derivativeExchange: resolved.derivativeExchange,
-    optionType:      resolved.optionType ?? null,
-    strike:          resolved.strike ?? null,
-    expiry:          resolved.expiry ?? null,
-    premium:         resolved.premium ?? null,
+    // Derivative fields — disabled (spot only)
+    tradingMode:        'spot',
+    derivativeSymbol:   null,
+    derivativeToken:    null,
+    derivativeExchange: null,
+    optionType:         null,
+    strike:             null,
+    expiry:             null,
+    premium:            null,
     // Order sizing
     action,
     quantity:        pos.quantity,
     lots:            pos.lots,
     lotSize:         pos.lotSize,
-    // Entry: premium for options, futures LTP for futures
-    entryPrice:      derivativeEntry,
-    spotEntry:       Number(usedEntry),
+    // Entry / SL / target — all spot levels
+    entryPrice:      spotEntry,
+    spotEntry:       spotEntry,
     exitPrice:       null,
-    // SL/target — uses largest TF levels when MTF confluence detected
     sl:              Number(usedSl),
     initialSl:       Number(usedSl),
     target:          Number(usedTarget),
     mtfSource:       mtfSource,
     // TSL state
     tslActivated:    false,
-    peakPrice:       Number(usedEntry),
+    peakPrice:       spotEntry,
     status:          'OPEN',
     pnl:             null,
     closedTs:        null,
@@ -279,26 +279,21 @@ async function _onAlert(alert, source) {
   broadcast('paper_trade', trade);
   broadcast('paper_balance', store.getPaperBalance());
 
-  // Subscribe underlying + derivative token to live ticker
+  // Subscribe underlying token to live ticker (no derivative subscription)
   try {
-    const tokens = [numToken];
-    if (resolved.derivativeToken) tokens.push(resolved.derivativeToken);
-    kiteTicker.subscribe(tokens);
+    kiteTicker.subscribe([numToken]);
   } catch (err) {
-    console.warn(`[AutoTrader] Could not subscribe tokens:`, err.message);
+    console.warn(`[AutoTrader] Could not subscribe token:`, err.message);
   }
 
   db.tradeRepo.upsertTrade(trade);
 
-  const modeTag = settings.tradingMode === 'options'
-    ? `${resolved.optionType} ₹${resolved.strike} prem=₹${resolved.premium}`
-    : `FUT ₹${derivativeEntry}`;
   const mtfTag = mtfSource ? ` ⚡MTF(${mtfSource})` : '';
   console.log(
-    `[AutoTrader] 🤖 ${action} ${trade.symbol} ${modeTag} ` +
+    `[AutoTrader] 🤖 ${action} ${trade.symbol} SPOT ₹${spotEntry} ` +
     `[${alert.tfLabel ?? interval}] ${patternId}${mtfTag} ` +
-    `spot=₹${usedEntry} sl=₹${usedSl} tgt=₹${usedTarget} ` +
-    `R:R=${pos.rrRatio} ${pos.lots}L×${pos.lotSize}=${pos.quantity}qty [${source}]`,
+    `sl=₹${usedSl} tgt=₹${usedTarget} ` +
+    `R:R=${pos.rrRatio} qty=${pos.quantity} [${source}]`,
   );
 }
 
