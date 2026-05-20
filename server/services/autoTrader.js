@@ -1,12 +1,16 @@
 /**
  * autoTrader.js
  *
- * Automatically places paper trades when scan alerts arrive.
+ * Automatically places paper trades on the underlying SHARE (cash/equity)
+ * when scan alerts arrive.  No futures, no options — entry, SL, and target
+ * are all share-price levels straight from the alert.
  *
- * SPOT / CASH ONLY (options + futures resolution disabled).
- *   Entry, SL, and target are all spot price levels straight from the alert.
- *   tradeWatcher's spot path runs because trade.derivativeToken is null.
- *   Re-enable derivativeResolver call in step 5 to bring back options/futures.
+ * Flow on every alert:
+ *   1. Validate alert + guards (market hours, dedup, no stacking)
+ *   2. Optional MTF override (use higher-TF levels when aligned)
+ *   3. Size the position (risk-based or fixed)
+ *   4. Subscribe the share's instrument token to the live ticker
+ *   5. tradeWatcher manages SL / TSL / target on share ticks per-tick
  *
  * Guards:
  *   • autoTrader.enabled must be true (off by default — user opts in)
@@ -20,13 +24,12 @@
  *   • stop()   — unsubscribes; called on graceful shutdown
  */
 
-const { v4: uuidv4 }    = require('uuid');
-const store             = require('../store');
-const { broadcast }     = require('../sseHub');
-const alertBus          = require('./alertBus');
-const kiteTicker        = require('./kiteTicker');
-const db                = require('../db');
-const derivativeResolver = require('./derivativeResolver');
+const { v4: uuidv4 } = require('uuid');
+const store          = require('../store');
+const { broadcast }  = require('../sseHub');
+const alertBus       = require('./alertBus');
+const kiteTicker     = require('./kiteTicker');
+const db             = require('../db');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
@@ -57,35 +60,26 @@ function _istDateStr() {
 function _round2(v) { return Math.round(v * 100) / 100; }
 
 /**
- * @param {number} entry        Entry price (spot close)
- * @param {number} sl           Stop-loss from the pattern engine
- * @param {number} target       Target from the pattern engine
- * @param {number} minRR        Minimum reward:risk ratio
- * @param {number} lotSize      Exchange lot size for the instrument
- * @param {number} riskPerTrade Max risk in rupees per trade
- * @param {string} sizingMode   'risk' | 'fixed'
- * @returns {{ lots, lotSize, quantity, riskPerUnit, potentialProfit, rrRatio } | null}
+ * @param {number} entry         Share entry price
+ * @param {number} sl            Stop-loss from the pattern engine
+ * @param {number} target        Target from the pattern engine
+ * @param {number} minRR         Minimum reward:risk ratio
+ * @param {number} riskPerTrade  Max risk in rupees per trade
+ * @param {string} sizingMode    'risk' | 'fixed'
+ * @returns {{ quantity, riskPerUnit, potentialProfit, rrRatio } | null}
  */
-function _qualifyTrade(entry, sl, target, minRR, lotSize, riskPerTrade, sizingMode) {
+function _qualifyTrade(entry, sl, target, minRR, riskPerTrade, sizingMode) {
   const riskPerUnit = Math.abs(entry - sl);
   if (riskPerUnit < 0.01) return null;
 
   const rrRatio = Math.abs(target - entry) / riskPerUnit;
   if (rrRatio < minRR) return null;
 
-  let lots;
-  if (sizingMode === 'fixed') {
-    lots = 1;
-  } else {
-    const riskPerLot = riskPerUnit * lotSize;
-    lots = Math.max(1, Math.floor(riskPerTrade / riskPerLot));
-  }
-
-  const quantity = lots * lotSize;
+  const quantity = sizingMode === 'fixed'
+    ? 1
+    : Math.max(1, Math.floor(riskPerTrade / riskPerUnit));
 
   return {
-    lots,
-    lotSize,
     quantity,
     riskPerUnit:     _round2(riskPerUnit),
     potentialProfit: _round2(Math.abs(target - entry) * quantity),
@@ -97,13 +91,11 @@ function _qualifyTrade(entry, sl, target, minRR, lotSize, riskPerTrade, sizingMo
 
 /**
  * Invoked for every alert emitted on alertBus.
- * Runs all guards, resolves the derivative instrument, sizes the position,
- * and places the paper trade.
  *
  * @param {object} alert   The full alert payload (same shape as scan_alert SSE)
  * @param {string} source  'background' | 'live' | 'manual'
  */
-async function _onAlert(alert, source) {
+function _onAlert(alert, source) {
   // ── 1. Feature gate ──────────────────────────────────────────────────────
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
@@ -146,8 +138,6 @@ async function _onAlert(alert, source) {
   }
 
   // ── 4.5 MTF confluence — use the largest timeframe's SL/target/entry ─────
-  // When multiple TFs fire the same signal, the higher TF's levels are wider
-  // and more reliable. Override entry/sl/target with the largest aligned TF.
   let usedEntry  = entry;
   let usedSl     = sl;
   let usedTarget = target;
@@ -159,8 +149,6 @@ async function _onAlert(alert, source) {
     let bestData = null;
 
     for (const tfLabel of alert.alignedTfs) {
-      // Find the cached alert for this TF
-      // alignedTfs contains display labels like '4h', '1h', '1d'
       const tfCacheKey = `${token}:${signal}:${_labelToInterval(tfLabel)}`;
       const cached = _alertCache.get(tfCacheKey);
       if (!cached || cached.sl == null || cached.target == null) continue;
@@ -183,17 +171,10 @@ async function _onAlert(alert, source) {
     }
   }
 
-  // ── 5. (DISABLED) Derivative resolution ──────────────────────────────────
-  // Auto-trader currently runs on SPOT/CASH only.  Re-enable this block to
-  // route alerts to options / futures via derivativeResolver again.
-  // const resolved = await derivativeResolver.resolve(alert, settings.tradingMode);
-  // if (!resolved) return;
-
-  // ── 6. Qualify the trade — spot mode uses lotSize=1 ──────────────────────
-  const lotSize = 1;
+  // ── 5. Qualify trade — risk sizing on share price ────────────────────────
   const pos = _qualifyTrade(
     usedEntry, usedSl, usedTarget, settings.minRR,
-    lotSize, settings.riskPerTrade, settings.sizingMode,
+    settings.riskPerTrade, settings.sizingMode,
   );
   if (!pos) {
     const rrRatio = (Math.abs(usedTarget - usedEntry) / Math.abs(usedEntry - usedSl)).toFixed(2);
@@ -204,10 +185,10 @@ async function _onAlert(alert, source) {
     return;
   }
 
-  // ── 6.5 Capital check (spot) ─────────────────────────────────────────────
-  const spotEntry = Number(usedEntry);
-  const cost      = pos.quantity * spotEntry;
-  const balance   = store.getPaperBalance();
+  // ── 6. Capital check ─────────────────────────────────────────────────────
+  const shareEntry = Number(usedEntry);
+  const cost       = pos.quantity * shareEntry;
+  const balance    = store.getPaperBalance();
   if (cost > balance.available) {
     console.log(
       `[AutoTrader] ⏭  ${alert.label ?? token} — insufficient balance ` +
@@ -221,35 +202,21 @@ async function _onAlert(alert, source) {
 
   const action = signal === 'bullish' ? 'BUY' : 'SELL';
 
-  // ── 8. Build trade object (SPOT/CASH only) ───────────────────────────────
-  // Derivative-related fields kept as null so tradeWatcher's spot path runs
-  // (it triggers when !trade.derivativeToken && isUnderlyingTick).
+  // ── 8. Build trade object — cash equity, all share-price levels ──────────
   const trade = {
     id:              uuidv4(),
     ts:              Date.now(),
     source:          'auto',
     autoSource:      source,
-    // Underlying instrument
+    // Instrument (share)
     symbol:          alert.label || String(numToken),
     token:           numToken,
     exchange:        alert.exchange ?? (isMcxSymbol ? 'MCX' : 'NSE'),
-    // Derivative fields — disabled (spot only)
-    tradingMode:        'spot',
-    derivativeSymbol:   null,
-    derivativeToken:    null,
-    derivativeExchange: null,
-    optionType:         null,
-    strike:             null,
-    expiry:             null,
-    premium:            null,
     // Order sizing
     action,
     quantity:        pos.quantity,
-    lots:            pos.lots,
-    lotSize:         pos.lotSize,
-    // Entry / SL / target — all spot levels
-    entryPrice:      spotEntry,
-    spotEntry:       spotEntry,
+    // Entry / SL / target — all share-price levels
+    entryPrice:      shareEntry,
     exitPrice:       null,
     sl:              Number(usedSl),
     initialSl:       Number(usedSl),
@@ -257,7 +224,7 @@ async function _onAlert(alert, source) {
     mtfSource:       mtfSource,
     // TSL state
     tslActivated:    false,
-    peakPrice:       spotEntry,
+    peakPrice:       shareEntry,
     status:          'OPEN',
     pnl:             null,
     closedTs:        null,
@@ -279,7 +246,7 @@ async function _onAlert(alert, source) {
   broadcast('paper_trade', trade);
   broadcast('paper_balance', store.getPaperBalance());
 
-  // Subscribe underlying token to live ticker (no derivative subscription)
+  // Subscribe the share's instrument token to the live ticker
   try {
     kiteTicker.subscribe([numToken]);
   } catch (err) {
@@ -290,7 +257,7 @@ async function _onAlert(alert, source) {
 
   const mtfTag = mtfSource ? ` ⚡MTF(${mtfSource})` : '';
   console.log(
-    `[AutoTrader] 🤖 ${action} ${trade.symbol} SPOT ₹${spotEntry} ` +
+    `[AutoTrader] 🤖 ${action} ${trade.symbol} @ ₹${shareEntry} ` +
     `[${alert.tfLabel ?? interval}] ${patternId}${mtfTag} ` +
     `sl=₹${usedSl} tgt=₹${usedTarget} ` +
     `R:R=${pos.rrRatio} qty=${pos.quantity} [${source}]`,
@@ -302,9 +269,11 @@ async function _onAlert(alert, source) {
 /** Start listening for scan alerts. Call once after store is loaded. */
 function start() {
   alertBus.on('alert', (alert, source) => {
-    _onAlert(alert, source).catch((err) => {
+    try {
+      _onAlert(alert, source);
+    } catch (err) {
       console.error('[AutoTrader] _onAlert error:', err.message);
-    });
+    }
   });
   console.log('[AutoTrader] Started — will auto-place paper trades on scan alerts');
 }
