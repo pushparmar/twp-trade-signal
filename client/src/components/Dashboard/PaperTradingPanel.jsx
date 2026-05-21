@@ -1084,7 +1084,14 @@ export default function PaperTradingPanel() {
 // ── Order History Panel — fetch any date's trades directly from MongoDB ───────
 function OrderHistoryPanel() {
     const todayStr = toIstDateStr(Date.now());
-    const [selectedDate, setSelectedDate] = useState(todayStr);
+
+    // Default to yesterday — today's trades are visible in Closed Trades above.
+    const yesterdayStr = (() => {
+        const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        return toIstDateStr(d.getTime());
+    })();
+
+    const [selectedDate, setSelectedDate] = useState(yesterdayStr);
     const [trades,       setTrades]       = useState(null);   // null = not fetched yet
     const [loading,      setLoading]      = useState(false);
     const [error,        setError]        = useState('');
@@ -1098,6 +1105,9 @@ function OrderHistoryPanel() {
     }, []);
 
     async function fetchDate(date) {
+        // Today's trades are already visible in the Closed Trades section above.
+        if (date === todayStr) return;
+
         setLoading(true);
         setError('');
         try {
@@ -1119,7 +1129,9 @@ function OrderHistoryPanel() {
             const d = new Date(selectedDate);
             d.setDate(d.getDate() + dir);
             const next = d.toISOString().slice(0, 10);
-            fetchDate(next);
+            // Skip today
+            if (next !== todayStr) fetchDate(next);
+            else setSelectedDate(next);
             return;
         }
         const idx = tradingDates.indexOf(selectedDate);
@@ -1128,10 +1140,17 @@ function OrderHistoryPanel() {
             ? (dir === -1 ? 0 : tradingDates.length - 1)
             : idx - dir; // dir +1 = newer (lower idx), dir -1 = older (higher idx)
         if (nextIdx >= 0 && nextIdx < tradingDates.length) {
-            fetchDate(tradingDates[nextIdx]);
+            const nextDate = tradingDates[nextIdx];
+            // If navigating forward lands on today just update the picker (no fetch)
+            if (nextDate === todayStr) {
+                setSelectedDate(nextDate);
+            } else {
+                fetchDate(nextDate);
+            }
         }
     }
 
+    const isToday        = selectedDate === todayStr;
     const closedHistory  = (trades ?? []).filter(t => t.status === 'CLOSED');
     const openHistory    = (trades ?? []).filter(t => t.status === 'OPEN' || t.status === 'PENDING');
     const totalPnl       = closedHistory.reduce((s, t) => s + (t.pnl || 0), 0);
@@ -1155,7 +1174,7 @@ function OrderHistoryPanel() {
                         className="oh-date-input"
                         value={selectedDate}
                         max={todayStr}
-                        onChange={e => setSelectedDate(e.target.value)}
+                        onChange={e => { setSelectedDate(e.target.value); setTrades(null); }}
                         onKeyDown={e => e.key === 'Enter' && fetchDate(selectedDate)}
                     />
                     <button
@@ -1167,15 +1186,24 @@ function OrderHistoryPanel() {
                     <button
                         className="btn btn-primary btn-sm"
                         onClick={() => fetchDate(selectedDate)}
-                        disabled={loading}
+                        disabled={loading || isToday}
+                        title={isToday ? "Today's trades are shown in Closed Trades above" : ''}
                     >
                         {loading ? 'Loading…' : 'Fetch'}
                     </button>
                 </div>
             </div>
 
+            {/* ── Today notice — no fetch allowed ── */}
+            {isToday && (
+                <div className="oh-hint oh-hint--today">
+                    Today's trades are visible in the <strong>Closed Trades</strong> section above.
+                    Select a past date to view history.
+                </div>
+            )}
+
             {/* ── Summary strip (only when trades loaded) ── */}
-            {trades !== null && !loading && (
+            {!isToday && trades !== null && !loading && (
                 <div className="oh-summary">
                     <span className="oh-sum-label">{fmtDateLabel(selectedDate)}</span>
                     <span className="oh-sum-item">{trades.length} trade{trades.length !== 1 ? 's' : ''}</span>
@@ -1201,8 +1229,8 @@ function OrderHistoryPanel() {
 
             {error && <div className="oh-error">{error}</div>}
 
-            {/* ── Trade table ── */}
-            {trades !== null && trades.length > 0 && (
+            {/* ── Trade table — hidden until Fetch is clicked ── */}
+            {!isToday && trades !== null && trades.length > 0 && (
                 <div className="kite-table-wrap">
                     <table className="kite-table">
                         <thead>
@@ -1213,7 +1241,9 @@ function OrderHistoryPanel() {
                                 <th className="th-tf">TF</th>
                                 <th className="th-num">Entry</th>
                                 <th className="th-num mob-hide">Exit</th>
-                                <th className="th-num">Qty</th>
+                                <th className="th-num mob-hide">SL</th>
+                                <th className="th-num mob-hide">Target</th>
+                                <th className="th-num mob-hide">Qty</th>
                                 <th className="th-num">P&L</th>
                                 <th className="th-num mob-hide">Status</th>
                             </tr>
@@ -1243,7 +1273,13 @@ function OrderHistoryPanel() {
                                     </td>
                                     <td className="td-num">{fmtPrice(t.entryPrice)}</td>
                                     <td className="td-num mob-hide">{t.exitPrice != null ? fmtPrice(t.exitPrice) : '—'}</td>
-                                    <td className="td-num">
+                                    <td className="td-num mob-hide" style={{ color: 'var(--red)' }}>
+                                        {t.sl != null ? fmtPrice(t.sl) : '—'}
+                                    </td>
+                                    <td className="td-num mob-hide" style={{ color: 'var(--green)' }}>
+                                        {t.target != null ? fmtPrice(t.target) : '—'}
+                                    </td>
+                                    <td className="td-num mob-hide">
                                         {t.lots != null && t.lotSize > 1
                                             ? <span title={`${t.lots}L × ${t.lotSize}`}>{t.lots}L</span>
                                             : t.quantity}
@@ -1263,12 +1299,12 @@ function OrderHistoryPanel() {
                 </div>
             )}
 
-            {trades !== null && trades.length === 0 && !loading && (
-                <div className="oh-empty">No trades found for {fmtDateLabel(selectedDate)}</div>
+            {!isToday && trades !== null && trades.length === 0 && !loading && (
+                <div className="oh-empty">No trades found for {fmtDateLabel(selectedDate)}.</div>
             )}
 
-            {trades === null && !loading && (
-                <div className="oh-hint">Select a date and press <strong>Fetch</strong> to load order history from DB.</div>
+            {!isToday && trades === null && !loading && (
+                <div className="oh-hint">Select a past date and press <strong>Fetch</strong> to load order history from DB.</div>
             )}
         </div>
     );

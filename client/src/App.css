@@ -2116,7 +2116,7 @@ body {
 
   /* ── Page ────────────────────────────────────────── */
   /* bottom-nav (~52px) + floating theme btn + breathing room */
-  .page { padding: 12px 12px 110px; }
+  .page { padding: 12px 12px 20px; }
 
   .page-header {
     flex-direction: row;
@@ -4892,8 +4892,34 @@ body {
   font-style: italic;
 }
 
+/* "Today not available" notice — warmer tone, not italic */
+.oh-hint--today {
+  font-style: normal;
+  color: var(--txt2);
+  background: rgba(251,191,36,.07);
+  border: 1px solid rgba(251,191,36,.18);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-top: 4px;
+}
+
 @media (max-width: 768px) {
-  .oh-date-input   { max-width: 100%; flex: 1 1 100%; }
-  .oh-controls     { gap: 4px; }
-  .oh-sum-pnl      { font-size: 12px; }
+  /* Stack the section title above the calendar controls on mobile */
+  .oh-panel .section-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  /* Controls row goes full-width so all buttons stay on one line */
+  .oh-controls {
+    width: 100%;
+    gap: 4px;
+  }
+  /* Date input stretches to fill remaining space between the nav buttons */
+  .oh-date-input {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: none;
+  }
+  .oh-sum-pnl  { font-size: 12px; }
 }

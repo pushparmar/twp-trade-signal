@@ -230,27 +230,8 @@ export default function Dashboard() {
 
             {/* Orders */}
             <section className="dash-section">
-                <div className="section-header">
-                    <h3 className="section-title">
-                        Orders <span className="count-badge">{filteredOrders.length}</span>
-                    </h3>
-                    <div className="order-filter-group" role="tablist">
-                        {["all", "auto", "manual"].map(key => (
-                            <button
-                                key={key}
-                                className={`order-filter-btn ${orderFilter === key ? "is-active" : ""}`}
-                                onClick={() => setOrderFilter(key)}
-                                type="button"
-                            >
-                                {key === "all" ? "All" : key === "auto" ? "Auto" : "Manual"}
-                            </button>
-                        ))}
-                    </div>
-                </div>
                 {filteredOrders.length === 0 ? (
-                    <div className="empty-card">
-                        <p>{orders.length === 0 ? "No orders placed yet." : `No ${orderFilter} orders.`}</p>
-                    </div>
+                    ""
                 ) : (
                     <div className="kite-table-wrap">
                         <table className="kite-table">
