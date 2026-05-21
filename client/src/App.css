@@ -1290,7 +1290,7 @@ body {
 @media (max-width: 768px) {
   .sidebar { position: fixed; z-index: 100; }
   .sidebar--collapsed { width: 0; border: none; }
-  .main-area { width: 100%; }
+  .main-area { width: 100%; padding:10px;}
   .page { padding: 16px;margin-top:70px; }
   .summary-row { grid-template-columns: repeat(1, 1fr); }
   .field-row { grid-template-columns: 1fr; }
@@ -4771,7 +4771,7 @@ body {
   .header-strip {
     padding: 8px 10px;
     gap: 0;
-    top:55px;
+    top:45px;
   }
   .hdr-item {
     padding: 2px 8px;
