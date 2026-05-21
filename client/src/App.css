@@ -63,6 +63,7 @@ body {
   font-size: 13px;
   line-height: 1.5;
   min-height: 100vh;
+  min-height: 100dvh; /* iOS Safari: dynamic viewport excludes browser chrome */
   transition: background 0.25s, color 0.25s;
   overflow: hidden;
 }
@@ -72,6 +73,7 @@ body {
   display: flex;
   width: 100vw;
   height: 100vh;
+  height: 100dvh; /* iOS Safari: dynamic viewport excludes browser chrome */
   overflow: hidden;
 }
 
@@ -79,6 +81,7 @@ body {
 .sidebar {
   width: var(--sidebar-width);
   height: 100vh;
+  height: 100dvh; /* iOS Safari: dynamic viewport */
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
@@ -4471,6 +4474,43 @@ body {
 .pill-tf       { background: rgba(100,116,139,.15); color: #94a3b8; }
 
 /* ── TF group headers in open-trades section ──────────────────────────────── */
+/* ── Closed trades — date-wise grouping ──────────────────────────────────── */
+.closed-date-group {
+  margin-bottom: 2px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.closed-date-group:last-child { margin-bottom: 0; }
+
+.closed-date-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s;
+  color: var(--txt);
+}
+.closed-date-header:hover { background: var(--hover); }
+
+.cdh-arrow  { font-size: 10px; color: var(--txt3); flex-shrink: 0; }
+.cdh-date   { font-size: 13px; font-weight: 600; flex: 1; }
+.cdh-meta   { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.cdh-count  { font-size: 11px; color: var(--txt3); }
+.cdh-wr     { font-size: 11px; font-weight: 600; }
+.cdh-pnl    { font-family: var(--mono); font-size: 13px; font-weight: 700; min-width: 80px; text-align: right; }
+
+@media (max-width: 768px) {
+  .cdh-count  { display: none; }
+  .cdh-date   { font-size: 12px; }
+  .cdh-pnl    { font-size: 12px; min-width: 60px; }
+}
+
 .paper-tf-group { margin-bottom: 16px; }
 .paper-tf-group:last-child { margin-bottom: 0; }
 
@@ -4700,4 +4740,113 @@ body {
 /* ── Numeric column headers — right-aligned to match td.td-num data ───────── */
 .kite-table th.th-num {
   text-align: right;
+}
+
+/* ── Order History Panel ──────────────────────────────────────────────────── */
+.oh-panel {
+  margin-top: 24px;
+}
+
+/* Controls row: nav buttons + date input + fetch button */
+.oh-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.oh-nav-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.oh-date-input {
+  flex: 1 1 140px;
+  min-width: 120px;
+  max-width: 180px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  background: var(--surface);
+  color: var(--txt);
+  border: 1px solid var(--border2);
+  border-radius: 5px;
+  outline: none;
+  transition: border-color 150ms;
+}
+.oh-date-input:focus {
+  border-color: var(--blue);
+}
+
+/* Summary strip below controls */
+.oh-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.oh-sum-label {
+  font-weight: 700;
+  color: var(--txt);
+  margin-right: 4px;
+}
+
+.oh-sum-item {
+  color: var(--txt2);
+  white-space: nowrap;
+}
+
+.oh-sum-pnl {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* Status badge inside table rows */
+.oh-status {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.oh-status--open {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.oh-status--closed {
+  background: rgba(148,163,184,.12);
+  color: var(--txt3);
+}
+
+/* Error / empty / hint states */
+.oh-error {
+  color: var(--red);
+  font-size: 12px;
+  padding: 10px 4px;
+}
+
+.oh-empty,
+.oh-hint {
+  color: var(--txt3);
+  font-size: 12px;
+  text-align: center;
+  padding: 20px 0;
+  font-style: italic;
+}
+
+@media (max-width: 768px) {
+  .oh-date-input   { max-width: 100%; flex: 1 1 100%; }
+  .oh-controls     { gap: 4px; }
+  .oh-sum-pnl      { font-size: 12px; }
 }

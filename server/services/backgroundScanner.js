@@ -322,22 +322,6 @@ async function _runScanForInterval(interval) {
   const t0 = Date.now();
   console.log(`[BgScanner] ${tfLabel} candle close — scanning ${instruments.length} stocks × ${patterns.length} patterns`);
 
-  // Notify that the scan has started
-  if (chatId) {
-    const now = new Date(Date.now() + IST_OFFSET_MS);
-    const timeStr = now.toISOString().replace('T', ' ').slice(0, 16) + ' IST';
-    try {
-      await telegramNotifier.sendMessage(
-        chatId,
-        `🔍 <b>Auto-scan started</b> — ${tfLabel} candle close\n` +
-        `📊 Scanning ${instruments.length} F&O stocks × ${patterns.length} patterns\n` +
-        `🕐 ${timeStr}`,
-      );
-    } catch (err) {
-      console.warn('[BgScanner] Start notification failed:', err.message);
-    }
-  }
-
   let scannedCount = 0;
   let matchCount   = 0;
 
@@ -466,13 +450,14 @@ async function _runScanForInterval(interval) {
     `${matchCount} alert${matchCount !== 1 ? 's' : ''} sent (${elapsed}s)`,
   );
 
-  // Send completion summary
-  if (chatId) {
-    const summary = matchCount > 0
-      ? `✅ <b>Scan done</b> — ${tfLabel} · ${matchCount} match${matchCount !== 1 ? 'es' : ''} found\n` +
-        `📊 ${scannedCount} stocks scanned in ${elapsed}s`
-      : `✅ <b>Scan done</b> — ${tfLabel} · no new matches\n` +
-        `📊 ${scannedCount} stocks scanned in ${elapsed}s`;
+  // Send completion summary ONLY when matches were found.
+  // "No matches" messages would flood the chat (one every 15 min during MCX hours)
+  // and bury the actual alerts that matter. The scan result is always visible in
+  // the Railway / server console logs and the Scanner tab in the UI.
+  if (chatId && matchCount > 0) {
+    const summary =
+      `✅ <b>Scan done</b> — ${tfLabel} · ${matchCount} match${matchCount !== 1 ? 'es' : ''} found\n` +
+      `📊 ${scannedCount} stocks scanned in ${elapsed}s`;
     try {
       await telegramNotifier.sendMessage(chatId, summary);
     } catch (err) {

@@ -114,7 +114,8 @@ router.get('/open-from-db', async (req, res) => {
  */
 router.get('/recent-from-db', async (req, res) => {
   try {
-    const trades = await db.tradeRepo.getRecentTrades(200);
+    const limit = Math.min(1000, Math.max(1, Number(req.query.limit) || 200));
+    const trades = await db.tradeRepo.getRecentTrades(limit);
     // Restore any trades missing from the in-memory store (e.g. server restart
     // without persistent disk, or race between boot and first client connect).
     const current = getPaperTrades();
@@ -136,6 +137,38 @@ router.get('/recent-from-db', async (req, res) => {
       broadcast('paper_balance', getPaperBalance());
     }
     res.json(trades);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/paper/by-date?date=YYYY-MM-DD
+ * Fetch all trades opened on the given IST calendar date from MongoDB.
+ * Supports prev/next navigation from the client without re-fetching the full list.
+ */
+router.get('/by-date', async (req, res) => {
+  const { date } = req.query;
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'date query param required (YYYY-MM-DD)' });
+  }
+  try {
+    const trades = await db.tradeRepo.getByDate(date);
+    res.json({ date, trades });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/paper/trading-dates
+ * Returns all distinct IST dates that have at least one trade in MongoDB.
+ * Used by the client date picker to show only valid trading days.
+ */
+router.get('/trading-dates', async (req, res) => {
+  try {
+    const dates = await db.tradeRepo.getTradingDates();
+    res.json(dates);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

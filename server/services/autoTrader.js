@@ -126,6 +126,36 @@ function _onAlert(alert, source) {
 
   if (!entry || !sl || !target || !token || !signal) return;
 
+  // ── 2.1  Index / non-tradeable instrument gate ───────────────────────────
+  // Indices (NIFTY, BANKNIFTY, SENSEX, VIX, etc.) cannot be traded directly;
+  // only their derivatives can.  Drop any alert whose token or label matches
+  // a known index so we never accidentally open a paper trade on them.
+  const NON_TRADEABLE_TOKENS = new Set([
+    256265,  // NIFTY 50  (NSE:NIFTY 50)
+    260105,  // NIFTY BANK
+    264969,  // India VIX
+    274441,  // NIFTY FIN SERVICE (FINNIFTY)
+    288009,  // NIFTY MIDCAP SELECT (MIDCPNIFTY)
+    265,     // BSE SENSEX
+    270857,  // BSE BANKEX
+  ]);
+  // Label-based guard catches any future index that maps to a known name.
+  const NON_TRADEABLE_LABEL_RE =
+    /\b(NIFTY|BANK\s?NIFTY|SENSEX|VIX|BANKEX|FINNIFTY|MIDCPNIFTY)\b/i;
+
+  if (NON_TRADEABLE_TOKENS.has(Number(token))) {
+    console.log(
+      `[AutoTrader] ⛔ Skipped index token ${token} (${alert.label ?? '?'}) — not tradeable`,
+    );
+    return;
+  }
+  if (NON_TRADEABLE_LABEL_RE.test(String(alert.label ?? ''))) {
+    console.log(
+      `[AutoTrader] ⛔ Skipped index label "${alert.label}" — not tradeable`,
+    );
+    return;
+  }
+
   // Cache this alert's levels for MTF lookups by other timeframes
   const cacheKey = `${token}:${signal}:${interval}`;
   _alertCache.set(cacheKey, { close: entry, sl, target, tfLabel: alert.tfLabel, interval });

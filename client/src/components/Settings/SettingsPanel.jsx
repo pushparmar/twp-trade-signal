@@ -2,6 +2,23 @@ import { useState, useCallback } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
 
+// ── helpers ───────────────────────────────────────────────────────────────────
+function fmtAgo(ms) {
+    if (!ms) return '—';
+    const diffSec = Math.round((Date.now() - ms) / 1000);
+    if (diffSec < 60)  return `${diffSec}s ago`;
+    if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+    return `${Math.round(diffSec / 3600)}h ago`;
+}
+function fmtIn(ms) {
+    if (!ms) return '—';
+    const diffSec = Math.round((ms - Date.now()) / 1000);
+    if (diffSec <= 0) return 'now';
+    if (diffSec < 60)  return `${diffSec}s`;
+    if (diffSec < 3600) return `${Math.round(diffSec / 60)}m`;
+    return `${Math.round(diffSec / 3600)}h`;
+}
+
 export default function SettingsPanel() {
     const pollingStatus = useAppStore(s => s.pollingStatus);
     const setPollingStatus = useAppStore(s => s.setPollingStatus);
@@ -14,6 +31,14 @@ export default function SettingsPanel() {
     const [defaultsForm, setDefaultsForm] = useState(null);
     const [debugMsgs, setDebugMsgs] = useState(null);   // null = not yet loaded
     const [debugLoading, setDebugLoading] = useState(false);
+
+    // Scanner diagnostics
+    const [scanStatus, setScanStatus] = useState(null);
+    const [scanLoading, setScanLoading] = useState(false);
+    const [tgTestResult, setTgTestResult] = useState(null); // null | 'ok' | 'error'
+    const [tgTestMsg, setTgTestMsg] = useState('');
+    const [tgTesting, setTgTesting] = useState(false);
+    const [clearingDedup, setClearingDedup] = useState(false);
 
     const isRunning = pollingStatus === "running";
     const form = defaultsForm ?? tradingDefaults;

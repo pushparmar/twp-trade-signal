@@ -364,4 +364,90 @@ async function getCumulativePnl() {
   }
 }
 
-module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getRecentTrades, getCumulativePnl, dailyPnl, patternWinRate };
+/**
+ * Fetch all trades (any status) closed on a specific IST calendar date.
+ *
+ * @param {string} dateStr  IST date in "YYYY-MM-DD" format, e.g. "2026-05-21"
+ * @returns {Promise<Array>}
+ */
+async function getByDate(dateStr) {
+  if (!mongo.isReady()) return [];
+  try {
+    // Build IST day boundaries as UTC Date objects.
+    // IST = UTC+5:30, so IST midnight = UTC 18:30 the previous day.
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const fromUtc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - 5.5 * 60 * 60 * 1000);
+    const toUtc   = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - 5.5 * 60 * 60 * 1000);
+
+    const docs = await mongo.db().collection(COLLECTION)
+      .find({ openedAt: { $gte: fromUtc, $lte: toUtc } })
+      .sort({ openedAt: -1 })
+      .toArray();
+
+    return docs.map((doc) => ({
+      id:              doc.tradeId,
+      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
+      source:          doc.source          ?? 'auto',
+      autoSource:      doc.autoSource      ?? null,
+      symbol:          doc.symbol          ?? '',
+      token:           doc.token           ?? null,
+      exchange:        doc.exchange        ?? 'NSE',
+      action:          doc.action          ?? 'BUY',
+      quantity:        doc.quantity        ?? 1,
+      lots:            doc.lots            ?? 1,
+      lotSize:         doc.lotSize         ?? 1,
+      entryPrice:      doc.entryPrice      ?? 0,
+      exitPrice:       doc.exitPrice       ?? null,
+      sl:              doc.sl              ?? null,
+      initialSl:       doc.initialSl       ?? doc.sl ?? null,
+      target:          doc.target          ?? null,
+      status:          doc.status          ?? 'OPEN',
+      pnl:             doc.pnl             ?? null,
+      closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
+      patternId:       doc.patternId       ?? null,
+      patternLabel:    doc.patternLabel    ?? null,
+      signal:          doc.signal          ?? null,
+      interval:        doc.interval        ?? null,
+      tfLabel:         doc.tfLabel         ?? null,
+      riskPerUnit:     doc.riskPerUnit     ?? null,
+      rrRatio:         doc.rrRatio         ?? null,
+      potentialProfit: doc.potentialProfit ?? null,
+      targetSource:    doc.targetSource    ?? null,
+      tslActivated:    doc.tslActivated    ?? false,
+      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
+      triggerPrice:    doc.triggerPrice    ?? null,
+      triggerDir:      doc.triggerDir      ?? null,
+      activatedTs:     doc.activatedTs     ?? null,
+    }));
+  } catch (err) {
+    console.warn('[tradeRepo] getByDate failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Return all distinct IST dates that have at least one trade (any status).
+ * Used to populate a date picker with only valid trading days.
+ * Returns an array of "YYYY-MM-DD" strings, newest first.
+ *
+ * @returns {Promise<string[]>}
+ */
+async function getTradingDates() {
+  if (!mongo.isReady()) return [];
+  try {
+    const rows = await mongo.db().collection(COLLECTION).aggregate([
+      {
+        $group: {
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$openedAt', timezone: '+05:30' } },
+        },
+      },
+      { $sort: { _id: -1 } },
+    ]).toArray();
+    return rows.map((r) => r._id).filter(Boolean);
+  } catch (err) {
+    console.warn('[tradeRepo] getTradingDates failed:', err.message);
+    return [];
+  }
+}
+
+module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getRecentTrades, getCumulativePnl, dailyPnl, patternWinRate, getByDate, getTradingDates };

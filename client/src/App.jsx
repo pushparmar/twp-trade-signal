@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState } from 'react';
 import api from './api';
 import useAppStore from './store/appStore';
 import useSSE from './hooks/useSSE';
@@ -280,6 +280,52 @@ function AppShell() {
   );
 }
 
+// ── Error boundary — catches any render crash and shows a readable message ─────
+// Without this, a single thrown error unmounts the entire React tree and leaves
+// only the dark #0a0a0a body background visible (i.e. a "black screen").
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, message: error?.message || String(error) };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[ErrorBoundary] Render crash:', error, info?.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', height: '100dvh', padding: 24, gap: 16,
+          background: '#0a0a0a', color: '#f0f0f0', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: 32 }}>⚠️</div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>Something went wrong</div>
+          <div style={{ color: '#ef4444', fontSize: 12, fontFamily: 'monospace', maxWidth: 400 }}>
+            {this.state.message}
+          </div>
+          <button
+            style={{
+              marginTop: 8, padding: '8px 20px', borderRadius: 8, border: 'none',
+              background: '#3b82f6', color: '#fff', cursor: 'pointer', fontSize: 14,
+            }}
+            onClick={() => window.location.reload()}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // ── Root — auth gate ───────────────────────────────────────────────────────────
 // Renders either the login screen or the full app shell based on the stored flag.
 export default function App() {
@@ -291,5 +337,9 @@ export default function App() {
     return <LoginPage onLogin={() => setLoggedIn(true)} />;
   }
 
-  return <AppShell />;
+  return (
+    <ErrorBoundary>
+      <AppShell />
+    </ErrorBoundary>
+  );
 }
