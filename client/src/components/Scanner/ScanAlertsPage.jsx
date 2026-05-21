@@ -207,7 +207,10 @@ function ScanRow({ alert, onSelect, onBuy }) {
 
   function handleBuy(e) {
     e.stopPropagation();
-    onBuy({ alert, entryPrice: ltp ?? alert.close, action });
+    // Always pass the structural level (pattern close = Kijun/cloud edge) as the
+    // suggested entry — not the live LTP.  The modal shows LTP separately so the
+    // user can see if there's a gap and the pending-order logic can auto-detect it.
+    onBuy({ alert, entryPrice: alert.close, action });
   }
 
   return (
@@ -379,10 +382,20 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
   const [slStr,       setSlStr]       = useState(alert.sl     != null ? String(alert.sl)     : '');
   const [targetStr,   setTargetStr]   = useState(alert.target != null ? String(alert.target) : '');
 
-  // Keep entry synced with live LTP until user touches the field
-  useEffect(() => {
-    if (!entryEdited && ltp != null) setEntryStr(String(ltp));
-  }, [ltp, entryEdited]);
+  // Do NOT auto-follow LTP — the entry is pre-filled with the structural level
+  // (alert.close = Kijun/cloud edge).  The user can still override it manually.
+  // Keeping entry pinned to the pattern zone ensures a gap-up doesn't silently
+  // set entry to an inflated price before the user even looks at the modal.
+
+  // Gap detection — mirrors the auto-trader's 0.5% threshold.
+  const GAP_THRESHOLD   = 0.005;
+  const patternClose    = alert?.close ?? 0;
+  const gapPct          = ltp != null && patternClose > 0
+    ? Math.abs(ltp - patternClose) / patternClose
+    : 0;
+  const hasGap          = gapPct > GAP_THRESHOLD;
+  // Direction of the gap relative to the pattern level
+  const gapDir          = ltp != null && ltp > patternClose ? 'above' : 'below';
 
   const entry      = parseFloat(entryStr)  || 0;
   const lots       = Math.max(1, parseInt(lotsStr, 10) || 1);
@@ -439,6 +452,19 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
             <span className="pbm-ltp-val">{ltp != null ? `₹${fmt(ltp)}` : '—'}</span>
             <span className="pbm-ltp-hint">(updates live · click entry to lock)</span>
           </div>
+
+          {/* Gap warning — shown when LTP has moved >0.5% from the pattern level */}
+          {hasGap && (
+            <div className="pbm-gap-notice">
+              <span className="pbm-gap-icon">⏳</span>
+              <span>
+                Price is <strong>{(gapPct * 100).toFixed(1)}% {gapDir}</strong> the pattern
+                zone (₹{fmt(patternClose)}).{' '}
+                This will be placed as a <strong>pending limit order</strong> at your entry
+                price — it activates only when price returns to that level.
+              </span>
+            </div>
+          )}
 
           {/* Entry + Lots */}
           <div className="pbm-fields">
@@ -569,7 +595,7 @@ function PaperBuyModal({ alert, action = 'BUY', suggestedEntry, onClose, onConfi
             disabled={!valid}
             onClick={handleConfirm}
           >
-            Confirm {action}
+            {hasGap ? `⏳ Place Limit Order` : `Confirm ${action}`}
           </button>
         </div>
       </div>
@@ -1462,11 +1488,19 @@ export default function ScanAlertsPage() {
 
     const action = buyModalData?.action ?? 'BUY';
 
-    // If the user's entry price is ≥ ₹0.50 away from live LTP, create a pending
-    // order that activates only when price reaches the trigger level.
-    const isPending = currentLtp != null && Math.abs(entryPrice - currentLtp) >= 0.5;
-    // triggerDir: 'below' means fire when ltp ≤ triggerPrice (buy dip / sell breakdown)
-    //             'above' means fire when ltp ≥ triggerPrice (buy breakout / sell rally)
+    // Gap check — same 0.5% threshold as the auto-trader.
+    // We measure the gap between live LTP and the pattern's structural level
+    // (alert.close = Kijun / cloud edge), not the user-edited entry price.
+    // That way a user manually typing ₹1360 while LTP is ₹1410 still gets a
+    // pending order at ₹1360, matching the auto-trader's behaviour exactly.
+    const GAP_THRESHOLD = 0.005; // 0.5%
+    const patternClose  = alert?.close ?? entryPrice;
+    const gapPct        = currentLtp != null && patternClose > 0
+      ? Math.abs(currentLtp - patternClose) / patternClose
+      : 0;
+    const isPending  = gapPct > GAP_THRESHOLD;
+    // triggerDir: 'below' means fire when ltp ≤ triggerPrice (price pulls back to support)
+    //             'above' means fire when ltp ≥ triggerPrice (price rallies back to resistance)
     const triggerDir = isPending
       ? (entryPrice < currentLtp ? 'below' : 'above')
       : null;
@@ -1493,11 +1527,17 @@ export default function ScanAlertsPage() {
       closedTs:     null,
       source:       'scan',
       // Pattern metadata — stored for end-of-day archive analysis
-      patternId:    alert.patternId    ?? null,
-      patternLabel: alert.patternLabel ?? null,
-      signal:       alert.signal       ?? null,
-      interval:     alert.interval     ?? null,
-      tfLabel:      alert.tfLabel      ?? null,
+      patternId:       alert.patternId       ?? null,
+      patternLabel:    alert.patternLabel    ?? null,
+      signal:          alert.signal          ?? null,
+      interval:        alert.interval        ?? null,
+      tfLabel:         alert.tfLabel         ?? null,
+      // Indicator snapshot at scan time — no extra API call needed; these are
+      // computed from the same candle array the pattern engine already holds.
+      rsi14:           alert.rsi14           ?? null,
+      volumeConfirmed: alert.volumeConfirmed ?? null,
+      volumeRatio:     alert.volumeRatio     ?? null,
+      mtfAligned:      alert.mtfAligned      ?? false,
     };
 
     addPaperTrade(trade);

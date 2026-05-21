@@ -3,8 +3,14 @@ const { v4: uuidv4 } = require('uuid');
 const store = require('../store');
 const signalParser = require('./signalParser');
 const kiteService = require('./kiteService');
+const kiteTicker = require('./kiteTicker');
+const instrumentCache = require('./instrumentCache');
 const { broadcast } = require('../sseHub');
 const { isAnyMarketOpen } = require('../utils/marketHours');
+
+// Same threshold used by autoTrader and the scanner modal — 0.5% gap from the
+// signal's entry price triggers a PENDING limit order instead of an immediate fill.
+const GAP_THRESHOLD = 0.005;
 
 let offset     = 0;
 let isPolling  = false;
@@ -172,42 +178,93 @@ async function handleUpdate(update) {
 
   const { quantity, exchange, product } = store.getTradingDefaults();
 
-  // Paper trading — bypass Kite entirely, fills simulate after 30 s
+  // Paper trading — bypass Kite entirely.
+  // Apply the same gap / pending-order logic used by the auto-trader:
+  //   • Fetch live LTP for the symbol.
+  //   • If LTP differs from the signal's entry by >0.5% → PENDING order at
+  //     entry price; activates when price returns to that level via tradeWatcher.
+  //   • Otherwise → OPEN immediately at entry price (or live LTP for MARKET).
+  //
+  // We also resolve the instrument token so tradeWatcher can match live ticks
+  // for SL / target monitoring — the old code omitted this entirely.
   if (store.getTestMode()) {
-    for (const entryPrice of parsed.entries) {
-      const tradeId = uuidv4();
-      // Broadcast a pending signal so the UI can show the countdown
-      broadcast('paper_trade_pending', {
-        id: tradeId,
-        signalId,
-        symbol: parsed.symbol,
-        action: parsed.action,
-        entryPrice,
-        fillsAt: Date.now() + 30_000,
-      });
+    // Resolve the instrument token from the symbol name once per signal.
+    const instrument = instrumentCache.getBySymbol(exchange, parsed.symbol);
+    const token      = instrument?.instrumentToken ?? null;
 
-      setTimeout(() => {
-        if (!store.getTestMode()) return; // cancelled if mode switched off
-        const paperTrade = {
-          id: tradeId,
-          ts: Date.now(),
-          signalId,
-          symbol: parsed.symbol,
-          action: parsed.action,
-          entryPrice,
-          quantity,
-          sl: parsed.sl,
-          target: parsed.targets[0] ?? null,
-          targets: parsed.targets,
-          status: 'OPEN',
-          exitPrice: null,
-          pnl: null,
-          closedTs: null,
-        };
-        store.addPaperTrade(paperTrade);
-        broadcast('paper_trade', paperTrade);
-        broadcast('paper_balance', store.getPaperBalance());
-      }, 30_000);
+    // Fetch live LTP for gap detection.
+    let liveLtp = null;
+    try {
+      const ltpData = await kiteService.getLTP([`${exchange}:${parsed.symbol}`]);
+      const price   = ltpData[`${exchange}:${parsed.symbol}`]?.last_price;
+      if (price && price > 0) liveLtp = price;
+    } catch (err) {
+      console.warn(`[Telegram] LTP fetch failed for ${parsed.symbol}: ${err.message}`);
+    }
+
+    for (const signalEntry of parsed.entries) {
+      // For MARKET signals (no explicit entry), use live LTP as entry.
+      const entryPrice = signalEntry || liveLtp;
+      if (!entryPrice) {
+        console.warn(`[Telegram] No entry price and no live LTP for ${parsed.symbol} — skipping`);
+        continue;
+      }
+
+      // Gap check — compare live LTP against the signal's explicit entry level.
+      const gapPct     = liveLtp != null
+        ? Math.abs(liveLtp - entryPrice) / entryPrice
+        : 0;
+      const hasGap     = gapPct > GAP_THRESHOLD;
+      // triggerDir: price must FALL back to entry for a BUY above market,
+      //             price must RISE back to entry for a SELL below market.
+      const triggerDir = hasGap
+        ? (entryPrice < liveLtp ? 'below' : 'above')
+        : undefined;
+
+      const paperTrade = {
+        id:           uuidv4(),
+        ts:           Date.now(),
+        signalId,
+        source:       'telegram',
+        symbol:       parsed.symbol,
+        token,
+        exchange,
+        action:       parsed.action,
+        entryPrice,
+        quantity,
+        sl:           parsed.sl,
+        target:       parsed.targets[0] ?? null,
+        targets:      parsed.targets,
+        // PENDING if price has gapped away from signal entry, else OPEN immediately
+        status:       hasGap ? 'PENDING' : 'OPEN',
+        triggerPrice: hasGap ? entryPrice : undefined,
+        triggerDir,
+        exitPrice:    null,
+        pnl:          null,
+        closedTs:     null,
+      };
+
+      store.addPaperTrade(paperTrade);
+      broadcast('paper_trade', paperTrade);
+      broadcast('paper_balance', store.getPaperBalance());
+
+      // Subscribe the token so tradeWatcher receives ticks for SL/target/trigger.
+      if (token) {
+        try { kiteTicker.subscribe([token]); } catch { /* ticker may not be connected yet */ }
+      }
+
+      if (hasGap) {
+        console.log(
+          `[Telegram] ⏳ PENDING ${parsed.action} ${parsed.symbol} — ` +
+          `gap ${(gapPct * 100).toFixed(2)}% (ltp ₹${liveLtp} vs signal ₹${entryPrice}) ` +
+          `trigger=${triggerDir} ₹${entryPrice}`,
+        );
+      } else {
+        console.log(
+          `[Telegram] 🤖 Paper ${parsed.action} ${parsed.symbol} @ ₹${entryPrice}` +
+          `${liveLtp ? ` (ltp ₹${liveLtp})` : ''}`,
+        );
+      }
     }
     return;
   }

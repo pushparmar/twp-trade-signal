@@ -192,9 +192,11 @@ function onTick(token, lastPrice) {
     const lastBcast = _lastTickBroadcast.get(trade.id) ?? 0;
     if (now - lastBcast >= 500) {
       _lastTickBroadcast.set(trade.id, now);
+      // Apply MCX lot multiplier so live PnL matches the closed-trade PnL scale.
+      const lotMult       = store.getLotMultiplier(trade);
       const unrealizedPnl = trade.action === 'BUY'
-        ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1)
-        : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1);
+        ? (lastPrice - trade.entryPrice) * (trade.quantity ?? 1) * lotMult
+        : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1) * lotMult;
       broadcast('paper_trade_tick', {
         id:            trade.id,
         token:         Number(trade.token),

@@ -553,6 +553,8 @@ router.post('/', async (req, res) => {
                 // Volume context — ratio vs 20-bar avg; confirmed when ≥ 1.2×
                 volumeRatio:     result.volumeRatio     ?? null,
                 volumeConfirmed: result.volumeConfirmed ?? null,
+                // RSI(14) at scan time — computed from same candle array, no extra API call
+                rsi14:           result.rsi14           ?? null,
               };
               matches.push(matchEntry);
 

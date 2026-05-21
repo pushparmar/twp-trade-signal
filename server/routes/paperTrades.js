@@ -2,6 +2,7 @@ const express     = require('express');
 const fs          = require('fs');
 const path        = require('path');
 const { addPaperTrade, getPaperTrades, closePaperTrade, updatePaperTrade, cancelPendingTrade, clearPaperTrades, getTestMode, setTestMode, getPaperBalance, setPaperInitialBalance, getWatchlist } = require('../store');
+const TradeExporter = require('../services/tradeExporter');
 const { broadcast }   = require('../sseHub');
 const kiteTicker  = require('../services/kiteTicker');
 const kiteService = require('../services/kiteService');
@@ -347,6 +348,50 @@ router.post('/balance', (req, res) => {
   const balance = getPaperBalance();
   broadcast('paper_balance', balance);
   res.json(balance);
+});
+
+// ── Trade export (CSV download) ───────────────────────────────────────────────
+
+/**
+ * GET /api/paper/export?date=YYYY-MM-DD
+ *
+ * Downloads a CSV file containing all paper trades for the given IST date.
+ * When no date is supplied, defaults to today (IST).
+ *
+ * Each row includes: symbol, exchange, action, signal, pattern ID/name,
+ * timeframe, entry/SL/target/exit prices, PnL, R:R, volume confirmation,
+ * MTF alignment, and the full predefined pattern logic explanation.
+ */
+router.get('/export', async (req, res) => {
+  try {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const today = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    const date  = req.query.date ?? today;
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    }
+
+    // Merge in-memory trades with MongoDB records so the export is complete
+    // even when the server was restarted mid-day.
+    let trades = getPaperTrades();
+    try {
+      const dbTrades   = await db.tradeRepo.getRecentTrades(500);
+      const memoryIds  = new Set(trades.map((t) => t.id));
+      const extraFromDb = dbTrades.filter((t) => !memoryIds.has(t.id));
+      trades = [...trades, ...extraFromDb];
+    } catch { /* MongoDB unavailable — use in-memory only */ }
+
+    const csv      = TradeExporter.toCSV(trades, date);
+    const filename = TradeExporter.filename(date);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[Export]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Last traded prices for open trades ────────────────────────────────────────

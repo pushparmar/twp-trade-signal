@@ -140,6 +140,38 @@ app.listen(PORT, async () => {
       }
     }
 
+    // ── Always merge OPEN trades from MongoDB — cross-device safety net ──────
+    // The check above only runs when the disk file is empty.  But a trade
+    // placed from another device (or before MongoDB was ready) can exist in
+    // MongoDB while the local in-memory store already has other trades —
+    // causing the "length > 0" guard above to skip the restore entirely.
+    // This second pass always runs: it fetches every OPEN trade from MongoDB
+    // and adds any that are missing from memory so no open position is lost
+    // after a server restart regardless of disk state.
+    try {
+      const openFromMongo = await db.tradeRepo.getOpenTrades();
+      if (openFromMongo.length > 0) {
+        const inMemoryIds  = new Set(store.getPaperTrades().map((t) => t.id));
+        const missingTrades = openFromMongo.filter((t) => !inMemoryIds.has(t.id));
+        if (missingTrades.length > 0) {
+          for (const trade of missingTrades) store.addPaperTrade(trade);
+          console.log(`[DB] Merged ${missingTrades.length} open trade(s) from MongoDB not present in memory`);
+
+          // Subscribe tokens so tradeWatcher can monitor SL/target on live ticks.
+          const rawTokens = [
+            ...missingTrades.map((t) => t.token),
+            ...missingTrades.map((t) => t.derivativeToken),
+          ].filter(Boolean).map(Number);
+          const tokens = [...new Set(rawTokens)];
+          if (tokens.length > 0) {
+            try { kiteTicker.subscribe(tokens); } catch { /* ticker may connect later */ }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[DB] Could not merge open trades from MongoDB:', err.message);
+    }
+
     // ── Restore cumulative PnL from MongoDB — authoritative source of truth ──
     // MongoDB is the definitive record; overrides config.json so the balance
     // survives Railway redeploys, persistent-volume wipes, and config loss.

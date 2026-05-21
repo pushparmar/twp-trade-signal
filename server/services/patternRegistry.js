@@ -17,15 +17,24 @@
  */
 
 const {
-  getKumoBreakoutTwist, getKumoBreakout, getKumoTwist,
+  getKumoBreakoutTwist, getKumoBreakout, getKumoBaseEntry, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
-  getKijunLevel, getCloudSupport, getVolumeContext, getATR,
+  getKijunLevel, getCloudSupport, getVolumeContext, getATR, getRSI,
 } = require('./ichimoku');
 
 // Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
 // to this floor so positions don't get wicked out by normal noise and the
 // natural Kijun/cloud SL is preserved when it's already sensible.
 const MIN_SL_ATR_MULT = 0.5;
+
+// Buffer applied below (bullish) or above (bearish) a Kijun / cloud-edge SL
+// anchor.  Kijun is a support/resistance line, not a hard stop — placing the
+// SL exactly AT the level gets wicked out by normal candle noise.  A 0.3%
+// buffer gives the level a small safety margin without meaningfully changing
+// the R:R.  When ATR is available the buffer is the larger of the two so it
+// automatically scales with the instrument's volatility.
+const SL_ANCHOR_BUFFER_PCT = 0.003;   // 0.3% of the anchor level
+const SL_ANCHOR_BUFFER_ATR = 0.15;    // 0.15 × ATR14 (used when ATR available)
 
 // Natural-target search window — how many recent bars to scan for swing high/low.
 // 30 bars is enough to catch the most recent meaningful structure on any TF
@@ -123,11 +132,35 @@ function computeSLTarget(patternId, signal, result, candles) {
   // ── SL anchor ──────────────────────────────────────────────────────────────
   let sl;
   if (patternId === 'kijun-bounce') {
+    // SL = Kijun itself (close through it = setup failed)
     sl = kijunLevel;
+  } else if (patternId === 'kumo-base-entry') {
+    // SL = far edge of the prior consolidation base.  The base (tight range
+    // below/above the cloud) defines the risk zone — if price falls back through
+    // the base low (bullish) or base high (bearish) the setup has failed.
+    // Fall back to the cloud entry edge if consLow/consHigh not in result.
+    const { consLow, consHigh } = result;
+    sl = signal === 'bullish'
+      ? (consLow  ?? cloudBottom ?? kijunLevel)
+      : (consHigh ?? cloudTop    ?? kijunLevel);
   } else {
+    // All other cloud patterns (kumo-breakout, cloud-support, etc.):
+    // SL = far cloud edge — price must traverse the whole cloud to invalidate.
     sl = signal === 'bullish'
       ? (cloudBottom ?? kijunLevel)
       : (cloudTop    ?? kijunLevel);
+  }
+
+  // ── Buffer — push SL just beyond the anchor level ──────────────────────────
+  // Kijun and cloud edges are support/resistance zones, not hard lines.
+  // Placing SL exactly at the level means a single wick through it exits the
+  // trade even when price immediately reverses back.  We apply a small buffer
+  // (larger of 0.3% or 0.15×ATR) so the stop only triggers on a genuine break.
+  if (sl != null) {
+    const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+    const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+    const buf    = Math.max(pctBuf, atrBuf);
+    sl = signal === 'bullish' ? sl - buf : sl + buf;
   }
 
   // Fallback when no natural level was found
@@ -206,6 +239,15 @@ function _volumeFields(candles) {
   };
 }
 
+/**
+ * RSI fields — calculated from the same candle array used for Ichimoku.
+ * No extra API call needed; candles are already in memory at scan time.
+ * Returns { rsi14 } where rsi14 is Wilder's 14-period RSI of the last bar.
+ */
+function _rsiFields(candles) {
+  return { rsi14: getRSI(candles, 14) };
+}
+
 const PATTERNS = {
 
   'kumo-breakout': {
@@ -224,7 +266,7 @@ const PATTERNS = {
       if (result.signal === null) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -239,7 +281,7 @@ const PATTERNS = {
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -257,7 +299,35 @@ const PATTERNS = {
       if (result.consecutiveBars > maxBars) return { matched: false };
       if (result.score < 3) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+    },
+  },
+
+  'kumo-base-entry': {
+    id:          'kumo-base-entry',
+    label:       'Kumo Base Entry',
+    description: 'Price consolidated in a tight base just outside a fat cloud, then freshly entered the cloud from the near edge. Fat cloud = strong resistance to traverse (meaningful move expected). SL anchors below the base low (bullish) or above the base high (bearish).',
+    defaultOpts: {
+      consLookback:     10,
+      consRatio:        2.5,
+      minConsBars:      3,
+      posThreshold:     0.4,
+      entryLookback:    3,
+      minCloudWidthPct: 0.01,
+      minCloudWidthAtr: 1.0,
+    },
+
+    run(candles, opts = {}) {
+      const result = getKumoBaseEntry(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      return {
+        matched: true,
+        ...result,
+        sl, target, atr, targetSource,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
     },
   },
 
@@ -272,7 +342,7 @@ const PATTERNS = {
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles) };
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 

@@ -9,12 +9,12 @@ const TAB_INDEX = {
 const INDEX_NAMES = new Set(["NIFTY", "BANKNIFTY", "SENSEX", "FINNIFTY", "MIDCPNIFTY", "BANKEX"]);
 const INDEX_SYMBOLS = new Set(["NIFTY 50", "NIFTY BANK", "SENSEX"]);
 const MACRO_KEYS = [
-    { key: "vix",        label: "India VIX" },
-    { key: "crude",      label: "Crude Oil" },
-    { key: "gold",       label: "Gold" },
-    { key: "silver",     label: "Silver" },
-    { key: "usdinr",     label: "USD / INR" },
+    { key: "vix", label: "India VIX" },
+    { key: "crude", label: "Crude Oil" },
+    { key: "gold", label: "Gold" },
+    { key: "silver", label: "Silver" },
     { key: "naturalgas", label: "Natural Gas" },
+    { key: "usdinr", label: "USD / INR" }
 ];
 
 function fmt(n) {

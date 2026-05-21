@@ -11,7 +11,7 @@
  *   • Auto-resize via ResizeObserver
  */
 
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react"; // useState kept for loading/error
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react"; // useState kept for loading/error
 import { createChart, CandlestickSeries, LineSeries, AreaSeries } from "lightweight-charts";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
@@ -29,13 +29,13 @@ const TF_BARS = {
 // null = skip new-bar creation for that interval (day / 4h: non-uniform trading
 // sessions make client-side slot alignment unreliable; re-fetch handles them).
 const TICK_INTERVAL_SECS = {
-    "minute":   60,
-    "5minute":  5  * 60,
+    minute: 60,
+    "5minute": 5 * 60,
     "15minute": 15 * 60,
     "30minute": 30 * 60,
     "60minute": 60 * 60,
-    "4h":       null,
-    "day":      null,
+    "4h": null,
+    day: null
 };
 
 // Dashed line style constant (lightweight-charts LineStyle.Dashed = 2)
@@ -51,9 +51,11 @@ function cssVar(name, fallback) {
 
 // ── IchimokuChart ─────────────────────────────────────────────────────────────
 
-function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, label = null }, forwardedRef) {
+function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, label = null }, forwardedRef) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
+    // Multi-timeframe RSI snapshot — fetched once per token open, cache-first on server
+    const [multiRsi, setMultiRsi] = useState(null);
 
     const containerRef = useRef(null);
     const chartRef = useRef(null);
@@ -67,7 +69,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
     intervalRef.current = interval; // updated on every render, no useEffect needed
 
     // Subscribe to live tick for this token from the global store
-    const tick = useAppStore((s) => (token ? s.ticks[token] : null));
+    const tick = useAppStore(s => (token ? s.ticks[token] : null));
 
     // ── Create chart once on mount ───────────────────────────────────────────
     useEffect(() => {
@@ -82,22 +84,25 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
         // Kite returns timestamps in Unix seconds (UTC). For an Indian-market
         // chart we want labels in IST (UTC+05:30), not the user's local zone.
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-        const _toIST = (unixSec) => new Date(unixSec * 1000 + IST_OFFSET_MS);
-        const _pad   = (n) => String(n).padStart(2, '0');
+        const _toIST = unixSec => new Date(unixSec * 1000 + IST_OFFSET_MS);
+        const _pad = n => String(n).padStart(2, "0");
 
         const tickMarkFormatter = (time, tickMarkType /* , locale */) => {
             const d = _toIST(time);
             // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
             if (tickMarkType === 0) return String(d.getUTCFullYear());
-            if (tickMarkType === 1) return d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
-            if (tickMarkType === 2) return `${_pad(d.getUTCDate())} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })}`;
+            if (tickMarkType === 1) return d.toLocaleString("en-IN", { month: "short", timeZone: "UTC" });
+            if (tickMarkType === 2)
+                return `${_pad(d.getUTCDate())} ${d.toLocaleString("en-IN", { month: "short", timeZone: "UTC" })}`;
             return `${_pad(d.getUTCHours())}:${_pad(d.getUTCMinutes())}`;
         };
 
         // Crosshair tooltip / status line time format (full IST timestamp)
-        const timeFormatter = (time) => {
+        const timeFormatter = time => {
             const d = _toIST(time);
-            return `${_pad(d.getUTCDate())} ${d.toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' })} ${_pad(d.getUTCHours())}:${_pad(d.getUTCMinutes())} IST`;
+            return `${_pad(d.getUTCDate())} ${d.toLocaleString("en-IN", { month: "short", timeZone: "UTC" })} ${_pad(
+                d.getUTCHours()
+            )}:${_pad(d.getUTCMinutes())} IST`;
         };
 
         const chart = createChart(containerRef.current, {
@@ -105,7 +110,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
                 background: { color: bg },
                 textColor: txt,
                 fontSize: 11,
-                attributionLogo: false,   // hide TradingView branding
+                attributionLogo: false // hide TradingView branding
             },
             grid: {
                 vertLines: { color: grid },
@@ -113,7 +118,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
             },
             crosshair: { mode: 1 },
             rightPriceScale: { borderColor: grid },
-            leftPriceScale:  { visible: false },
+            leftPriceScale: { visible: false },
             timeScale: {
                 borderColor: grid,
                 timeVisible: true,
@@ -125,13 +130,13 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
                 tickMarkFormatter,
                 // Compact bar spacing — keeps consecutive trading-day bars
                 // visually adjacent rather than spaced by overnight-hour gaps.
-                barSpacing: 6,
+                barSpacing: 6
             },
             localization: {
-                timeFormatter,
+                timeFormatter
             },
-            width:  containerRef.current.clientWidth,
-            height: 420,
+            width: containerRef.current.clientWidth,
+            height: 420
         });
 
         chartRef.current = chart;
@@ -287,9 +292,9 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
     // so the live-tick update effect below can animate the current candle.
     useEffect(() => {
         if (!token) return;
-        api.post('/instruments/peek-subscribe', { tokens: [token] }).catch(() => {});
+        api.post("/instruments/peek-subscribe", { tokens: [token] }).catch(() => {});
         return () => {
-            api.post('/instruments/peek-unsubscribe', { tokens: [token] }).catch(() => {});
+            api.post("/instruments/peek-unsubscribe", { tokens: [token] }).catch(() => {});
         };
     }, [token]);
 
@@ -424,14 +429,14 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
             const apply = () => {
                 // Container width minus right price-scale (~60px) — width available for bars.
                 const containerW = containerRef.current?.clientWidth || 1000;
-                const usableW    = Math.max(200, containerW - 70);
+                const usableW = Math.max(200, containerW - 70);
                 // Pixels per bar to fit exactly `defaultBars` in the visible area.
                 // Clamp to [4, 40] so tiny modals don't disappear bars and huge
                 // screens don't blow them up.
                 const spacing = Math.max(4, Math.min(40, Math.floor(usableW / defaultBars)));
 
                 chartRef.current?.applyOptions({
-                    timeScale: { barSpacing: spacing, rightOffset: 5 },
+                    timeScale: { barSpacing: spacing, rightOffset: 5 }
                 });
                 ts.scrollToRealTime();
             };
@@ -465,7 +470,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
         if (!price || !seriesRef.current.candles || !liveRef.current) return;
 
         const iSecs = TICK_INTERVAL_SECS[intervalRef.current];
-        const live  = liveRef.current;
+        const live = liveRef.current;
         let updated;
 
         if (iSecs !== null && tick.lastTradeTime) {
@@ -473,10 +478,8 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
             // ISO string (Date serialised by JSON.stringify) or a raw Unix number.
             // Values < 2e10 are treated as Unix seconds (Kite sends seconds);
             // larger values or strings go through new Date() for ISO handling.
-            const ltt      = tick.lastTradeTime;
-            const tradeMs  = (typeof ltt === 'number' && ltt < 2e10)
-                ? ltt * 1000
-                : new Date(ltt).getTime();
+            const ltt = tick.lastTradeTime;
+            const tradeMs = typeof ltt === "number" && ltt < 2e10 ? ltt * 1000 : new Date(ltt).getTime();
 
             // Mirror candleStore._slotStart: floor to the nearest interval boundary
             const currentSlot = Math.floor(tradeMs / (iSecs * 1000)) * iSecs;
@@ -484,30 +487,30 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
             if (currentSlot > live.time) {
                 // New candle — open a fresh bar aligned to the trade-time boundary
                 updated = {
-                    time:  currentSlot,
-                    open:  price,
-                    high:  price,
-                    low:   price,
-                    close: price,
+                    time: currentSlot,
+                    open: price,
+                    high: price,
+                    low: price,
+                    close: price
                 };
             } else {
                 // Same candle — update OHLC in-place
                 updated = {
-                    time:  live.time,
-                    open:  live.open,
-                    high:  Math.max(live.high, price),
-                    low:   Math.min(live.low,  price),
-                    close: price,
+                    time: live.time,
+                    open: live.open,
+                    high: Math.max(live.high, price),
+                    low: Math.min(live.low, price),
+                    close: price
                 };
             }
         } else {
             // 4h / day, or lastTradeTime unavailable → patch last bar only
             updated = {
-                time:  live.time,
-                open:  live.open,
-                high:  Math.max(live.high, price),
-                low:   Math.min(live.low,  price),
-                close: price,
+                time: live.time,
+                open: live.open,
+                high: Math.max(live.high, price),
+                low: Math.min(live.low, price),
+                close: price
             };
         }
 
@@ -526,7 +529,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
     //
     // Lines are removed and recreated on every render — lightweight-charts
     // doesn't expose a setPrice() so this is the simplest, leak-free pattern.
-    const paperTrades = useAppStore((s) => s.paperTrades);
+    const paperTrades = useAppStore(s => s.paperTrades);
     const priceLineHandlesRef = useRef([]);
 
     useEffect(() => {
@@ -535,7 +538,11 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
 
         // 1. Remove any lines drawn on a previous render
         for (const handle of priceLineHandlesRef.current) {
-            try { series.removePriceLine(handle); } catch { /* line already gone */ }
+            try {
+                series.removePriceLine(handle);
+            } catch {
+                /* line already gone */
+            }
         }
         priceLineHandlesRef.current = [];
 
@@ -543,51 +550,49 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
 
         // 2. Find OPEN trades belonging to the displayed token
         const myTrades = paperTrades.filter(
-            (t) =>
-                t.status === 'OPEN' &&
-                Number(t.token) === Number(token) &&
-                (t.source === 'scan' || t.source === 'auto'),
+            t =>
+                t.status === "OPEN" && Number(t.token) === Number(token) && (t.source === "scan" || t.source === "auto")
         );
         if (myTrades.length === 0) return;
 
         // 3. Draw entry / SL / target for each trade
-        const ENTRY_COLOR  = '#3b82f6'; // blue
-        const SL_COLOR     = '#f87171'; // red
-        const TARGET_COLOR = '#4ade80'; // green
-        const TSL_COLOR    = '#a78bfa'; // purple — distinguishes trailed stop from initial
+        const ENTRY_COLOR = "#3b82f6"; // blue
+        const SL_COLOR = "#f87171"; // red
+        const TARGET_COLOR = "#4ade80"; // green
+        const TSL_COLOR = "#a78bfa"; // purple — distinguishes trailed stop from initial
 
         for (const t of myTrades) {
-            const prefix = t.source === 'auto' ? '🤖' : '✦';
+            const prefix = t.source === "auto" ? "🤖" : "✦";
             if (t.entryPrice != null) {
                 const h = series.createPriceLine({
-                    price:     t.entryPrice,
-                    color:     ENTRY_COLOR,
+                    price: t.entryPrice,
+                    color: ENTRY_COLOR,
                     lineWidth: 1,
                     lineStyle: 2, // dashed
                     axisLabelVisible: true,
-                    title:     `${prefix} ${t.action} @ ${t.entryPrice}`,
+                    title: `${prefix} ${t.action} @ ${t.entryPrice}`
                 });
                 priceLineHandlesRef.current.push(h);
             }
             if (t.sl != null) {
                 const h = series.createPriceLine({
-                    price:     t.sl,
-                    color:     t.tslActivated ? TSL_COLOR : SL_COLOR,
+                    price: t.sl,
+                    color: t.tslActivated ? TSL_COLOR : SL_COLOR,
                     lineWidth: 1,
                     lineStyle: 0, // solid
                     axisLabelVisible: true,
-                    title:     t.tslActivated ? `🔒 TSL ${t.sl}` : `SL ${t.sl}`,
+                    title: t.tslActivated ? `🔒 TSL ${t.sl}` : `SL ${t.sl}`
                 });
                 priceLineHandlesRef.current.push(h);
             }
             if (t.target != null) {
                 const h = series.createPriceLine({
-                    price:     t.target,
-                    color:     TARGET_COLOR,
+                    price: t.target,
+                    color: TARGET_COLOR,
                     lineWidth: 1,
                     lineStyle: 0, // solid
                     axisLabelVisible: true,
-                    title:     `🎯 ${t.target}`,
+                    title: `🎯 ${t.target}`
                 });
                 priceLineHandlesRef.current.push(h);
             }
@@ -596,57 +601,139 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = null, l
         // Cleanup on token/interval change — fires before next effect run
         return () => {
             for (const handle of priceLineHandlesRef.current) {
-                try { series.removePriceLine(handle); } catch { /* ignore */ }
+                try {
+                    series.removePriceLine(handle);
+                } catch {
+                    /* ignore */
+                }
             }
             priceLineHandlesRef.current = [];
         };
     }, [token, interval, paperTrades]);
 
+    // ── Multi-TF RSI snapshot ───────────────────────────────────────────────
+    // Fetches RSI(14) for all four standard timeframes in one server call.
+    // The server reads from the candleStore cache first — zero Kite API calls
+    // when the instrument has been subscribed or recently scanned.
+    useEffect(() => {
+        if (!token) return;
+        setMultiRsi(null); // clear stale values when token changes
+        api.get(`/ichimoku/${token}/multi-rsi`)
+            .then(r => setMultiRsi(r.data))
+            .catch(() => {}); // non-critical — RSI strip simply stays hidden
+    }, [token]);
+
     // ── Imperative zoom API ─────────────────────────────────────────────────
     // Exposed via forwardRef so parents (e.g. ScanChartModal) can wire zoom
     // buttons without re-implementing barSpacing math.
-    useImperativeHandle(forwardedRef, () => ({
-        /** Zoom to show approximately the last `nBars` candles. */
-        zoomToBars: (nBars) => {
-            const chart = chartRef.current;
-            if (!chart) return;
-            const ts = chart.timeScale();
-            const containerW = containerRef.current?.clientWidth || 1000;
-            const usableW    = Math.max(200, containerW - 70);
-            const spacing    = Math.max(4, Math.min(40, Math.floor(usableW / nBars)));
-            chart.applyOptions({ timeScale: { barSpacing: spacing, rightOffset: 5 } });
-            ts.scrollToRealTime();
-        },
-        /** Fit the entire dataset into view. */
-        fitAll: () => {
-            chartRef.current?.timeScale().fitContent();
-        },
-    }), []);
+
+    /** Reset to the default bar count (defaultBars) anchored at real-time.
+     *  Used by the internal "Auto" button and exposed via forwardRef. */
+    const resetView = useCallback(() => {
+        const chart = chartRef.current;
+        if (!chart) return;
+        const ts = chart.timeScale();
+        const containerW = containerRef.current?.clientWidth || 1000;
+        const usableW = Math.max(200, containerW - 70);
+        const spacing = Math.max(4, Math.min(40, Math.floor(usableW / defaultBars)));
+        chart.applyOptions({ timeScale: { barSpacing: spacing, rightOffset: 5 } });
+        ts.scrollToRealTime();
+    }, [defaultBars]);
+
+    useImperativeHandle(
+        forwardedRef,
+        () => ({
+            /** Zoom to show approximately the last `nBars` candles. */
+            zoomToBars: nBars => {
+                const chart = chartRef.current;
+                if (!chart) return;
+                const ts = chart.timeScale();
+                const containerW = containerRef.current?.clientWidth || 1000;
+                const usableW = Math.max(200, containerW - 70);
+                const spacing = Math.max(4, Math.min(40, Math.floor(usableW / nBars)));
+                chart.applyOptions({ timeScale: { barSpacing: spacing, rightOffset: 5 } });
+                ts.scrollToRealTime();
+            },
+            /** Fit the entire dataset into view. */
+            fitAll: () => {
+                chartRef.current?.timeScale().fitContent();
+            },
+            /** Reset back to the default view (defaultBars, scrolled to latest). */
+            resetView
+        }),
+        [resetView]
+    );
 
     // ── Render ────────────────────────────────────────────────────────────────
-    const ltp    = tick?.lastPrice ?? null;
-    const change = tick?.change    ?? null;
+    const ltp = tick?.lastPrice ?? null;
+    const change = tick?.change ?? null;
     const chgPos = change > 0;
     const chgNeg = change < 0;
 
     return (
         <div className="ichi-chart-wrap">
-            {/* Header: instrument name + live price on the same row */}
+            {/* Header: instrument name | auto-reset button + live price */}
             <div className="ichi-chart-header">
-                {label
-                  ? <span className="ichi-chart-title">{label}</span>
-                  : <span className="ichi-chart-title">Chart</span>
-                }
-                {ltp != null && (
-                    <span className="ichi-chart-ltp">
-                        ₹{Number(ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        {change != null && (
-                            <span className={`ichi-chart-chg ${chgPos ? 'ichi-chart-chg--up' : chgNeg ? 'ichi-chart-chg--down' : ''}`}>
-                                {chgPos ? '+' : ''}{Number(change).toFixed(2)}%
-                            </span>
-                        )}
-                    </span>
+                {label ? (
+                    <span className="ichi-chart-title">{label}</span>
+                ) : (
+                    <span className="ichi-chart-title">Chart</span>
                 )}
+
+                {/* Multi-TF RSI strip — shown once server returns values */}
+                {multiRsi && (
+                    <div className="ichi-rsi-strip">
+                        {['15m', '1h', '4h', '1d'].map(tf => {
+                            const val = multiRsi[tf];
+                            const cls = val == null ? 'rsi-na'
+                                      : val >= 70   ? 'rsi-ob'
+                                      : val <= 30   ? 'rsi-os'
+                                      : '';
+                            return (
+                                <span
+                                    key={tf}
+                                    className={`ichi-rsi-cell ${cls}`}
+                                    title={`RSI(14) on ${tf}: ${val != null ? val.toFixed(2) : 'N/A'}`}
+                                >
+                                    <span className="ichi-rsi-tf">{tf}</span>
+                                    <span className="ichi-rsi-val">
+                                        {val != null ? val.toFixed(1) : '—'}
+                                    </span>
+                                </span>
+                            );
+                        })}
+                    </div>
+                )}
+
+                <div className="ichi-chart-header-right">
+                    {/* Auto button — resets pan/zoom back to the default view */}
+                    <button
+                        className="ichi-chart-auto-btn"
+                        onClick={resetView}
+                        title={`Reset to default view (${defaultBars} bars)`}
+                    >
+                        Auto
+                    </button>
+                    {ltp != null && (
+                        <span className="ichi-chart-ltp">
+                            ₹
+                            {Number(ltp).toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2
+                            })}
+                            {change != null && (
+                                <span
+                                    className={`ichi-chart-chg ${
+                                        chgPos ? "ichi-chart-chg--up" : chgNeg ? "ichi-chart-chg--down" : ""
+                                    }`}
+                                >
+                                    {chgPos ? "+" : ""}
+                                    {Number(change).toFixed(2)}%
+                                </span>
+                            )}
+                        </span>
+                    )}
+                </div>
             </div>
 
             {/* Chart canvas */}

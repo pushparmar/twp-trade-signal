@@ -1,6 +1,6 @@
 const express = require('express');
 const candleStore = require('../services/candleStore');
-const { getSignals, calculate, to4H } = require('../services/ichimoku');
+const { getSignals, calculate, to4H, getRSI } = require('../services/ichimoku');
 const atmResolver = require('../services/atmResolver');
 const instrumentCache = require('../services/instrumentCache');
 
@@ -224,6 +224,57 @@ router.get('/:token/chart', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// GET /api/ichimoku/:token/multi-rsi
+// Returns Wilder's RSI(14) for all four standard timeframes (15m / 1h / 4h / 1d)
+// in a single response.  Reads from the candleStore cache first — if the token
+// has been subscribed or recently scanned the values come back with zero Kite API
+// calls.  Falls back to a Kite fetch only when the cache is cold.
+//
+// Response: { '15m': number|null, '1h': number|null, '4h': number|null, '1d': number|null, fetchedAt: ms }
+router.get('/:token/multi-rsi', async (req, res) => {
+  const token = Number(req.params.token);
+  if (!token) return res.status(400).json({ error: 'Invalid token' });
+
+  // Minimum candles required to seed Wilder's RSI (period + 1 warm-up bar).
+  const RSI_PERIOD   = 14;
+  const RSI_MIN_BARS = RSI_PERIOD + 1;
+
+  // (label → native Kite interval) mapping.
+  // 4h is synthesised from 60m candles, matching the chart's own approach.
+  const TF_MAP = [
+    { label: '15m', interval: '15minute', seed: 60  },
+    { label: '1h',  interval: '60minute', seed: 60  },
+    { label: '4h',  interval: '4h',       seed: 120 }, // flag for synthesis
+    { label: '1d',  interval: 'day',      seed: 60  },
+  ];
+
+  const result = { fetchedAt: Date.now() };
+
+  for (const { label, interval, seed } of TF_MAP) {
+    try {
+      let candles;
+      if (interval === '4h') {
+        // 4h bars = synthesised from 1h candles (same logic as the chart endpoint)
+        const need1h    = seed * 4;
+        const candles1h = await candleStore.getCandles(token, '60minute', need1h, true);
+        candles = candles1h && candles1h.length >= RSI_MIN_BARS * 4
+          ? _to4H(candles1h)
+          : [];
+      } else {
+        candles = await candleStore.getCandles(token, interval, seed, true);
+      }
+
+      result[label] = candles && candles.length >= RSI_MIN_BARS
+        ? getRSI(candles, RSI_PERIOD)
+        : null;
+    } catch {
+      result[label] = null;
+    }
+  }
+
+  res.json(result);
 });
 
 // GET /api/ichimoku/:token?interval=15minute

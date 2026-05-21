@@ -339,6 +339,18 @@ function OpenTradeRow({ trade, onClose }) {
                         {trade.patternLabel}
                     </span>
                 )}
+                {/* RSI chip — shows overbought/oversold colouring at a glance */}
+                {trade.rsi14 != null && (
+                    <span
+                        className={`td-sym-rsi ${
+                            trade.rsi14 >= 70 ? "rsi-ob" :
+                            trade.rsi14 <= 30 ? "rsi-os" : ""
+                        }`}
+                        title={`RSI(14) at scan time: ${trade.rsi14}`}
+                    >
+                        RSI {trade.rsi14}
+                    </span>
+                )}
                 {/* Qty + SL sub-row — mobile only */}
                 <span className="td-sym-sl mob-only">
                     <span className="td-sym-qty">
@@ -793,6 +805,13 @@ export default function PaperTradingPanel() {
         clearPaperTrades();
     }
 
+    /** Download today's trade report as a CSV with pattern logic included. */
+    function handleExportCSV() {
+        const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
+            .toISOString().slice(0, 10);
+        window.open(`/api/paper/export?date=${today}`, '_blank');
+    }
+
     const openGetVal = (t, f) => {
         if (f === "ts") return t.ts;
         if (f === "symbol") return t.symbol;
@@ -1018,6 +1037,13 @@ export default function PaperTradingPanel() {
                             Closed Trades <span className="count-badge">{closedTrades.length}</span>
                         </h3>
 
+                        <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={handleExportCSV}
+                            title="Download today's trades as CSV with pattern logic"
+                        >
+                            ↓ Export CSV
+                        </button>
                         <button className="btn btn-ghost btn-sm" onClick={handleClearAll}>
                             Clear all
                         </button>

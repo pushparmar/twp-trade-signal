@@ -88,10 +88,16 @@ function upsertTrade(trade) {
     // Pattern context
     patternId:    trade.patternId                ?? null,
     patternLabel: trade.patternLabel             ?? null,
-    signal:       trade.signal                   ?? null,
-    interval:     trade.interval                 ?? null,
-    tfLabel:      trade.tfLabel                  ?? null,
-    initialSl:         trade.initialSl            ?? null,
+    signal:          trade.signal          ?? null,
+    interval:        trade.interval        ?? null,
+    tfLabel:         trade.tfLabel         ?? null,
+    initialSl:       trade.initialSl       ?? null,
+    // Indicator snapshot — captured from the same candle array at scan time;
+    // no extra API call needed.
+    rsi14:           trade.rsi14           ?? null,
+    volumeConfirmed: trade.volumeConfirmed ?? null,
+    volumeRatio:     trade.volumeRatio     ?? null,
+    mtfAligned:      trade.mtfAligned      ?? false,
     // Source
     source:       trade.source                   ?? null,
     // Pending/trigger order fields
@@ -201,6 +207,11 @@ async function getOpenTrades() {
       targetSource:    doc.targetSource    ?? null,
       tslActivated:    doc.tslActivated    ?? false,
       peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
+      // Indicator snapshot
+      rsi14:           doc.rsi14           ?? null,
+      volumeConfirmed: doc.volumeConfirmed ?? null,
+      volumeRatio:     doc.volumeRatio     ?? null,
+      mtfAligned:      doc.mtfAligned      ?? false,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getOpenTrades failed:', err.message);
@@ -261,6 +272,11 @@ async function getRecentTrades(limit = 200) {
       triggerPrice:    doc.triggerPrice    ?? null,
       triggerDir:      doc.triggerDir      ?? null,
       activatedTs:     doc.activatedTs     ?? null,
+      // Indicator snapshot
+      rsi14:           doc.rsi14           ?? null,
+      volumeConfirmed: doc.volumeConfirmed ?? null,
+      volumeRatio:     doc.volumeRatio     ?? null,
+      mtfAligned:      doc.mtfAligned      ?? false,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getRecentTrades failed:', err.message);
@@ -418,6 +434,11 @@ async function getByDate(dateStr) {
       triggerPrice:    doc.triggerPrice    ?? null,
       triggerDir:      doc.triggerDir      ?? null,
       activatedTs:     doc.activatedTs     ?? null,
+      // Indicator snapshot
+      rsi14:           doc.rsi14           ?? null,
+      volumeConfirmed: doc.volumeConfirmed ?? null,
+      volumeRatio:     doc.volumeRatio     ?? null,
+      mtfAligned:      doc.mtfAligned      ?? false,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getByDate failed:', err.message);

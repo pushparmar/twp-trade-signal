@@ -544,6 +544,142 @@ function getKumoTwist(candles, { lookback = 10 } = {}) {
   return { signal: null, barsAgo: null, close: last.close, senkouA: last.senkouA, senkouB: last.senkouB, cloudColor };
 }
 
+/**
+ * Kumo Pre-Breakout — price is currently INSIDE the cloud, positioned near
+ * one edge, with enough momentum to exit through the opposite edge within
+ * roughly 2 candles.
+ *
+ * ── Concept ──────────────────────────────────────────────────────────────────
+ * When price enters the cloud it is in a "decision zone".  This detector
+ * catches the moment before the decision resolves:
+ *
+ *   BULLISH setup — price entered from below, sits near cloudBottom
+ *   ┌─ cloudTop ──────────────────────────────────── exit target ─┐
+ *   │                                                              │
+ *   │   close ← near lower edge (posInCloud ≤ posThreshold)       │
+ *   └─ cloudBottom ─────────────────────────────────── SL ────────┘
+ *   The distance from close to cloudTop ≤ atrMultiple × ATR14,
+ *   so the cloud can be cleared in ~2 candles of normal volatility.
+ *
+ *   BEARISH setup — price entered from above, sits near cloudTop
+ *   ┌─ cloudTop ──────────────────────────────────── SL ──────────┐
+ *   │   close ← near upper edge (posInCloud ≥ 1 − posThreshold)  │
+ *   │                                                              │
+ *   └─ cloudBottom ──────────────────────────────── exit target ──┘
+ *
+ * ── Filters ──────────────────────────────────────────────────────────────────
+ *   1. inCloud must be true  (price is between cloudBottom and cloudTop)
+ *   2. posInCloud ≤ posThreshold  (bullish) or ≥ 1−posThreshold  (bearish)
+ *   3. Distance to exit edge ≤ atrMultiple × ATR14  (reachable in ~2 candles)
+ *   4. TK direction agrees with signal  (tenkan > kijun = bullish)
+ *
+ * ── SL / target (patternRegistry.computeSLTarget) ───────────────────────────
+ *   SL anchor = the edge the price ENTERED from:
+ *     bullish → cloudBottom  (falling back below it = cloud rejected the move)
+ *     bearish → cloudTop     (rising back above it  = cloud rejected the move)
+ *
+ * @param {Object[]} candles
+ * @param {Object}   [opts]
+ * @param {number}   [opts.posThreshold=0.35]   fraction of cloud width from entry edge
+ * @param {number}   [opts.atrMultiple=2.5]     max candles of ATR to reach exit edge
+ *
+ * @returns {{
+ *   signal:          'bullish' | 'bearish' | null,
+ *   posInCloud:      number,          0 = at cloudBottom, 1 = at cloudTop
+ *   distToExit:      number | null,   price distance to exit edge
+ *   exitEdge:        number | null,   cloudTop (bullish) or cloudBottom (bearish)
+ *   cloudWidth:      number,
+ *   close:           number,
+ *   cloudTop:        number | null,
+ *   cloudBottom:     number | null,
+ *   senkouA:         number | null,
+ *   senkouB:         number | null,
+ *   tenkan:          number | null,
+ *   kijun:           number | null,
+ *   atr:             number | null,
+ * } | null}
+ */
+function getKumoPreBreakout(candles, { posThreshold = 0.35, atrMultiple = 2.5 } = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+  if (!last) return null;
+
+  // ── Must be inside the cloud ──────────────────────────────────────────────
+  if (last.aboveCloud || last.belowCloud) return {
+    signal: null, posInCloud: null, distToExit: null, exitEdge: null,
+    cloudWidth: null, close: last.close,
+    cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+    senkouA: last.senkouA, senkouB: last.senkouB,
+    tenkan: last.tenkan != null ? round(last.tenkan) : null,
+    kijun:  last.kijun  != null ? round(last.kijun)  : null,
+    atr: null,
+  };
+
+  if (last.cloudTop == null || last.cloudBottom == null) return null;
+
+  const cloudWidth = last.cloudTop - last.cloudBottom;
+  if (cloudWidth <= 0) return null;
+
+  // ── Position within the cloud: 0 = at cloudBottom, 1 = at cloudTop ───────
+  const posInCloud = (last.close - last.cloudBottom) / cloudWidth;
+
+  // ── ATR for "reachable in ~2 candles" filter ──────────────────────────────
+  const atr = getATR(candles, 14);
+
+  // ── TK direction ──────────────────────────────────────────────────────────
+  const tkDir = last.tenkan == null || last.kijun == null ? null
+    : last.tenkan > last.kijun ? 'bullish'
+    : last.tenkan < last.kijun ? 'bearish'
+    : null;
+
+  // ── Signal detection ──────────────────────────────────────────────────────
+  let signal      = null;
+  let exitEdge    = null;
+  let distToExit  = null;
+
+  if (posInCloud <= posThreshold) {
+    // Price is in the LOWER portion of the cloud — entered from below.
+    // Bullish: heading toward cloudTop as the exit target.
+    distToExit = last.cloudTop - last.close;
+    // Reachability: distance to cloudTop must be within atrMultiple × ATR
+    const reachable = atr == null || distToExit <= atrMultiple * atr;
+    // TK must be bullish (or not available) to confirm upward momentum
+    if (reachable && (tkDir === 'bullish' || tkDir === null)) {
+      signal   = 'bullish';
+      exitEdge = last.cloudTop;
+    }
+  } else if (posInCloud >= (1 - posThreshold)) {
+    // Price is in the UPPER portion of the cloud — entered from above.
+    // Bearish: heading toward cloudBottom as the exit target.
+    distToExit = last.close - last.cloudBottom;
+    const reachable = atr == null || distToExit <= atrMultiple * atr;
+    // TK must be bearish (or not available) to confirm downward momentum
+    if (reachable && (tkDir === 'bearish' || tkDir === null)) {
+      signal   = 'bearish';
+      exitEdge = last.cloudBottom;
+    }
+  }
+
+  return {
+    signal,
+    posInCloud:  Math.round(posInCloud  * 1000) / 1000,  // 3 d.p. (e.g. 0.182)
+    distToExit:  distToExit  != null ? round(distToExit)  : null,
+    exitEdge:    exitEdge    != null ? round(exitEdge)     : null,
+    cloudWidth:  round(cloudWidth),
+    close:       last.close,
+    cloudTop:    last.cloudTop,
+    cloudBottom: last.cloudBottom,
+    senkouA:     last.senkouA,
+    senkouB:     last.senkouB,
+    tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+    kijun:       last.kijun  != null ? round(last.kijun)  : null,
+    atr:         atr         != null ? round(atr)         : null,
+  };
+}
+
 // ── Shared helpers for cross-signal functions ─────────────────────────────────
 
 /** Returns 'above' | 'in' | 'below' based on the result bar's cloud position. */
@@ -1274,6 +1410,52 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
  * "1-rupee stop" position-sizing pathologies and stops getting wicked out by
  * normal noise.
  */
+/**
+ * Wilder's Smoothed RSI (standard 14-period).
+ *
+ * Calculated from the same candle array already used for Ichimoku — no extra
+ * API call required.  Returns the RSI of the LAST (most recent) candle.
+ *
+ * Algorithm:
+ *   1. Compute close-to-close changes for the full candle history.
+ *   2. Seed avgGain / avgLoss as simple averages over the first `period` changes.
+ *   3. Apply Wilder's smoothing (EMA with alpha = 1/period) for all subsequent bars.
+ *   4. RSI = 100 − (100 / (1 + avgGain/avgLoss))
+ *
+ * Returns null when fewer than period+1 candles are available.
+ * Returns 100 when avgLoss is zero (all gains — fully overbought).
+ * Returns 0   when avgGain is zero (all losses — fully oversold).
+ */
+function getRSI(candles, period = 14) {
+  if (!Array.isArray(candles) || candles.length < period + 1) return null;
+
+  let avgGain = 0;
+  let avgLoss = 0;
+
+  // ── Seed: simple average over the first `period` changes ─────────────────
+  for (let i = 1; i <= period; i++) {
+    const change = candles[i].close - candles[i - 1].close;
+    if (change > 0) avgGain += change;
+    else            avgLoss += Math.abs(change);
+  }
+  avgGain /= period;
+  avgLoss /= period;
+
+  // ── Wilder's smoothing for the remaining bars ─────────────────────────────
+  for (let i = period + 1; i < candles.length; i++) {
+    const change = candles[i].close - candles[i - 1].close;
+    const gain   = change > 0 ? change : 0;
+    const loss   = change < 0 ? Math.abs(change) : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
+
+  if (avgLoss === 0) return 100;
+  if (avgGain === 0) return 0;
+  const rs = avgGain / avgLoss;
+  return Math.round((100 - 100 / (1 + rs)) * 100) / 100;
+}
+
 function getATR(candles, period = 14) {
   if (!Array.isArray(candles) || candles.length < period + 1) return null;
   const trs = [];
@@ -1316,6 +1498,315 @@ function getVolumeContext(candles, lookback = 20) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Kumo Base Entry — the single unified "fat cloud base" setup.
+ *
+ * Three things must be true simultaneously:
+ *
+ *   1. FAT CLOUD — Kumo is thick (cloudWidth ≥ threshold).  A thin cloud is
+ *      noise; a thick one means genuine overhead resistance / support.
+ *
+ *   2. BASE (prior consolidation) — In the `consLookback` bars before now,
+ *      price was OUTSIDE the cloud on the correct side (belowCloud for bullish,
+ *      aboveCloud for bearish) for at least `minConsBars` bars, AND those bars
+ *      formed a tight range (H-L spread ≤ consRatio × ATR14).
+ *      This is the "coiling below the cloud" base.
+ *
+ *   3. FRESH CLOUD ENTRY — The current bar is INSIDE the cloud and near the
+ *      entry edge (posInCloud ≤ posThreshold for bullish, ≥ 1-posThreshold for
+ *      bearish).  Within the last `entryLookback` bars at least one bar was
+ *      still outside, confirming the entry is fresh (not stale mid-cloud drift).
+ *
+ * TK direction must agree (tenkan > kijun bullish, < kijun bearish).
+ *
+ * SL = consLow (bullish) or consHigh (bearish) — the far edge of the base.
+ * Target = cloud far edge (cloudTop for bullish, cloudBottom for bearish),
+ * then natural swing level beyond it.
+ *
+ * Options:
+ *   consLookback    — bars to search for the consolidation base  (default 10)
+ *   consRatio       — base H-L range ≤ consRatio × ATR14        (default 2.5)
+ *   minConsBars     — minimum bars outside cloud in the window   (default 3)
+ *   posThreshold    — max posInCloud for fresh-entry test        (default 0.4)
+ *   entryLookback   — bars back to check for "recently outside"  (default 3)
+ *   minCloudWidthPct — fat-cloud floor as fraction of close      (default 0.01)
+ *   minCloudWidthAtr — fat-cloud floor in ATR14 multiples        (default 1.0)
+ */
+function getKumoBaseEntry(candles, {
+  consLookback     = 10,
+  consRatio        = 2.5,
+  minConsBars      = 3,
+  posThreshold     = 0.4,
+  entryLookback    = 3,
+  minCloudWidthPct = 0.01,
+  minCloudWidthAtr = 1.0,
+} = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+  if (!last) return null;
+
+  // ── 1. Current bar must be INSIDE the cloud ───────────────────────────────
+  if (!last.inCloud) return null;
+  if (last.cloudTop == null || last.cloudBottom == null) return null;
+
+  const cloudWidth = last.cloudTop - last.cloudBottom;
+  if (cloudWidth <= 0) return null;
+
+  // ── Position within cloud ─────────────────────────────────────────────────
+  const posInCloud = (last.close - last.cloudBottom) / cloudWidth;
+  const isLowerEntry = posInCloud <= posThreshold;           // entered from below → bullish
+  const isUpperEntry = posInCloud >= (1 - posThreshold);     // entered from above → bearish
+  if (!isLowerEntry && !isUpperEntry) return null;           // too far from entry edge
+
+  const signal = isLowerEntry ? 'bullish' : 'bearish';
+
+  // ── ATR ───────────────────────────────────────────────────────────────────
+  const atr = getATR(candles, 14);
+
+  // ── 2. Fat cloud (OR-logic: passes if EITHER metric says it's fat) ────────
+  const pctMin       = minCloudWidthPct * last.close;
+  const atrMin       = atr != null ? minCloudWidthAtr * atr : pctMin;
+  const minCloudSize = Math.min(pctMin, atrMin);
+  if (cloudWidth < minCloudSize) return null;
+
+  // ── 3a. Fresh entry — within `entryLookback` bars, at least one was outside ─
+  let recentlyOutside = false;
+  for (let k = 1; k <= entryLookback && n - 1 - k >= 0; k++) {
+    const r = results[n - 1 - k];
+    if (signal === 'bullish' && r.belowCloud) { recentlyOutside = true; break; }
+    if (signal === 'bearish' && r.aboveCloud) { recentlyOutside = true; break; }
+  }
+  if (!recentlyOutside) return null; // price has been inside cloud too long — stale
+
+  // ── 3b. Prior consolidation — scan the `consLookback` window before current bar ─
+  const lookStart = Math.max(0, n - 1 - consLookback);
+  let outsideBars = 0;
+  let consHigh    = -Infinity;
+  let consLow     =  Infinity;
+  for (let i = lookStart; i < n - 1; i++) {  // exclude current bar
+    const r        = results[i];
+    const isOutside = signal === 'bullish' ? r.belowCloud : r.aboveCloud;
+    if (!isOutside) continue;
+    outsideBars++;
+    if (r.high > consHigh) consHigh = r.high;
+    if (r.low  < consLow)  consLow  = r.low;
+  }
+
+  if (outsideBars < minConsBars) return null; // not enough base bars
+
+  const consRange     = consHigh - consLow;
+  const consThreshold = atr != null ? consRatio * atr : null;
+  if (consThreshold != null && consRange > consThreshold) return null; // range too wide — not consolidating
+
+  // ── TK direction must confirm ─────────────────────────────────────────────
+  const tkDir = last.tenkan == null || last.kijun == null ? null
+    : last.tenkan > last.kijun ? 'bullish'
+    : last.tenkan < last.kijun ? 'bearish'
+    : null;
+  if (tkDir !== null && tkDir !== signal) return null;
+
+  return {
+    signal,
+    posInCloud:   Math.round(posInCloud * 1000) / 1000,
+    cloudWidth:   round(cloudWidth),
+    consRange:    round(consRange),
+    consLow:      round(consLow),
+    consHigh:     round(consHigh),
+    outsideBars,
+    close:        last.close,
+    cloudTop:     last.cloudTop,
+    cloudBottom:  last.cloudBottom,
+    senkouA:      last.senkouA,
+    senkouB:      last.senkouB,
+    tenkan:       last.tenkan != null ? round(last.tenkan) : null,
+    kijun:        last.kijun  != null ? round(last.kijun)  : null,
+    atr:          atr         != null ? round(atr)         : null,
+  };
+}
+
+/**
+ * Kumo Consolidation — price is consolidating just outside a fat cloud,
+ * coiling before a potential cloud-entry breakout.
+ *
+ * Criteria (all must pass):
+ *   1. Price is OUTSIDE the cloud (belowCloud for bullish, aboveCloud for bearish).
+ *   2. Price is CLOSE to the cloud edge — within max(proximityPct × close, proximityAtr × ATR14).
+ *   3. Recent `consLookback` bars are TIGHT — highest-high minus lowest-low
+ *      of that window ≤ consRatio × ATR14.  Tight range = coiling/consolidation.
+ *   4. Cloud is FAT — cloudWidth ≥ max(minCloudWidthPct × close, minCloudWidthAtr × ATR14).
+ *      A thick cloud is meaningful resistance/support; thin clouds are noise.
+ *   5. TK direction must confirm the signal direction (tenkan > kijun for bullish,
+ *      tenkan < kijun for bearish, or null if either line is unavailable).
+ *
+ * Returns:
+ *   {
+ *     signal:       'bullish' | 'bearish' | null,
+ *     distToCloud:  distance from close to the nearest cloud edge,
+ *     cloudWidth:   cloud thickness (cloudTop - cloudBottom),
+ *     consRange:    high-low spread of the last consLookback bars,
+ *     consLow:      lowest low of the consolidation window (SL anchor for bullish),
+ *     consHigh:     highest high of the consolidation window (SL anchor for bearish),
+ *     close, cloudTop, cloudBottom, tenkan, kijun, senkouA, senkouB, atr
+ *   } | null
+ *
+ * Options:
+ *   proximityPct      — max distance to cloud edge as fraction of close (default 0.03 = 3%)
+ *   proximityAtr      — max distance to cloud edge in ATR14 units      (default 2.5)
+ *   consLookback      — bars to inspect for consolidation range          (default 7)
+ *   consRatio         — consolidation range ≤ consRatio × ATR14          (default 2.0)
+ *                       Note: ATR14 is a single-bar average.  Over 7 bars a tight
+ *                       consolidation realistically spans 1.5–2× ATR, so 2.0 is the
+ *                       practical floor for this filter.
+ *   minCloudWidthPct  — cloud must be ≥ this fraction of close           (default 0.01 = 1%)
+ *   minCloudWidthAtr  — cloud must be ≥ this multiple of ATR14           (default 1.0)
+ */
+function getKumoConsolidation(candles, {
+  proximityPct     = 0.03,
+  proximityAtr     = 2.5,
+  consLookback     = 7,
+  consRatio        = 2.0,
+  minCloudWidthPct = 0.01,
+  minCloudWidthAtr = 1.0,
+} = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+  if (!last) return null;
+
+  // ── Must be outside the cloud ─────────────────────────────────────────────
+  if (!last.aboveCloud && !last.belowCloud) {
+    // Inside cloud — not this pattern
+    return {
+      signal: null, distToCloud: 0, cloudWidth: null,
+      consRange: null, consLow: null, consHigh: null,
+      close: last.close,
+      cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+      tenkan: last.tenkan != null ? round(last.tenkan) : null,
+      kijun:  last.kijun  != null ? round(last.kijun)  : null,
+      atr: null,
+    };
+  }
+
+  if (last.cloudTop == null || last.cloudBottom == null) return null;
+
+  const cloudWidth = last.cloudTop - last.cloudBottom;
+  if (cloudWidth <= 0) return null;
+
+  // ── ATR ───────────────────────────────────────────────────────────────────
+  const atr = getATR(candles, 14);
+
+  // ── Proximity to cloud edge ───────────────────────────────────────────────
+  // Use the more generous of the two thresholds so the filter adapts to
+  // both high-priced instruments (ATR-based) and low-volatility ones (pct-based).
+  const proximityThreshold = Math.max(
+    proximityPct * last.close,
+    atr != null ? proximityAtr * atr : 0,
+  );
+
+  const distToCloud = last.belowCloud
+    ? last.cloudBottom - last.close   // bullish: gap below cloudBottom
+    : last.close - last.cloudTop;     // bearish: gap above cloudTop
+
+  if (distToCloud > proximityThreshold) {
+    // Too far from the cloud
+    return {
+      signal: null, distToCloud: round(distToCloud), cloudWidth: round(cloudWidth),
+      consRange: null, consLow: null, consHigh: null,
+      close: last.close,
+      cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+      tenkan: last.tenkan != null ? round(last.tenkan) : null,
+      kijun:  last.kijun  != null ? round(last.kijun)  : null,
+      atr: atr != null ? round(atr) : null,
+    };
+  }
+
+  // ── Fat cloud check ───────────────────────────────────────────────────────
+  // OR-logic: qualify if EITHER the pct check OR the ATR check says it's fat.
+  // Math.min picks the less-strict threshold so a cloud only needs to satisfy one.
+  const pctMin = minCloudWidthPct * last.close;
+  const atrMin = atr != null ? minCloudWidthAtr * atr : pctMin;
+  const minCloudWidth = Math.min(pctMin, atrMin);
+
+  if (cloudWidth < minCloudWidth) {
+    // Thin cloud — not a meaningful barrier, skip
+    return {
+      signal: null, distToCloud: round(distToCloud), cloudWidth: round(cloudWidth),
+      consRange: null, consLow: null, consHigh: null,
+      close: last.close,
+      cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+      tenkan: last.tenkan != null ? round(last.tenkan) : null,
+      kijun:  last.kijun  != null ? round(last.kijun)  : null,
+      atr: atr != null ? round(atr) : null,
+    };
+  }
+
+  // ── Consolidation range ───────────────────────────────────────────────────
+  // Look at the last consLookback candles (excluding the very latest to avoid
+  // in-progress bar bias — not an issue for daily/weekly but good practice).
+  const lookStart = Math.max(0, n - consLookback);
+  let consHigh = -Infinity;
+  let consLow  =  Infinity;
+  for (let i = lookStart; i < n; i++) {
+    const r = results[i];
+    if (r.high > consHigh) consHigh = r.high;
+    if (r.low  < consLow)  consLow  = r.low;
+  }
+  const consRange = consHigh - consLow;
+
+  // Tight range = consolidation.  Compare against ATR-scaled threshold.
+  const consThreshold = atr != null ? consRatio * atr : null;
+  if (consThreshold != null && consRange > consThreshold) {
+    // Range is too wide — not consolidating
+    return {
+      signal: null, distToCloud: round(distToCloud), cloudWidth: round(cloudWidth),
+      consRange: round(consRange),
+      consLow:   round(consLow),
+      consHigh:  round(consHigh),
+      close: last.close,
+      cloudTop: last.cloudTop, cloudBottom: last.cloudBottom,
+      tenkan: last.tenkan != null ? round(last.tenkan) : null,
+      kijun:  last.kijun  != null ? round(last.kijun)  : null,
+      atr: round(atr),
+    };
+  }
+
+  // ── TK direction ──────────────────────────────────────────────────────────
+  const tkDir = last.tenkan == null || last.kijun == null ? null
+    : last.tenkan > last.kijun ? 'bullish'
+    : last.tenkan < last.kijun ? 'bearish'
+    : null;
+
+  // ── Signal ────────────────────────────────────────────────────────────────
+  let signal = null;
+  if (last.belowCloud && (tkDir === 'bullish' || tkDir === null)) {
+    signal = 'bullish';
+  } else if (last.aboveCloud && (tkDir === 'bearish' || tkDir === null)) {
+    signal = 'bearish';
+  }
+
+  return {
+    signal,
+    distToCloud:  round(distToCloud),
+    cloudWidth:   round(cloudWidth),
+    consRange:    round(consRange),
+    consLow:      round(consLow),
+    consHigh:     round(consHigh),
+    close:        last.close,
+    cloudTop:     last.cloudTop,
+    cloudBottom:  last.cloudBottom,
+    senkouA:      last.senkouA,
+    senkouB:      last.senkouB,
+    tenkan:       last.tenkan != null ? round(last.tenkan) : null,
+    kijun:        last.kijun  != null ? round(last.kijun)  : null,
+    atr:          atr         != null ? round(atr)         : null,
+  };
+}
+
 function round(n) {
   return Math.round(n * 100) / 100;
 }
@@ -1326,6 +1817,9 @@ module.exports = {
   getSignals,
   getKumoBreakoutTwist,
   getKumoBreakout,
+  getKumoBaseEntry,
+  getKumoPreBreakout,
+  getKumoConsolidation,
   getKumoTwist,
   getTKCross,
   getKijunCross,
@@ -1336,5 +1830,6 @@ module.exports = {
   getCloudSupport,
   getVolumeContext,
   getATR,
+  getRSI,
   to4H,
 };

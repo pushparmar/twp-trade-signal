@@ -31,6 +31,7 @@ const alertBus        = require('./alertBus');
 const kiteTicker      = require('./kiteTicker');
 const db              = require('../db');
 const instrumentCache = require('./instrumentCache');
+const kiteService     = require('./kiteService');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
@@ -83,13 +84,18 @@ function _qualifyTrade(entry, sl, target, settings, exchange, lotSize) {
   const rrRatio = Math.abs(target - entry) / riskPerUnit;
   const isMcx   = exchange === 'MCX';
 
-  // MCX takes every signal at 1 lot — no R:R / profit gating.
   if (isMcx) {
-    const quantity = Math.max(1, lotSize || 1);
+    // Gate on minRR — same rule as NSE.  A Natural Gas signal with a 1:1.5 R:R
+    // should be skipped just like any equity signal.
+    if (rrRatio < settings.minRR) return null;
+
+    // MCX trades 1 lot.  potentialProfit is in ₹ (price move × contract lot size).
+    const contractLotSize = lotSize || 1;
     return {
-      quantity,
+      quantity:        1,                 // number of lots
+      lotSize:         contractLotSize,   // stored so closePaperTrade can apply it
       riskPerUnit:     _round2(riskPerUnit),
-      potentialProfit: _round2(Math.abs(target - entry) * quantity),
+      potentialProfit: _round2(Math.abs(target - entry) * contractLotSize),
       rrRatio:         _round2(rrRatio),
     };
   }
@@ -115,7 +121,7 @@ function _qualifyTrade(entry, sl, target, settings, exchange, lotSize) {
  * @param {object} alert   The full alert payload (same shape as scan_alert SSE)
  * @param {string} source  'background' | 'live' | 'manual'
  */
-function _onAlert(alert, source) {
+async function _onAlert(alert, source) {
   // ── 1. Feature gate ──────────────────────────────────────────────────────
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
@@ -227,15 +233,21 @@ function _onAlert(alert, source) {
   // instrument cache.  NSE cash equity doesn't have lots — pass 1 as the noop.
   let lotSize = 1;
   if (tradeExchange === 'MCX') {
-    const mcxInst = instrumentCache.getByToken(numToken);
-    lotSize = mcxInst?.lotSize || 1;
+    // Prefer lot size from the instrument cache (populated from Kite master).
+    // Fall back to the symbol-name map for well-known commodities so Natural Gas /
+    // Crude Oil / Silver / Gold always get the right contract multiplier even if
+    // the cache lookup misses (e.g. on first boot before the cache is warm).
+    const mcxInst   = instrumentCache.getByToken(numToken);
+    const cacheSize = mcxInst?.lotSize ?? 0;
+    lotSize = cacheSize > 1
+      ? cacheSize
+      : store.getLotMultiplier({ exchange: 'MCX', symbol: alert.tradingsymbol || alert.label || '' });
   }
 
   const pos = _qualifyTrade(
     usedEntry, usedSl, usedTarget, settings, tradeExchange, lotSize,
   );
   if (!pos) {
-    // Only NSE can be skipped now — MCX always qualifies (1 lot, no gates).
     const riskPerUnit = Math.abs(usedEntry - usedSl);
     const qty         = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
     const potential   = (Math.abs(usedTarget - usedEntry) * qty).toFixed(0);
@@ -246,10 +258,74 @@ function _onAlert(alert, source) {
     return;
   }
 
-  // ── 6. Capital check ─────────────────────────────────────────────────────
-  const shareEntry = Number(usedEntry);
-  const cost       = pos.quantity * shareEntry;
-  const balance    = store.getPaperBalance();
+  // ── 6. Live LTP — three-way gap handling ─────────────────────────────────
+  //
+  //   a) LTP fetch fails  → SKIP.  We cannot enter at yesterday's close price
+  //      because that level may be far from the real market.  Better to miss
+  //      the trade than to open a phantom position at a stale price.
+  //
+  //   b) LTP available, gap ≤ GAP_THRESHOLD (0.5%)  → enter immediately at
+  //      live LTP.  Tiny drift is normal; we just use the real market price.
+  //
+  //   c) LTP available, gap > GAP_THRESHOLD  → place a PENDING limit order
+  //      at the pattern's close (the Kijun / cloud level).  The order only
+  //      activates once price RETURNS to that structural zone, confirming the
+  //      level is still relevant before risking capital.
+  //      • Bullish BUY:  triggerDir = 'below'  (fire when price ≤ patternClose)
+  //      • Bearish SELL: triggerDir = 'above'  (fire when price ≥ patternClose)
+  //
+  // Gap threshold — anything wider than 0.5% from the pattern close is treated
+  // as a meaningful gap that warrants a limit-style pending order.
+  const GAP_THRESHOLD = 0.005;
+
+  const patternClose    = Number(usedEntry); // structural level from scanner
+  const tradingSymbol   = alert.tradingsymbol || alert.label || String(numToken);
+  const ltpKey          = `${tradeExchange}:${tradingSymbol}`;
+
+  let liveLtp = null;
+  try {
+    const ltpData = await kiteService.getLTP([ltpKey]);
+    const price   = ltpData[ltpKey]?.last_price;
+    if (price && price > 0) liveLtp = price;
+  } catch (err) {
+    console.warn(`[AutoTrader] LTP fetch failed for ${alert.label ?? token}: ${err.message}`);
+  }
+
+  // (a) LTP unavailable — skip entirely
+  if (liveLtp === null) {
+    console.log(
+      `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — ` +
+      `skipped: could not fetch live price, refusing to enter at stale close ₹${patternClose}`,
+    );
+    return;
+  }
+
+  const gapPct   = Math.abs(liveLtp - patternClose) / patternClose;
+  const hasGap   = gapPct > GAP_THRESHOLD;
+  const action   = signal === 'bullish' ? 'BUY' : 'SELL';
+
+  // Entry price for sizing: live LTP if no gap, else patternClose (pending fills there)
+  const shareEntry = hasGap ? patternClose : liveLtp;
+
+  // Qualify with the intended entry price
+  const posLive = _qualifyTrade(shareEntry, usedSl, usedTarget, settings, tradeExchange, lotSize);
+  if (!posLive) {
+    const riskPerUnit = Math.abs(shareEntry - usedSl);
+    const qty         = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
+    const potential   = (Math.abs(usedTarget - shareEntry) * qty).toFixed(0);
+    console.log(
+      `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) [${tradeExchange}] — ` +
+      `skipped: profit≈₹${potential} < minProfit ₹${settings.minProfit}`,
+    );
+    return;
+  }
+
+  // ── 7. Capital check ──────────────────────────────────────────────────────
+  // For MCX: notional cost = quantity(lots) × lotSize × price.
+  // For NSE: notional cost = quantity(shares) × price.
+  const contractMult = posLive.lotSize ?? 1;
+  const cost         = posLive.quantity * contractMult * shareEntry;
+  const balance = store.getPaperBalance();
   if (cost > balance.available) {
     console.log(
       `[AutoTrader] ⏭  ${alert.label ?? token} — insufficient balance ` +
@@ -258,57 +334,72 @@ function _onAlert(alert, source) {
     return;
   }
 
-  // ── 7. Claim the dedup slot ───────────────────────────────────────────────
+  // ── 8. Claim the dedup slot ───────────────────────────────────────────────
   _dedup.set(dedupKey, today);
 
-  const action = signal === 'bullish' ? 'BUY' : 'SELL';
+  // ── 9. Build trade object ─────────────────────────────────────────────────
+  // status = PENDING when price has gapped; OPEN for direct entry.
+  // A PENDING trade activates in tradeWatcher when price returns to triggerPrice.
+  const tradeStatus  = hasGap ? 'PENDING' : 'OPEN';
+  // triggerDir: which direction the live price must move to reach patternClose.
+  //   bullish gap-up  → price must fall  back to Kijun → 'below'
+  //   bearish gap-down → price must rally back to Kijun → 'above'
+  const triggerDir   = hasGap ? (signal === 'bullish' ? 'below' : 'above') : undefined;
+  const triggerPrice = hasGap ? patternClose : undefined;
 
-  // ── 8. Build trade object — cash equity, all share-price levels ──────────
   const trade = {
     id:              uuidv4(),
     ts:              Date.now(),
     source:          'auto',
     autoSource:      source,
-    // Instrument (share)
-    symbol:          alert.tradingsymbol || alert.label || String(numToken),
+    // Instrument
+    symbol:          tradingSymbol,
     token:           numToken,
     exchange:        tradeExchange,
     // Order sizing
     action,
-    quantity:        pos.quantity,
-    lotSize:         lotSize,
-    // Entry / SL / target — all share-price levels
+    quantity:        posLive.quantity,
+    lotSize,
+    // Entry / SL / target
     entryPrice:      shareEntry,
     exitPrice:       null,
     sl:              Number(usedSl),
     initialSl:       Number(usedSl),
     target:          Number(usedTarget),
-    mtfSource:       mtfSource,
+    mtfSource,
+    // Pending-order fields (undefined on direct-entry trades)
+    status:          tradeStatus,
+    triggerPrice,
+    triggerDir,
     // TSL state
     tslActivated:    false,
     peakPrice:       shareEntry,
-    status:          'OPEN',
     pnl:             null,
     closedTs:        null,
     // Pattern context
-    patternId:       patternId       ?? null,
+    patternId:       patternId         ?? null,
     patternLabel:    alert.patternLabel ?? null,
     signal,
-    interval:        interval         ?? null,
-    tfLabel:         alert.tfLabel    ?? null,
+    interval:        interval           ?? null,
+    tfLabel:         alert.tfLabel      ?? null,
     // Risk metadata
-    riskPerUnit:     pos.riskPerUnit,
-    rrRatio:         pos.rrRatio,
-    potentialProfit: pos.potentialProfit,
+    riskPerUnit:     posLive.riskPerUnit,
+    rrRatio:         posLive.rrRatio,
+    potentialProfit: posLive.potentialProfit,
     targetSource:    alert.targetSource ?? null,
+    // Indicator snapshot at scan time — no extra API call needed; RSI is
+    // computed from the same candle array the pattern engine already holds.
+    rsi14:           alert.rsi14         ?? null,
+    volumeConfirmed: alert.volumeConfirmed ?? null,
+    volumeRatio:     alert.volumeRatio    ?? null,
+    mtfAligned:      alert.mtfAligned     ?? false,
   };
 
-  // ── 9. Persist + broadcast ────────────────────────────────────────────────
+  // ── 10. Persist + broadcast ───────────────────────────────────────────────
   store.addPaperTrade(trade);
   broadcast('paper_trade', trade);
   broadcast('paper_balance', store.getPaperBalance());
 
-  // Subscribe the share's instrument token to the live ticker
   try {
     kiteTicker.subscribe([numToken]);
   } catch (err) {
@@ -319,14 +410,24 @@ function _onAlert(alert, source) {
 
   const mtfTag = mtfSource ? ` ⚡MTF(${mtfSource})` : '';
   const qtyTag = tradeExchange === 'MCX'
-    ? `${pos.quantity}qty (1 lot × ${lotSize})`
-    : `${pos.quantity}qty`;
-  console.log(
-    `[AutoTrader] 🤖 ${action} ${trade.symbol} [${tradeExchange}] @ ₹${shareEntry} ` +
-    `[${alert.tfLabel ?? interval}] ${patternId}${mtfTag} ` +
-    `sl=₹${usedSl} tgt=₹${usedTarget} ` +
-    `R:R=${pos.rrRatio} profit≈₹${pos.potentialProfit} ${qtyTag} [${source}]`,
-  );
+    ? `${posLive.quantity}qty (1 lot × ${lotSize})`
+    : `${posLive.quantity}qty`;
+
+  if (hasGap) {
+    console.log(
+      `[AutoTrader] ⏳ PENDING ${action} ${trade.symbol} [${tradeExchange}]` +
+      ` — gap ${(gapPct * 100).toFixed(2)}% (ltp ₹${liveLtp} vs kijun ₹${patternClose})` +
+      ` trigger=${triggerDir} ₹${patternClose} sl=₹${usedSl} tgt=₹${usedTarget}` +
+      ` ${qtyTag} [${source}]`,
+    );
+  } else {
+    console.log(
+      `[AutoTrader] 🤖 ${action} ${trade.symbol} [${tradeExchange}] @ ₹${shareEntry}` +
+      ` [${alert.tfLabel ?? interval}] ${patternId}${mtfTag}` +
+      ` sl=₹${usedSl} tgt=₹${usedTarget}` +
+      ` R:R=${posLive.rrRatio} profit≈₹${posLive.potentialProfit} ${qtyTag} [${source}]`,
+    );
+  }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -334,11 +435,11 @@ function _onAlert(alert, source) {
 /** Start listening for scan alerts. Call once after store is loaded. */
 function start() {
   alertBus.on('alert', (alert, source) => {
-    try {
-      _onAlert(alert, source);
-    } catch (err) {
-      console.error('[AutoTrader] _onAlert error:', err.message);
-    }
+    // _onAlert is async (LTP fetch); attach .catch() so a rejected promise never
+    // becomes an unhandled rejection and crashes the process.
+    _onAlert(alert, source).catch(err =>
+      console.error('[AutoTrader] _onAlert error:', err.message),
+    );
   });
   console.log('[AutoTrader] Started — will auto-place paper trades on scan alerts');
 }
