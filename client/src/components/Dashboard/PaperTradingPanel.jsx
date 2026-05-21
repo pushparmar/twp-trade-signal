@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
+import ScanChartModal from "../Scanner/ScanChartModal";
 
 // ── Timeframe display order (most important first in the UI) ──────────────────
 const TF_ORDER = ["1d", "4h", "1h", "15m"];
@@ -41,8 +42,8 @@ function groupByDate(trades) {
         .map(dateStr => {
             const dayTrades = groups[dateStr];
             const totalPnl = dayTrades.reduce((s, t) => s + (t.pnl || 0), 0);
-            const wins     = dayTrades.filter(t => (t.pnl || 0) > 0).length;
-            const losses   = dayTrades.filter(t => (t.pnl || 0) < 0).length;
+            const wins = dayTrades.filter(t => (t.pnl || 0) > 0).length;
+            const losses = dayTrades.filter(t => (t.pnl || 0) < 0).length;
             return { dateStr, label: fmtDateLabel(dateStr), trades: dayTrades, totalPnl, wins, losses };
         });
 }
@@ -230,6 +231,9 @@ function OpenTradeRow({ trade, onClose }) {
     const tradeTick = useAppStore(s => s.tradeTicks[trade.id]);
     const tick = useAppStore(s => s.ticks[trade.token]);
 
+    // Local state for the Ichimoku chart modal
+    const [chartOpen, setChartOpen] = useState(false);
+
     const spotLtp = tick?.lastPrice ?? null;
     const ltp = tradeTick?.ltp ?? spotLtp;
     const monitorLtp = ltp;
@@ -272,7 +276,22 @@ function OpenTradeRow({ trade, onClose }) {
         trade.target != null &&
         (trade.action === "BUY" ? monitorLtp >= trade.target : monitorLtp <= trade.target);
 
+    // Build a minimal alert-shaped object so ScanChartModal can render the chart.
+    const chartAlert = {
+        token:        trade.token,
+        label:        trade.symbol,
+        interval:     trade.interval  ?? "day",
+        tfLabel:      trade.tfLabel   ?? "1d",
+        patternLabel: trade.patternLabel ?? null,
+        patternId:    trade.patternId  ?? null,
+        signal:       trade.signal     ?? "bullish",
+        close:        trade.entryPrice ?? 0,
+        sl:           trade.sl         ?? null,
+        target:       trade.target     ?? null,
+    };
+
     return (
+        <>
         <tr className={slHit ? "paper-row--sl" : targetHit ? "paper-row--target" : ""}>
             <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
             <td className="mob-hide">
@@ -285,6 +304,8 @@ function OpenTradeRow({ trade, onClose }) {
                     )}
                 </div>
             </td>
+
+            {/* Symbol cell — TF pill sits right beside the B/S badge on mobile */}
             <td className="td-symbol flex">
                 <span>
                     {trade.source === "auto" && (
@@ -295,33 +316,60 @@ function OpenTradeRow({ trade, onClose }) {
                     <span className={`td-sym-side td-sym-side--${trade.action === "BUY" ? "b" : "s"}`}>
                         {trade.action === "BUY" ? "B" : "S"}
                     </span>
-
-                    {trade.symbol}
+                    {/* TF pill immediately after B/S badge — mobile only */}
+                    {trade.tfLabel && (
+                        <span className="td-sym-tf">
+                            <span className={`pill-tf pill-tf--${trade.tfLabel}`}>{trade.tfLabel}</span>
+                        </span>
+                    )}
+                    {/* Symbol — click opens the Ichimoku chart modal */}
+                    <span
+                        className="td-sym-link"
+                        role="button"
+                        tabIndex={0}
+                        title={`View ${trade.symbol} chart`}
+                        onClick={() => setChartOpen(true)}
+                        onKeyDown={e => e.key === "Enter" && setChartOpen(true)}
+                    >
+                        {trade.symbol}
+                    </span>
                 </span>
                 {trade.patternLabel && (
                     <span className="td-sym-pattern" title={trade.patternId ?? trade.patternLabel}>
                         {trade.patternLabel}
                     </span>
                 )}
-                {trade.sl != null && (
-                    <span className="td-sym-sl mob-only">
-                        {trade.tslActivated ? "🔒" : "SL"} ₹{fmtPrice(trade.sl)}
-                        {slHit && " 🛑"}
+                {/* Qty + SL sub-row — mobile only */}
+                <span className="td-sym-sl mob-only">
+                    <span className="td-sym-qty">
+                        {trade.lots != null && trade.lotSize > 1 ? `${trade.lots} L` : `qty: ${trade.quantity}`}
                     </span>
-                )}
+                    {trade.sl != null && (
+                        <>
+                            {" · "}
+                            {trade.tslActivated ? "🔒" : "SL"} ₹{fmtPrice(trade.sl)}
+                            {slHit && " 🛑"}
+                        </>
+                    )}
+                </span>
             </td>
-            <td className="td-tf">
-                {trade.tfLabel ? (
-                    <span className={`pill-tf pill-tf--${trade.tfLabel}`}>{trade.tfLabel}</span>
-                ) : "—"}
+
+            {/* TF column — desktop only */}
+            <td className="td-tf mob-hide">
+                {trade.tfLabel ? <span className={`pill-tf pill-tf--${trade.tfLabel}`}>{trade.tfLabel}</span> : "—"}
             </td>
+
             <td className="td-num td-entry mob-hide">{fmtPrice(trade.entryPrice)}</td>
-            <td className="td-num">
+
+            {/* LTP — desktop only; replaced by stacked cell on mobile */}
+            <td className="td-num mob-hide">
                 <span ref={priceRef} className="td-ltp">
                     {fmtPrice(ltp ?? trade.entryPrice)}
                 </span>
             </td>
-            <td className="td-num">
+
+            {/* Qty — desktop only */}
+            <td className="td-num mob-hide">
                 {trade.lots != null && trade.lotSize > 1 ? (
                     <span title={`${trade.lots} lot${trade.lots > 1 ? "s" : ""} × ${trade.lotSize}`}>
                         {trade.lots}L<span style={{ color: "var(--txt3)", fontSize: 11 }}> /{trade.quantity}</span>
@@ -330,6 +378,7 @@ function OpenTradeRow({ trade, onClose }) {
                     trade.quantity
                 )}
             </td>
+
             <td className="td-num td-sl mob-hide">
                 {trade.tslActivated && (
                     <span className="paper-tsl-tag" title={`TSL armed — original SL ₹${trade.initialSl ?? "—"}`}>
@@ -343,9 +392,32 @@ function OpenTradeRow({ trade, onClose }) {
                 {trade.target != null ? <>{fmtPrice(trade.target)}</> : "—"}
                 {targetHit && <span className="paper-hit-tag paper-hit-tag--target"> 🎯</span>}
             </td>
-            <td className={`td-num ${pnlCls}`}>
+
+            {/* Live P&L — desktop only */}
+            <td className={`td-num mob-hide ${pnlCls}`}>
                 {unrealizedPnl != null ? `${unrealizedPnl >= 0 ? "+" : ""}₹${unrealizedPnl.toFixed(2)}` : "—"}
             </td>
+
+            {/* Stacked column — mobile only: LTP / P&L (Qty moved into symbol cell) */}
+            <td className="td-mob-only">
+                <div className="td-stacked">
+                    <div className="td-stacked-row">
+                        <span className="td-stacked-label">LTP</span>
+                        <span ref={priceRef} className="td-stacked-val td-ltp">
+                            {fmtPrice(ltp ?? trade.entryPrice)}
+                        </span>
+                    </div>
+                    <div className="td-stacked-row">
+                        <span className="td-stacked-label">P&amp;L</span>
+                        <span className={`td-stacked-val td-stacked-pnl ${pnlCls}`}>
+                            {unrealizedPnl != null
+                                ? `${unrealizedPnl >= 0 ? "+" : ""}₹${unrealizedPnl.toFixed(2)}`
+                                : "—"}
+                        </span>
+                    </div>
+                </div>
+            </td>
+
             <td>
                 <button className="btn btn-ghost btn-sm paper-close-btn" onClick={() => onClose(trade, ltp)}>
                     <span className="paper-close-label">Close</span>
@@ -353,6 +425,15 @@ function OpenTradeRow({ trade, onClose }) {
                 </button>
             </td>
         </tr>
+
+        {/* Ichimoku chart modal — rendered outside the <tr> via Fragment */}
+        {chartOpen && (
+            <ScanChartModal
+                alert={chartAlert}
+                onClose={() => setChartOpen(false)}
+            />
+        )}
+        </>
     );
 }
 
@@ -361,7 +442,7 @@ function PendingOrderRow({ trade, onCancel }) {
     const tick = useAppStore(s => s.ticks[trade.token]);
     const ltp = tick?.lastPrice ?? null;
 
-    const dirLabel = trade.triggerDir === 'above' ? '↑ ≥' : '↓ ≤';
+    const dirLabel = trade.triggerDir === "above" ? "↑ ≥" : "↓ ≤";
     const dist = ltp != null ? Math.abs(ltp - trade.triggerPrice).toFixed(2) : null;
 
     return (
@@ -375,7 +456,11 @@ function PendingOrderRow({ trade, onCancel }) {
                 <span className="paper-pending-badge">⏳</span>
             </td>
             <td className="td-num">
-                <span title={`Triggers when price ${trade.triggerDir === 'above' ? '≥' : '≤'} ₹${fmtPrice(trade.triggerPrice)}`}>
+                <span
+                    title={`Triggers when price ${trade.triggerDir === "above" ? "≥" : "≤"} ₹${fmtPrice(
+                        trade.triggerPrice
+                    )}`}
+                >
                     {dirLabel} ₹{fmtPrice(trade.triggerPrice)}
                 </span>
                 {ltp != null && dist != null && (
@@ -387,10 +472,13 @@ function PendingOrderRow({ trade, onCancel }) {
             <td className="td-num mob-hide">{trade.sl != null ? fmtPrice(trade.sl) : "—"}</td>
             <td className="td-num mob-hide">{trade.target != null ? fmtPrice(trade.target) : "—"}</td>
             <td className="td-num">
-                {trade.lots != null && trade.lotSize > 1
-                    ? <span title={`${trade.lots} lot${trade.lots > 1 ? "s" : ""} × ${trade.lotSize}`}>{trade.lots}L</span>
-                    : trade.quantity
-                }
+                {trade.lots != null && trade.lotSize > 1 ? (
+                    <span title={`${trade.lots} lot${trade.lots > 1 ? "s" : ""} × ${trade.lotSize}`}>
+                        {trade.lots}L
+                    </span>
+                ) : (
+                    trade.quantity
+                )}
             </td>
             <td>
                 <button
@@ -454,14 +542,14 @@ function AutoTraderSettings() {
 
     async function saveEdits() {
         const profit = Number(profitStr);
-        const trig   = Number(trigStr);
-        const dist   = Number(distStr);
-        const risk   = Number(riskStr);
+        const trig = Number(trigStr);
+        const dist = Number(distStr);
+        const risk = Number(riskStr);
         const updates = {};
         if (profit > 0) updates.minProfit = profit;
-        if (trig > 0)   updates.tslTriggerR  = trig;
-        if (dist > 0)   updates.tslDistanceR = dist;
-        if (risk > 0)   updates.riskPerTrade = risk;
+        if (trig > 0) updates.tslTriggerR = trig;
+        if (dist > 0) updates.tslDistanceR = dist;
+        if (risk > 0) updates.riskPerTrade = risk;
         if (Object.keys(updates).length) await patch(updates);
         setEditing(false);
     }
@@ -616,10 +704,10 @@ export default function PaperTradingPanel() {
     const [closedSort, setClosedSort] = useState({ field: "closedTs", dir: "desc" });
 
     // Historical trades fetched from MongoDB — merged with live store for display.
-    const [dbTrades, setDbTrades]       = useState([]);
-    const [loadingDb, setLoadingDb]     = useState(false);
-    const [dbLoaded, setDbLoaded]       = useState(false);
-    const [dbLimit, setDbLimit]         = useState(200);
+    const [dbTrades, setDbTrades] = useState([]);
+    const [loadingDb, setLoadingDb] = useState(false);
+    const [dbLoaded, setDbLoaded] = useState(false);
+    const [dbLimit, setDbLimit] = useState(200);
 
     // Which date groups are collapsed — today starts expanded, older dates collapsed.
     const todayIst = toIstDateStr(Date.now());
@@ -634,8 +722,12 @@ export default function PaperTradingPanel() {
         });
     }
 
-    function collapseAll()  { setCollapsedDates(new Set(dateGroups.map(g => g.dateStr))); }
-    function expandAll()    { setCollapsedDates(new Set()); }
+    function collapseAll() {
+        setCollapsedDates(new Set(dateGroups.map(g => g.dateStr)));
+    }
+    function expandAll() {
+        setCollapsedDates(new Set());
+    }
 
     /** Fetch recent trades from MongoDB and merge into the display list. */
     async function handleLoadHistory(limit = dbLimit) {
@@ -656,9 +748,7 @@ export default function PaperTradingPanel() {
 
     // Merge live store with DB history — deduplicate by trade id, store wins on conflict.
     const storeIds = new Set(paperTrades.map(t => t.id));
-    const mergedTrades = dbLoaded
-        ? [...paperTrades, ...dbTrades.filter(t => !storeIds.has(t.id))]
-        : paperTrades;
+    const mergedTrades = dbLoaded ? [...paperTrades, ...dbTrades.filter(t => !storeIds.has(t.id))] : paperTrades;
 
     let filtered = sourceFilter === "all" ? mergedTrades : mergedTrades.filter(t => t.source === sourceFilter);
     if (exchFilter !== "all") {
@@ -671,7 +761,9 @@ export default function PaperTradingPanel() {
     async function handleCancelPending(id) {
         try {
             await api.delete(`/paper/${id}`);
-        } catch { /* server may be unreachable — still remove locally */ }
+        } catch {
+            /* server may be unreachable — still remove locally */
+        }
         removePaperTrade(id);
     }
 
@@ -867,18 +959,14 @@ export default function PaperTradingPanel() {
                                     />
                                     <th className="mob-hide">Action</th>
                                     <SortTh label="Symbol" field="symbol" sort={openSort} onSort={setOpenSort} />
-                                    <th className="th-tf">TF</th>
+                                    {/* TF column — desktop only; pill moves into Symbol cell on mobile */}
+                                    <th className="th-tf mob-hide">TF</th>
                                     <SortTh
-                                        label={
-                                            <>
-                                                <span className="mob-hide">Entry</span>
-                                                <span className="mob-show">LTP</span>
-                                            </>
-                                        }
+                                        label="Entry"
                                         field="entry"
                                         sort={openSort}
                                         onSort={setOpenSort}
-                                        className="th-num"
+                                        className="th-num mob-hide"
                                     />
                                     <th className="th-num mob-hide">LTP</th>
                                     <SortTh
@@ -886,7 +974,7 @@ export default function PaperTradingPanel() {
                                         field="qty"
                                         sort={openSort}
                                         onSort={setOpenSort}
-                                        className="th-num"
+                                        className="th-num mob-hide"
                                     />
                                     <SortTh
                                         label="SL"
@@ -902,13 +990,19 @@ export default function PaperTradingPanel() {
                                         onSort={setOpenSort}
                                         className="th-num mob-hide"
                                     />
-                                    <th className="th-num">Live P&amp;L</th>
+                                    <th className="th-num mob-hide">Live P&amp;L</th>
+                                    {/* Combined header — mobile only */}
+                                    <th className="th-num td-mob-only">LTP / P&amp;L</th>
                                     <th></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {sortedOpen.map(t => (
-                                    <OpenTradeRow key={t.id} trade={t} onClose={(t, ltp) => setClosingTrade({ trade: t, ltp })} />
+                                    <OpenTradeRow
+                                        key={t.id}
+                                        trade={t}
+                                        onClose={(t, ltp) => setClosingTrade({ trade: t, ltp })}
+                                    />
                                 ))}
                             </tbody>
                         </table>
@@ -923,42 +1017,16 @@ export default function PaperTradingPanel() {
                         <h3 className="section-title">
                             Closed Trades <span className="count-badge">{closedTrades.length}</span>
                         </h3>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                            {/* Collapse / Expand all date groups */}
-                            <button className="btn btn-ghost btn-sm" onClick={expandAll} title="Expand all dates">▼ All</button>
-                            <button className="btn btn-ghost btn-sm" onClick={collapseAll} title="Collapse all dates">▶ All</button>
-                            {!dbLoaded ? (
-                                <button
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => handleLoadHistory(500)}
-                                    disabled={loadingDb}
-                                    title="Fetch full trade history from MongoDB"
-                                >
-                                    {loadingDb ? "Loading…" : "📂 History"}
-                                </button>
-                            ) : (
-                                <>
-                                    {dbLimit < 1000 && (
-                                        <button
-                                            className="btn btn-ghost btn-sm"
-                                            onClick={() => handleLoadHistory(1000)}
-                                            disabled={loadingDb}
-                                            title="Load up to 1000 trades"
-                                        >
-                                            {loadingDb ? "…" : "Load More"}
-                                        </button>
-                                    )}
-                                    <span style={{ fontSize: 11, color: "var(--txt3)" }}>DB {dbTrades.length}</span>
-                                </>
-                            )}
-                            <button className="btn btn-ghost btn-sm" onClick={handleClearAll}>Clear all</button>
-                        </div>
+
+                        <button className="btn btn-ghost btn-sm" onClick={handleClearAll}>
+                            Clear all
+                        </button>
                     </div>
 
                     {/* One table per date */}
                     {dateGroups.map(({ dateStr, label, trades: dayTrades, totalPnl, wins, losses }) => {
                         const isCollapsed = collapsedDates.has(dateStr);
-                        const pnlCls      = totalPnl >= 0 ? "pnl-positive" : "pnl-negative";
+                        const pnlCls = totalPnl >= 0 ? "pnl-positive" : "pnl-negative";
                         return (
                             <div key={dateStr} className="closed-date-group">
                                 {/* ── Date header ── */}
@@ -970,7 +1038,9 @@ export default function PaperTradingPanel() {
                                     <span className="cdh-arrow">{isCollapsed ? "▶" : "▼"}</span>
                                     <span className="cdh-date">{label}</span>
                                     <span className="cdh-meta">
-                                        <span className="cdh-count">{dayTrades.length} trade{dayTrades.length !== 1 ? "s" : ""}</span>
+                                        <span className="cdh-count">
+                                            {dayTrades.length} trade{dayTrades.length !== 1 ? "s" : ""}
+                                        </span>
                                         <span className="cdh-wr">
                                             <span style={{ color: "var(--green)" }}>W:{wins}</span>
                                             {" / "}
@@ -988,14 +1058,51 @@ export default function PaperTradingPanel() {
                                         <table className="kite-table">
                                             <thead>
                                                 <tr>
-                                                    <SortTh label="Time" field="closedTs" sort={closedSort} onSort={setClosedSort} className="mob-hide" />
+                                                    <SortTh
+                                                        label="Time"
+                                                        field="closedTs"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                        className="mob-hide"
+                                                    />
                                                     <th className="mob-hide">Action</th>
-                                                    <SortTh label="Symbol" field="symbol" sort={closedSort} onSort={setClosedSort} />
-                                                    <th className="th-tf">TF</th>
-                                                    <SortTh label="Entry" field="entry" sort={closedSort} onSort={setClosedSort} className="th-num" />
-                                                    <SortTh label="Exit"  field="exit"  sort={closedSort} onSort={setClosedSort} className="th-num mob-hide" />
-                                                    <SortTh label="Qty"   field="qty"   sort={closedSort} onSort={setClosedSort} className="th-num" />
-                                                    <SortTh label="P&L"   field="pnl"   sort={closedSort} onSort={setClosedSort} className="th-num" />
+                                                    <SortTh
+                                                        label="Symbol"
+                                                        field="symbol"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                    />
+                                                    <th className="th-tf mob-hide">TF</th>
+                                                    <SortTh
+                                                        label="Entry"
+                                                        field="entry"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                        className="th-num mob-hide"
+                                                    />
+                                                    <SortTh
+                                                        label="Exit"
+                                                        field="exit"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                        className="th-num mob-hide"
+                                                    />
+                                                    <SortTh
+                                                        label="Qty"
+                                                        field="qty"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                        className="th-num mob-hide"
+                                                    />
+                                                    <SortTh
+                                                        label="P&L"
+                                                        field="pnl"
+                                                        sort={closedSort}
+                                                        onSort={setClosedSort}
+                                                        className="th-num mob-hide"
+                                                    />
+                                                    {/* Combined header — mobile only */}
+                                                    <th className="th-num td-mob-only">Entry / P&amp;L</th>
                                                 </tr>
                                             </thead>
                                             <tbody>
@@ -1003,36 +1110,130 @@ export default function PaperTradingPanel() {
                                                     <tr key={t.id}>
                                                         <td className="td-mono mob-hide">{fmt(t.closedTs)}</td>
                                                         <td className="mob-hide">
-                                                            <span className={`pill ${t.action === "BUY" ? "pill-green" : "pill-red"}`}>
+                                                            <span
+                                                                className={`pill ${
+                                                                    t.action === "BUY" ? "pill-green" : "pill-red"
+                                                                }`}
+                                                            >
                                                                 {t.action}
                                                             </span>
                                                         </td>
+                                                        {/* Symbol — TF pill beside B/S badge on mobile */}
                                                         <td className="td-symbol">
-                                                            {t.source === "auto" && <span className="td-sym-bot" title="Auto trade">🤖</span>}
-                                                            {t.symbol}
+                                                            <span>
+                                                                {t.source === "auto" && (
+                                                                    <span className="td-sym-bot" title="Auto trade">
+                                                                        🤖
+                                                                    </span>
+                                                                )}
+                                                                <span
+                                                                    className={`td-sym-side td-sym-side--${
+                                                                        t.action === "BUY" ? "b" : "s"
+                                                                    }`}
+                                                                >
+                                                                    {t.action === "BUY" ? "B" : "S"}
+                                                                </span>
+                                                                {t.tfLabel && (
+                                                                    <span className="td-sym-tf">
+                                                                        <span
+                                                                            className={`pill-tf pill-tf--${t.tfLabel}`}
+                                                                        >
+                                                                            {t.tfLabel}
+                                                                        </span>
+                                                                    </span>
+                                                                )}
+                                                                {t.symbol}
+                                                            </span>
                                                             {t.patternLabel && (
-                                                                <span className="td-sym-pattern" title={t.patternId ?? t.patternLabel}>
+                                                                <span
+                                                                    className="td-sym-pattern"
+                                                                    title={t.patternId ?? t.patternLabel}
+                                                                >
                                                                     {t.patternLabel}
                                                                 </span>
                                                             )}
-                                                        </td>
-                                                        <td className="td-tf">
-                                                            {t.tfLabel ? (
-                                                                <span className={`pill-tf pill-tf--${t.tfLabel}`}>{t.tfLabel}</span>
-                                                            ) : "—"}
-                                                        </td>
-                                                        <td className="td-num">{t.entryPrice}</td>
-                                                        <td className="td-num mob-hide">{t.exitPrice}</td>
-                                                        <td className="td-num">
-                                                            {t.lots != null && t.lotSize > 1 ? (
-                                                                <span title={`${t.lots} lot${t.lots > 1 ? "s" : ""} × ${t.lotSize}`}>
-                                                                    {t.lots}L
-                                                                    <span style={{ color: "var(--txt3)", fontSize: 11 }}> /{t.quantity}</span>
+                                                            {/* Qty + SL — mobile only, inside symbol cell */}
+                                                            <span className="td-sym-sl mob-only">
+                                                                <span className="td-sym-qty">
+                                                                    {t.lots != null && t.lotSize > 1
+                                                                        ? `${t.lots}L`
+                                                                        : `${t.quantity}qty`}
                                                                 </span>
-                                                            ) : t.quantity}
+                                                                {t.sl != null && (
+                                                                    <>{" · "}SL ₹{fmtPrice(t.sl)}</>
+                                                                )}
+                                                            </span>
                                                         </td>
-                                                        <td className={`td-num ${pnlColor(t.pnl)}`}>
-                                                            {t.pnl !== null ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}` : "—"}
+                                                        {/* TF — desktop only */}
+                                                        <td className="td-tf mob-hide">
+                                                            {t.tfLabel ? (
+                                                                <span className={`pill-tf pill-tf--${t.tfLabel}`}>
+                                                                    {t.tfLabel}
+                                                                </span>
+                                                            ) : (
+                                                                "—"
+                                                            )}
+                                                        </td>
+                                                        <td className="td-num mob-hide">{t.entryPrice}</td>
+                                                        <td className="td-num mob-hide">{t.exitPrice}</td>
+                                                        {/* Qty — desktop only */}
+                                                        <td className="td-num mob-hide">
+                                                            {t.lots != null && t.lotSize > 1 ? (
+                                                                <span
+                                                                    title={`${t.lots} lot${t.lots > 1 ? "s" : ""} × ${
+                                                                        t.lotSize
+                                                                    }`}
+                                                                >
+                                                                    {t.lots}L
+                                                                    <span
+                                                                        style={{ color: "var(--txt3)", fontSize: 11 }}
+                                                                    >
+                                                                        {" "}
+                                                                        /{t.quantity}
+                                                                    </span>
+                                                                </span>
+                                                            ) : (
+                                                                t.quantity
+                                                            )}
+                                                        </td>
+                                                        {/* P&L — desktop only */}
+                                                        <td className={`td-num mob-hide ${pnlColor(t.pnl)}`}>
+                                                            {t.pnl !== null
+                                                                ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}`
+                                                                : "—"}
+                                                        </td>
+                                                        {/* Stacked cell — mobile only: Entry / Exit / P&L */}
+                                                        <td className="td-mob-only">
+                                                            <div className="td-stacked">
+                                                                <div className="td-stacked-row">
+                                                                    <span className="td-stacked-label">Entry</span>
+                                                                    <span className="td-stacked-val">
+                                                                        {fmtPrice(t.entryPrice)}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="td-stacked-row">
+                                                                    <span className="td-stacked-label">Exit</span>
+                                                                    <span className="td-stacked-val">
+                                                                        {t.exitPrice != null
+                                                                            ? fmtPrice(t.exitPrice)
+                                                                            : "—"}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="td-stacked-row">
+                                                                    <span className="td-stacked-label">P&amp;L</span>
+                                                                    <span
+                                                                        className={`td-stacked-val td-stacked-pnl ${pnlColor(
+                                                                            t.pnl
+                                                                        )}`}
+                                                                    >
+                                                                        {t.pnl !== null
+                                                                            ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(
+                                                                                  2
+                                                                              )}`
+                                                                            : "—"}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
                                                         </td>
                                                     </tr>
                                                 ))}
@@ -1092,14 +1293,14 @@ function OrderHistoryPanel() {
     })();
 
     const [selectedDate, setSelectedDate] = useState(yesterdayStr);
-    const [trades,       setTrades]       = useState(null);   // null = not fetched yet
-    const [loading,      setLoading]      = useState(false);
-    const [error,        setError]        = useState('');
-    const [tradingDates, setTradingDates] = useState([]);     // all dates that have trades in DB
+    const [trades, setTrades] = useState(null); // null = not fetched yet
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
+    const [tradingDates, setTradingDates] = useState([]); // all dates that have trades in DB
 
     // Load available trading dates once so we can navigate prev/next.
     useEffect(() => {
-        api.get('/paper/trading-dates')
+        api.get("/paper/trading-dates")
             .then(r => setTradingDates(r.data))
             .catch(() => {});
     }, []);
@@ -1109,7 +1310,7 @@ function OrderHistoryPanel() {
         if (date === todayStr) return;
 
         setLoading(true);
-        setError('');
+        setError("");
         try {
             const r = await api.get(`/paper/by-date?date=${date}`);
             setTrades(r.data.trades);
@@ -1136,9 +1337,7 @@ function OrderHistoryPanel() {
         }
         const idx = tradingDates.indexOf(selectedDate);
         // tradingDates is newest-first, so "previous day" = higher index.
-        const nextIdx = idx === -1
-            ? (dir === -1 ? 0 : tradingDates.length - 1)
-            : idx - dir; // dir +1 = newer (lower idx), dir -1 = older (higher idx)
+        const nextIdx = idx === -1 ? (dir === -1 ? 0 : tradingDates.length - 1) : idx - dir; // dir +1 = newer (lower idx), dir -1 = older (higher idx)
         if (nextIdx >= 0 && nextIdx < tradingDates.length) {
             const nextDate = tradingDates[nextIdx];
             // If navigating forward lands on today just update the picker (no fetch)
@@ -1150,12 +1349,12 @@ function OrderHistoryPanel() {
         }
     }
 
-    const isToday        = selectedDate === todayStr;
-    const closedHistory  = (trades ?? []).filter(t => t.status === 'CLOSED');
-    const openHistory    = (trades ?? []).filter(t => t.status === 'OPEN' || t.status === 'PENDING');
-    const totalPnl       = closedHistory.reduce((s, t) => s + (t.pnl || 0), 0);
-    const wins           = closedHistory.filter(t => (t.pnl || 0) > 0).length;
-    const losses         = closedHistory.filter(t => (t.pnl || 0) < 0).length;
+    const isToday = selectedDate === todayStr;
+    const closedHistory = (trades ?? []).filter(t => t.status === "CLOSED");
+    const openHistory = (trades ?? []).filter(t => t.status === "OPEN" || t.status === "PENDING");
+    const totalPnl = closedHistory.reduce((s, t) => s + (t.pnl || 0), 0);
+    const wins = closedHistory.filter(t => (t.pnl || 0) > 0).length;
+    const losses = closedHistory.filter(t => (t.pnl || 0) < 0).length;
 
     return (
         <div className="dash-section oh-panel">
@@ -1168,28 +1367,35 @@ function OrderHistoryPanel() {
                         onClick={() => stepDate(-1)}
                         title="Previous trading day"
                         disabled={loading}
-                    >‹</button>
+                    >
+                        ‹
+                    </button>
                     <input
                         type="date"
                         className="oh-date-input"
                         value={selectedDate}
                         max={todayStr}
-                        onChange={e => { setSelectedDate(e.target.value); setTrades(null); }}
-                        onKeyDown={e => e.key === 'Enter' && fetchDate(selectedDate)}
+                        onChange={e => {
+                            setSelectedDate(e.target.value);
+                            setTrades(null);
+                        }}
+                        onKeyDown={e => e.key === "Enter" && fetchDate(selectedDate)}
                     />
                     <button
                         className="btn btn-ghost btn-sm oh-nav-btn"
                         onClick={() => stepDate(1)}
                         title="Next trading day"
                         disabled={loading || selectedDate >= todayStr}
-                    >›</button>
+                    >
+                        ›
+                    </button>
                     <button
                         className="btn btn-primary btn-sm"
                         onClick={() => fetchDate(selectedDate)}
                         disabled={loading || isToday}
-                        title={isToday ? "Today's trades are shown in Closed Trades above" : ''}
+                        title={isToday ? "Today's trades are shown in Closed Trades above" : ""}
                     >
-                        {loading ? 'Loading…' : 'Fetch'}
+                        {loading ? "Loading…" : "Fetch"}
                     </button>
                 </div>
             </div>
@@ -1197,8 +1403,8 @@ function OrderHistoryPanel() {
             {/* ── Today notice — no fetch allowed ── */}
             {isToday && (
                 <div className="oh-hint oh-hint--today">
-                    Today's trades are visible in the <strong>Closed Trades</strong> section above.
-                    Select a past date to view history.
+                    Today's trades are visible in the <strong>Closed Trades</strong> section above. Select a past date
+                    to view history.
                 </div>
             )}
 
@@ -1206,23 +1412,23 @@ function OrderHistoryPanel() {
             {!isToday && trades !== null && !loading && (
                 <div className="oh-summary">
                     <span className="oh-sum-label">{fmtDateLabel(selectedDate)}</span>
-                    <span className="oh-sum-item">{trades.length} trade{trades.length !== 1 ? 's' : ''}</span>
+                    <span className="oh-sum-item">
+                        {trades.length} trade{trades.length !== 1 ? "s" : ""}
+                    </span>
                     {closedHistory.length > 0 && (
                         <>
                             <span className="oh-sum-item">
-                                <span style={{ color: 'var(--green)' }}>W:{wins}</span>
-                                {' / '}
-                                <span style={{ color: 'var(--red)' }}>L:{losses}</span>
+                                <span style={{ color: "var(--green)" }}>W:{wins}</span>
+                                {" / "}
+                                <span style={{ color: "var(--red)" }}>L:{losses}</span>
                             </span>
-                            <span className={`oh-sum-pnl ${totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
-                                {totalPnl >= 0 ? '+' : ''}₹{totalPnl.toFixed(2)}
+                            <span className={`oh-sum-pnl ${totalPnl >= 0 ? "pnl-positive" : "pnl-negative"}`}>
+                                {totalPnl >= 0 ? "+" : ""}₹{totalPnl.toFixed(2)}
                             </span>
                         </>
                     )}
                     {openHistory.length > 0 && (
-                        <span style={{ fontSize: 11, color: 'var(--yellow)' }}>
-                            {openHistory.length} still open
-                        </span>
+                        <span style={{ fontSize: 11, color: "var(--yellow)" }}>{openHistory.length} still open</span>
                     )}
                 </div>
             )}
@@ -1238,14 +1444,16 @@ function OrderHistoryPanel() {
                                 <th className="mob-hide td-mono">Time</th>
                                 <th className="mob-hide">Action</th>
                                 <th>Symbol</th>
-                                <th className="th-tf">TF</th>
-                                <th className="th-num">Entry</th>
+                                <th className="th-tf mob-hide">TF</th>
+                                <th className="th-num mob-hide">Entry</th>
                                 <th className="th-num mob-hide">Exit</th>
                                 <th className="th-num mob-hide">SL</th>
                                 <th className="th-num mob-hide">Target</th>
                                 <th className="th-num mob-hide">Qty</th>
-                                <th className="th-num">P&L</th>
+                                <th className="th-num mob-hide">P&L</th>
                                 <th className="th-num mob-hide">Status</th>
+                                {/* Combined header — mobile only */}
+                                <th className="th-num td-mob-only">Entry / P&amp;L</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1253,44 +1461,102 @@ function OrderHistoryPanel() {
                                 <tr key={t.id}>
                                     <td className="td-mono mob-hide">{fmt(t.ts)}</td>
                                     <td className="mob-hide">
-                                        <span className={`pill ${t.action === 'BUY' ? 'pill-green' : 'pill-red'}`}>
+                                        <span className={`pill ${t.action === "BUY" ? "pill-green" : "pill-red"}`}>
                                             {t.action}
                                         </span>
                                     </td>
+                                    {/* Symbol — TF pill beside B/S badge on mobile */}
                                     <td className="td-symbol">
-                                        {t.source === 'auto' && <span className="td-sym-bot" title="Auto trade">🤖</span>}
-                                        {t.symbol}
+                                        <span>
+                                            {t.source === "auto" && (
+                                                <span className="td-sym-bot" title="Auto trade">
+                                                    🤖
+                                                </span>
+                                            )}
+                                            <span
+                                                className={`td-sym-side td-sym-side--${t.action === "BUY" ? "b" : "s"}`}
+                                            >
+                                                {t.action === "BUY" ? "B" : "S"}
+                                            </span>
+                                            {t.tfLabel && (
+                                                <span className="td-sym-tf">
+                                                    <span className={`pill-tf pill-tf--${t.tfLabel}`}>{t.tfLabel}</span>
+                                                </span>
+                                            )}
+                                            {t.symbol}
+                                        </span>
                                         {t.patternLabel && (
                                             <span className="td-sym-pattern" title={t.patternId ?? t.patternLabel}>
                                                 {t.patternLabel}
                                             </span>
                                         )}
+                                        {/* Qty + SL — mobile only, inside symbol cell */}
+                                        <span className="td-sym-sl mob-only">
+                                            <span className="td-sym-qty">
+                                                {t.lots != null && t.lotSize > 1
+                                                    ? `${t.lots}L`
+                                                    : `${t.quantity}qty`}
+                                            </span>
+                                            {t.sl != null && (
+                                                <>{" · "}SL ₹{fmtPrice(t.sl)}</>
+                                            )}
+                                        </span>
                                     </td>
-                                    <td className="td-tf">
-                                        {t.tfLabel
-                                            ? <span className={`pill-tf pill-tf--${t.tfLabel}`}>{t.tfLabel}</span>
-                                            : '—'}
+                                    {/* TF — desktop only */}
+                                    <td className="td-tf mob-hide">
+                                        {t.tfLabel ? (
+                                            <span className={`pill-tf pill-tf--${t.tfLabel}`}>{t.tfLabel}</span>
+                                        ) : (
+                                            "—"
+                                        )}
                                     </td>
-                                    <td className="td-num">{fmtPrice(t.entryPrice)}</td>
-                                    <td className="td-num mob-hide">{t.exitPrice != null ? fmtPrice(t.exitPrice) : '—'}</td>
-                                    <td className="td-num mob-hide" style={{ color: 'var(--red)' }}>
-                                        {t.sl != null ? fmtPrice(t.sl) : '—'}
+                                    <td className="td-num mob-hide">{fmtPrice(t.entryPrice)}</td>
+                                    <td className="td-num mob-hide">
+                                        {t.exitPrice != null ? fmtPrice(t.exitPrice) : "—"}
                                     </td>
-                                    <td className="td-num mob-hide" style={{ color: 'var(--green)' }}>
-                                        {t.target != null ? fmtPrice(t.target) : '—'}
+                                    <td className="td-num mob-hide" style={{ color: "var(--red)" }}>
+                                        {t.sl != null ? fmtPrice(t.sl) : "—"}
+                                    </td>
+                                    <td className="td-num mob-hide" style={{ color: "var(--green)" }}>
+                                        {t.target != null ? fmtPrice(t.target) : "—"}
                                     </td>
                                     <td className="td-num mob-hide">
-                                        {t.lots != null && t.lotSize > 1
-                                            ? <span title={`${t.lots}L × ${t.lotSize}`}>{t.lots}L</span>
-                                            : t.quantity}
+                                        {t.lots != null && t.lotSize > 1 ? (
+                                            <span title={`${t.lots}L × ${t.lotSize}`}>{t.lots}L</span>
+                                        ) : (
+                                            t.quantity
+                                        )}
                                     </td>
-                                    <td className={`td-num ${pnlColor(t.pnl)}`}>
-                                        {t.pnl != null ? `${t.pnl >= 0 ? '+' : ''}₹${t.pnl.toFixed(2)}` : '—'}
+                                    <td className={`td-num mob-hide ${pnlColor(t.pnl)}`}>
+                                        {t.pnl != null ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}` : "—"}
                                     </td>
                                     <td className="mob-hide">
-                                        <span className={`oh-status oh-status--${(t.status ?? '').toLowerCase()}`}>
+                                        <span className={`oh-status oh-status--${(t.status ?? "").toLowerCase()}`}>
                                             {t.status}
                                         </span>
+                                    </td>
+                                    {/* Stacked cell — mobile only: Entry / Exit / P&L */}
+                                    <td className="td-mob-only">
+                                        <div className="td-stacked">
+                                            <div className="td-stacked-row">
+                                                <span className="td-stacked-label">Entry</span>
+                                                <span className="td-stacked-val">{fmtPrice(t.entryPrice)}</span>
+                                            </div>
+                                            <div className="td-stacked-row">
+                                                <span className="td-stacked-label">Exit</span>
+                                                <span className="td-stacked-val">
+                                                    {t.exitPrice != null ? fmtPrice(t.exitPrice) : "—"}
+                                                </span>
+                                            </div>
+                                            <div className="td-stacked-row">
+                                                <span className="td-stacked-label">P&amp;L</span>
+                                                <span className={`td-stacked-val td-stacked-pnl ${pnlColor(t.pnl)}`}>
+                                                    {t.pnl != null
+                                                        ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}`
+                                                        : "—"}
+                                                </span>
+                                            </div>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
@@ -1304,7 +1570,9 @@ function OrderHistoryPanel() {
             )}
 
             {!isToday && trades === null && !loading && (
-                <div className="oh-hint">Select a past date and press <strong>Fetch</strong> to load order history from DB.</div>
+                <div className="oh-hint">
+                    Select a past date and press <strong>Fetch</strong> to load order history from DB.
+                </div>
             )}
         </div>
     );

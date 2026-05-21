@@ -566,7 +566,7 @@ body {
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 12px;
-  overflow-x: auto;          /* horizontal scroll when table is wider than viewport */
+     /* horizontal scroll when table is wider than viewport */
   overflow-y: hidden;        /* keep border-radius clipping on top/bottom */
   -webkit-overflow-scrolling: touch;   /* smooth momentum scroll on iOS */
   box-shadow: var(--shadow);
@@ -1290,7 +1290,7 @@ body {
 @media (max-width: 768px) {
   .sidebar { position: fixed; z-index: 100; }
   .sidebar--collapsed { width: 0; border: none; }
-  .main-area { width: 100%; padding:10px;}
+  .main-area { width: 100%;}
   .page { padding: 16px;margin-top:70px; }
   .summary-row { grid-template-columns: repeat(1, 1fr); }
   .field-row { grid-template-columns: 1fr; }
@@ -4443,6 +4443,18 @@ body {
 .paper-close-icon { display: none; }
 .td-sym-bot  { display: inline; font-size: 12px; margin-right: 3px; vertical-align: middle; }
 .td-sym-side { display: none; }
+/* Symbol link — opens Kite chart; inherits colour, shows dotted underline on hover */
+.td-sym-link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.td-sym-link:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  color: var(--blue);
+}
 /* Pattern sub-label below symbol name */
 .td-sym-pattern {
   display: block;
@@ -4459,8 +4471,51 @@ body {
 /* SL shown below symbol on mobile only */
 .td-sym-sl   { display: none; }
 .mob-only    { display: none !important; }
+
+/* Mobile-only TABLE CELL (td/th) — hidden on desktop, table-cell on mobile */
+.td-mob-only { display: none !important; }
+
+/* Stacked column: three labeled rows (LTP / Qty / P&L) — inside .td-mob-only */
+.td-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* Each row: label on left, value on right */
+.td-stacked-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 90px;
+}
+.td-stacked-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--txt3);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  flex-shrink: 0;
+}
+.td-stacked-val {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.td-stacked-pnl {
+  font-size: 12px;
+  font-weight: 700;
+}
+/* TF pill shown inside symbol cell on mobile — sits right after B/S badge */
+.td-sym-tf { display: none; }
+
 @media (max-width: 768px) {
-  .mob-only  { display: inline !important; }
+  .mob-only       { display: inline !important; }
+  .td-mob-only    { display: table-cell !important; }
+  /* Inline next to B/S badge — small gap, vertically centred */
+  .td-sym-tf      { display: inline-flex; align-items: center; margin: 0 2px; vertical-align: middle; }
   .paper-close-label { display: none; }
   .paper-close-icon  { display: inline; font-size: 16px; line-height: 1; }
   .paper-close-btn   { padding: 2px 6px; min-width: 28px; }
@@ -4485,6 +4540,11 @@ body {
     color: var(--txt3);
     margin-top: 2px;
     line-height: 1.2;
+  }
+  /* Qty badge inside the symbol sub-row — slightly bolder so it stands out */
+  .td-sym-qty {
+    font-weight: 700;
+    color: var(--txt2);
   }
 }
 
