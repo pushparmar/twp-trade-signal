@@ -85,6 +85,45 @@ export default function SettingsPanel() {
         }
     }, []);
 
+    const loadScanStatus = useCallback(async () => {
+        setScanLoading(true);
+        try {
+            const r = await api.get('/scan/bg-status');
+            setScanStatus(r.data);
+        } catch {
+            setScanStatus(null);
+        } finally {
+            setScanLoading(false);
+        }
+    }, []);
+
+    async function testTelegram() {
+        setTgTesting(true);
+        setTgTestResult(null);
+        setTgTestMsg('');
+        try {
+            await api.post('/scan/test-telegram');
+            setTgTestResult('ok');
+            setTgTestMsg('✅ Test message sent! Check your Telegram.');
+        } catch (err) {
+            setTgTestResult('error');
+            setTgTestMsg(err.response?.data?.error || err.message);
+        } finally {
+            setTgTesting(false);
+        }
+    }
+
+    async function clearDedup() {
+        setClearingDedup(true);
+        try {
+            await api.post('/scan/clear-dedup');
+            // Reload status after clearing
+            await loadScanStatus();
+        } catch { /* ignore */ } finally {
+            setClearingDedup(false);
+        }
+    }
+
     async function togglePolling() {
         setPollError("");
         const action = isRunning ? "stop" : "start";
@@ -195,6 +234,77 @@ export default function SettingsPanel() {
                             </div>
                         )}
                     </div>
+                </div>
+
+                {/* Scanner Diagnostics */}
+                <div className="settings-group">
+                    <h3>Scanner Diagnostics</h3>
+
+                    {/* Test outgoing Telegram */}
+                    <div className="diag-row">
+                        <span className="diag-label">Outgoing alerts</span>
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={testTelegram}
+                            disabled={tgTesting}
+                        >
+                            {tgTesting ? 'Sending…' : 'Send test message'}
+                        </button>
+                    </div>
+                    {tgTestMsg && (
+                        <p className={`diag-result ${tgTestResult === 'ok' ? 'diag-result--ok' : 'diag-result--err'}`}>
+                            {tgTestMsg}
+                        </p>
+                    )}
+
+                    {/* Clear dedup */}
+                    <div className="diag-row" style={{ marginTop: 10 }}>
+                        <span className="diag-label">Dedup map</span>
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={clearDedup}
+                            disabled={clearingDedup}
+                            title="Clear daily dedup so all patterns can re-fire on the next scan"
+                        >
+                            {clearingDedup ? 'Clearing…' : 'Clear & refresh'}
+                        </button>
+                    </div>
+                    {scanStatus && (
+                        <p className="diag-hint">
+                            {scanStatus.dedupSize} dedup entries · scanner {scanStatus.running ? '🟢 running' : '🔴 stopped'}
+                        </p>
+                    )}
+
+                    {/* Background scanner next-run table */}
+                    <div className="diag-row" style={{ marginTop: 10 }}>
+                        <span className="diag-label">Next scan times</span>
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={loadScanStatus}
+                            disabled={scanLoading}
+                        >
+                            {scanLoading ? 'Loading…' : 'Refresh'}
+                        </button>
+                    </div>
+                    {scanStatus?.schedule && (
+                        <table className="diag-table">
+                            <thead>
+                                <tr><th>TF</th><th>Last run</th><th>Next in</th></tr>
+                            </thead>
+                            <tbody>
+                                {Object.entries(scanStatus.schedule).map(([iv, s]) => (
+                                    <tr key={iv}>
+                                        <td>{iv === '15minute' ? '15m' : iv === '60minute' ? '1h' : iv === '4h' ? '4h' : '1d'}</td>
+                                        <td>{fmtAgo(scanStatus.lastRunAt?.[iv])}</td>
+                                        <td>{fmtIn(s.fireAt)}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    )}
+                    {!scanStatus && !scanLoading && (
+                        <p className="diag-hint">Click Refresh to check scanner health.</p>
+                    )}
                 </div>
             </div>
         </div>

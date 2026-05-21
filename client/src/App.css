@@ -693,6 +693,53 @@ body {
 .tg-debug-ts   { font-size: 11px; color: var(--txt3); white-space: nowrap; }
 .tg-debug-text { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--txt); background: none; margin: 0; white-space: pre-wrap; word-break: break-all; }
 
+/* ── Scanner Diagnostics section ─────────────────── */
+.diag-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.diag-label {
+  font-size: 12px;
+  color: var(--txt2);
+  font-weight: 600;
+}
+.diag-result {
+  font-size: 12px;
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 5px;
+}
+.diag-result--ok  { background: var(--green-dim); color: var(--green); }
+.diag-result--err { background: var(--red-dim);   color: var(--red);   }
+.diag-hint {
+  font-size: 11px;
+  color: var(--txt3);
+  margin: 5px 0 0;
+}
+.diag-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.diag-table th {
+  text-align: left;
+  color: var(--txt3);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+.diag-table td {
+  padding: 5px 8px 5px 0;
+  color: var(--txt);
+  border-bottom: 1px solid var(--border);
+}
+
 /* ── Toggle switch ───────────────────────────────── */
 .toggle-field { flex-direction: row !important; align-items: flex-start; gap: 10px; margin-top: 8px; }
 .toggle-label { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 13px; color: var(--txt); }
