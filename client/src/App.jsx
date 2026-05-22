@@ -158,6 +158,39 @@ const PAGES = {
   settings:  SettingsPanel,
 };
 
+// ── EOD forecast clear ────────────────────────────────────────────────────────
+// Schedules a one-shot timer that fires at 15:45 IST (15 min after NSE close)
+// and wipes all stored TimeFM forecasts so stale intraday projections never
+// bleed into the next trading session if the user leaves the tab open overnight.
+// The timer reschedules itself each day so a long-lived session stays correct.
+function useEodForecastClear() {
+  const clearAllForecasts = useAppStore((s) => s.clearAllForecasts);
+
+  useEffect(() => {
+    let timer;
+
+    function scheduleNextClear() {
+      // 15:45 IST = 10:15 UTC
+      const now      = new Date();
+      const nowUtc   = now.getTime();
+      const target   = new Date(now);
+      target.setUTCHours(18, 15, 0, 0);          // 23:45 IST in UTC
+      if (target.getTime() <= nowUtc) {
+        // Already past today's clear window — schedule for tomorrow
+        target.setUTCDate(target.getUTCDate() + 1);
+      }
+      const msUntil = target.getTime() - nowUtc;
+      timer = setTimeout(() => {
+        clearAllForecasts();
+        scheduleNextClear();                      // reschedule for next day
+      }, msUntil);
+    }
+
+    scheduleNextClear();
+    return () => clearTimeout(timer);
+  }, [clearAllForecasts]);
+}
+
 // ── Authenticated shell ────────────────────────────────────────────────────────
 // Extracted into its own component so all hooks are called unconditionally,
 // regardless of whether the user is logged in (satisfies React rules of hooks).
@@ -181,6 +214,7 @@ function AppShell() {
 
   useSSE();
   usePaperAutoClose();
+  useEodForecastClear();
 
   useEffect(() => {
     api.get('/kite/auth/status')

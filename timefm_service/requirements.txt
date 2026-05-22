@@ -1,0 +1,4 @@
+timesfm[torch]==1.3.0
+fastapi
+uvicorn[standard]
+numpy<2

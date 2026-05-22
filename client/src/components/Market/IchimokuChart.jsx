@@ -56,6 +56,19 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
     const [error, setError] = useState(null);
     // Multi-timeframe RSI snapshot — fetched once per token open, cache-first on server
     const [multiRsi, setMultiRsi] = useState(null);
+    // TimeFM forecast overlay — sourced from global store so forecasts survive
+    // modal close/reopen and instrument switching within the same session.
+    const setForecastInStore = useAppStore(s => s.setForecast);
+    const clearForecastInStore = useAppStore(s => s.clearForecast);
+    const forecastMap = useAppStore(s => s.forecastMap);
+    const forecast = token ? forecastMap[`${token}:${interval}`] ?? null : null;
+
+    const [forecastLoad, setForecastLoad] = useState(false);
+    const [forecastHorizon, setForecastHorizon] = useState(10); // 1–32 bars
+    // Set to false when the service returns 503 so the button stays hidden
+    const [timefmAvail, setTimefmAvail] = useState(true);
+    // Toggle Ichimoku indicator visibility (cloud + lines) without removing series
+    const [showIchimoku, setShowIchimoku] = useState(true);
 
     const containerRef = useRef(null);
     const chartRef = useRef(null);
@@ -136,7 +149,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
                 timeFormatter
             },
             width: containerRef.current.clientWidth,
-            height: 420
+            height: 540
         });
 
         chartRef.current = chart;
@@ -519,97 +532,9 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
         seriesRef.current.candles.update(updated);
     }, [tick]);
 
-    // ── Trade overlay lines: entry / SL / target for every OPEN trade on this token ─
-    //
-    // Draws horizontal price lines on the candle series so traders can see where
-    // their entry, stop-loss and target sit on the chart.  Re-runs whenever:
-    //   • token / interval change                    (clear stale lines)
-    //   • paperTrades change                         (new trade opened or closed)
-    //   • a trade's SL moves (TSL trail)             (update the SL line)
-    //
-    // Lines are removed and recreated on every render — lightweight-charts
-    // doesn't expose a setPrice() so this is the simplest, leak-free pattern.
-    const paperTrades = useAppStore(s => s.paperTrades);
-    const priceLineHandlesRef = useRef([]);
-
-    useEffect(() => {
-        const series = seriesRef.current.candles;
-        if (!series) return;
-
-        // 1. Remove any lines drawn on a previous render
-        for (const handle of priceLineHandlesRef.current) {
-            try {
-                series.removePriceLine(handle);
-            } catch {
-                /* line already gone */
-            }
-        }
-        priceLineHandlesRef.current = [];
-
-        if (!token) return;
-
-        // 2. Find OPEN trades belonging to the displayed token
-        const myTrades = paperTrades.filter(
-            t =>
-                t.status === "OPEN" && Number(t.token) === Number(token) && (t.source === "scan" || t.source === "auto")
-        );
-        if (myTrades.length === 0) return;
-
-        // 3. Draw entry / SL / target for each trade
-        const ENTRY_COLOR = "#3b82f6"; // blue
-        const SL_COLOR = "#f87171"; // red
-        const TARGET_COLOR = "#4ade80"; // green
-        const TSL_COLOR = "#a78bfa"; // purple — distinguishes trailed stop from initial
-
-        for (const t of myTrades) {
-            const prefix = t.source === "auto" ? "🤖" : "✦";
-            if (t.entryPrice != null) {
-                const h = series.createPriceLine({
-                    price: t.entryPrice,
-                    color: ENTRY_COLOR,
-                    lineWidth: 1,
-                    lineStyle: 2, // dashed
-                    axisLabelVisible: true,
-                    title: `${prefix} ${t.action} @ ${t.entryPrice}`
-                });
-                priceLineHandlesRef.current.push(h);
-            }
-            if (t.sl != null) {
-                const h = series.createPriceLine({
-                    price: t.sl,
-                    color: t.tslActivated ? TSL_COLOR : SL_COLOR,
-                    lineWidth: 1,
-                    lineStyle: 0, // solid
-                    axisLabelVisible: true,
-                    title: t.tslActivated ? `🔒 TSL ${t.sl}` : `SL ${t.sl}`
-                });
-                priceLineHandlesRef.current.push(h);
-            }
-            if (t.target != null) {
-                const h = series.createPriceLine({
-                    price: t.target,
-                    color: TARGET_COLOR,
-                    lineWidth: 1,
-                    lineStyle: 0, // solid
-                    axisLabelVisible: true,
-                    title: `🎯 ${t.target}`
-                });
-                priceLineHandlesRef.current.push(h);
-            }
-        }
-
-        // Cleanup on token/interval change — fires before next effect run
-        return () => {
-            for (const handle of priceLineHandlesRef.current) {
-                try {
-                    series.removePriceLine(handle);
-                } catch {
-                    /* ignore */
-                }
-            }
-            priceLineHandlesRef.current = [];
-        };
-    }, [token, interval, paperTrades]);
+    // Trade overlay lines removed — entry / SL / target price lines are no
+    // longer drawn on the chart.  paperTrades is still subscribed downstream
+    // if needed for other purposes; the ref and effect have been removed.
 
     // ── Multi-TF RSI snapshot ───────────────────────────────────────────────
     // Fetches RSI(14) for all four standard timeframes in one server call.
@@ -622,6 +547,123 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
             .then(r => setMultiRsi(r.data))
             .catch(() => {}); // non-critical — RSI strip simply stays hidden
     }, [token]);
+
+    // ── Ichimoku visibility toggle ──────────────────────────────────────────
+    // Hides/shows all cloud + indicator line series without destroying data.
+    // The candlestick series is always kept visible.
+    useEffect(() => {
+        const s = seriesRef.current;
+        const v = { visible: showIchimoku };
+        s.bullUpper?.applyOptions(v);
+        s.bullLower?.applyOptions(v);
+        s.bearUpper?.applyOptions(v);
+        s.bearLower?.applyOptions(v);
+        s.kijun?.applyOptions(v);
+        s.tenkan?.applyOptions(v);
+        s.chikou?.applyOptions(v);
+    }, [showIchimoku]);
+
+    // ── TimeFM forecast overlay ─────────────────────────────────────────────
+    // Forecasts persist per instrument — switching token does NOT clear them.
+    // The user dismisses explicitly via the ✕ button.
+    /** Fetch a TimeFM directional forecast from the Node proxy. */
+    async function handleForecast() {
+        if (!token) return;
+        setForecastLoad(true);
+        try {
+            const r = await api.get(`/ichimoku/${token}/forecast`, {
+                params: { interval, horizon: forecastHorizon }
+            });
+            // Keyed by token:interval — persists across instrument AND timeframe switches
+            setForecastInStore(`${token}:${interval}`, r.data);
+        } catch (err) {
+            // 503 means the Python service is not running — hide the button
+            // permanently for this session so the user isn't confused by retries.
+            if (err.response?.status === 503) setTimefmAvail(false);
+        } finally {
+            setForecastLoad(false);
+        }
+    }
+
+    /** Dismiss the forecast for the current instrument + timeframe only. */
+    function dismissForecast() {
+        if (!token) return;
+        clearForecastInStore(`${token}:${interval}`);
+    }
+
+    // Draw the forecast series whenever forecast state changes.
+    // Rendered as semi-transparent candlesticks so the shape and direction read
+    // instantly — open/close come from consecutive point forecasts, high/low from
+    // the q90/q10 confidence bounds (the "wicks" represent uncertainty width).
+    useEffect(() => {
+        const chart = chartRef.current;
+        if (!chart || !forecast) return;
+
+        // Seconds per bar for each supported interval — used to project future
+        // timestamps. Day bars use 6.5 h (NSE session length) as a rough proxy
+        // since we only need approximate x-axis positions for the candles.
+        const INTERVAL_SECS = {
+            "15minute": 15 * 60,
+            "60minute": 60 * 60,
+            "4h": 4 * 60 * 60,
+            day: 6.5 * 60 * 60
+        };
+        const iSecs = INTERVAL_SECS[interval] ?? 900;
+
+        // Build OHLC — body only, no wicks (high = max(open,close), low = min(open,close))
+        const candleData = forecast.point.map((close, i) => {
+            const open = i === 0 ? forecast.lastClose : forecast.point[i - 1];
+            return {
+                time:  forecast.lastTime + (i + 1) * iSecs,
+                open,
+                high:  Math.max(open, close),
+                low:   Math.min(open, close),
+                close,
+            };
+        });
+
+        const fcSeries = chart.addSeries(CandlestickSeries, {
+            upColor:         "rgba(34, 211, 238, 0.30)",
+            downColor:       "rgba(251, 113, 133, 0.30)",
+            borderUpColor:   "rgba(34, 211, 238, 0.30)",
+            borderDownColor: "rgba(251, 113, 133, 0.30)",
+            wickUpColor:     "rgba(34, 211, 238, 0.30)",
+            wickDownColor:   "rgba(251, 113, 133, 0.30)",
+            priceLineVisible:   false,
+            lastValueVisible:   false,
+            // Exclude forecast bars from auto-scale so the y-axis stays anchored
+            // to historical candles — forecast candles never push the price scale out.
+            autoscaleInfoProvider: () => null,
+        });
+        fcSeries.setData(candleData);
+
+        // Store on seriesRef for cleanup tracking
+        seriesRef.current.forecast = fcSeries;
+
+        // Dashed target line — highest point for bullish, lowest for bearish
+        const isBull     = forecast.direction === 'bullish';
+        const targetPrice = isBull
+            ? Math.max(...forecast.point)
+            : Math.min(...forecast.point);
+        const lineColor  = isBull ? 'rgba(34, 211, 238, 0.85)' : 'rgba(251, 113, 133, 0.85)';
+
+        const targetLine = seriesRef.current.candles?.createPriceLine({
+            price:            targetPrice,
+            color:            lineColor,
+            lineWidth:        1,
+            lineStyle:        2,  // dashed
+            axisLabelVisible: true,
+            title:            isBull
+                ? `🔮 ▲ ${targetPrice.toFixed(2)}`
+                : `🔮 ▼ ${targetPrice.toFixed(2)}`,
+        });
+
+        return () => {
+            try { chart.removeSeries(fcSeries); } catch { /* series already removed */ }
+            try { seriesRef.current.candles?.removePriceLine(targetLine); } catch { /* line already removed */ }
+            seriesRef.current.forecast = null;
+        };
+    }, [forecast, interval]);
 
     // ── Imperative zoom API ─────────────────────────────────────────────────
     // Exposed via forwardRef so parents (e.g. ScanChartModal) can wire zoom
@@ -683,22 +725,17 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
                 {/* Multi-TF RSI strip — shown once server returns values */}
                 {multiRsi && (
                     <div className="ichi-rsi-strip">
-                        {['15m', '1h', '4h', '1d'].map(tf => {
+                        {["15m", "1h", "4h", "1d"].map(tf => {
                             const val = multiRsi[tf];
-                            const cls = val == null ? 'rsi-na'
-                                      : val >= 70   ? 'rsi-ob'
-                                      : val <= 30   ? 'rsi-os'
-                                      : '';
+                            const cls = val == null ? "rsi-na" : val >= 70 ? "rsi-ob" : val <= 30 ? "rsi-os" : "";
                             return (
                                 <span
                                     key={tf}
                                     className={`ichi-rsi-cell ${cls}`}
-                                    title={`RSI(14) on ${tf}: ${val != null ? val.toFixed(2) : 'N/A'}`}
+                                    title={`RSI(14) on ${tf}: ${val != null ? val.toFixed(2) : "N/A"}`}
                                 >
                                     <span className="ichi-rsi-tf">{tf}</span>
-                                    <span className="ichi-rsi-val">
-                                        {val != null ? val.toFixed(1) : '—'}
-                                    </span>
+                                    <span className="ichi-rsi-val">{val != null ? val.toFixed(1) : "—"}</span>
                                 </span>
                             );
                         })}
@@ -706,6 +743,46 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
                 )}
 
                 <div className="ichi-chart-header-right">
+                    {/* TimeFM AI forecast toggle — hidden when service is unavailable */}
+                    {timefmAvail && (
+                        <>
+                            <input
+                                type="number"
+                                className="ichi-forecast-horizon"
+                                value={forecastHorizon}
+                                min={1}
+                                max={32}
+                                disabled={forecastLoad}
+                                title="Forecast horizon: number of future bars (1–32)"
+                                onChange={e => {
+                                    const v = Math.max(1, Math.min(32, Number(e.target.value) || 10));
+                                    setForecastHorizon(v);
+                                }}
+                            />
+                            <button
+                                className={`ichi-chart-forecast-btn${forecast ? " ichi-chart-forecast-btn--active" : ""}`}
+                                onClick={forecast ? dismissForecast : handleForecast}
+                                disabled={forecastLoad}
+                                title={`Toggle TimeFM AI forecast (${forecastHorizon} bars)`}
+                            >
+                                {forecastLoad ? "…" : forecast ? "✕ Forecast" : "🔮 Forecast"}
+                            </button>
+                        </>
+                    )}
+                    {/* Directional bias badge — shown while forecast is active */}
+                    {forecast && (
+                        <span className={`ichi-forecast-badge ichi-forecast-badge--${forecast.direction}`}>
+                            {forecast.direction === "bullish" ? "▲" : "▼"} {Math.abs(forecast.pctMove)}%
+                        </span>
+                    )}
+                    {/* Ichimoku show/hide toggle */}
+                    <button
+                        className={`ichi-chart-auto-btn${showIchimoku ? '' : ' ichi-chart-auto-btn--off'}`}
+                        onClick={() => setShowIchimoku(v => !v)}
+                        title={showIchimoku ? 'Hide Ichimoku cloud & lines' : 'Show Ichimoku cloud & lines'}
+                    >
+                        {showIchimoku ? 'Ichi ✓' : 'Ichi ✗'}
+                    </button>
                     {/* Auto button — resets pan/zoom back to the default view */}
                     <button
                         className="ichi-chart-auto-btn"

@@ -8,3 +8,8 @@ server/.env
 .env.local
 .env.*.local
 .claude/worktrees/
+
+# TimeFM local virtualenv — never commit model weights or venv
+timefm_service/.venv/
+timefm_service/__pycache__/
+timefm_service/*.pyc

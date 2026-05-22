@@ -277,6 +277,87 @@ router.get('/:token/multi-rsi', async (req, res) => {
   res.json(result);
 });
 
+// ── TimeFM forecast URL (default: same machine, port 5050) ──────────────────
+// Local-only feature — the Python service is never deployed to Railway.
+// In production (NODE_ENV=production) this endpoint returns 503 immediately
+// so the client hides the Forecast button without attempting any connection.
+// Locally, TIMEFM_URL defaults to http://localhost:5050 (start.sh).
+const TIMEFM_URL = process.env.TIMEFM_URL || 'http://localhost:5050';
+const IS_PROD    = process.env.NODE_ENV === 'production';
+
+// GET /api/ichimoku/:token/forecast?interval=15minute&horizon=10
+// Reads the last 128 close prices from candleStore (cache-first, no extra
+// Kite calls when the instrument is subscribed) and forwards them to the
+// TimeFM Python service for inference.
+// NOTE: disabled on production — returns 503 so the UI hides the button.
+router.get('/:token/forecast', async (req, res) => {
+  // Short-circuit on Railway / any production deployment
+  if (IS_PROD) {
+    return res.status(503).json({ error: 'TimeFM not available in production' });
+  }
+  const token    = Number(req.params.token);
+  const interval = req.query.interval || '15minute';
+  const horizon  = Math.min(Number(req.query.horizon) || 10, 32);
+
+  if (!token) return res.status(400).json({ error: 'Invalid token' });
+
+  try {
+    // ── 1. Fetch candles (cache-first, falls back to Kite if cold) ───────────
+    let candles;
+    if (interval === '4h') {
+      // 4h is synthesised from 1h candles — same logic as the chart endpoint.
+      const candles1h = await candleStore.getCandles(token, '60minute', 600, true);
+      candles = candles1h && candles1h.length >= 52 ? _to4H(candles1h) : [];
+    } else {
+      candles = await candleStore.getCandles(token, interval, 300, true);
+    }
+
+    if (!candles || candles.length < 20) {
+      return res.status(422).json({ error: `Need ≥20 candles, got ${candles?.length ?? 0}` });
+    }
+
+    // ── 2. Extract last 128 close prices (oldest → newest) ───────────────────
+    const closes = candles.slice(-128).map((c) => c.close);
+
+    // ── 3. Forward to TimeFM Python service ──────────────────────────────────
+    let timefmRes;
+    try {
+      timefmRes = await fetch(`${TIMEFM_URL}/forecast`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ closes, horizon }),
+        signal:  AbortSignal.timeout(20_000),  // 20s — first call can be slow (model load)
+      });
+    } catch (fetchErr) {
+      // ECONNREFUSED = service not started; TIMEOUT = overloaded or cold start
+      const code = fetchErr.code || fetchErr.name;
+      if (code === 'ECONNREFUSED' || code === 'TimeoutError' || code === 'AbortError') {
+        return res.status(503).json({ error: 'TimeFM service unavailable' });
+      }
+      throw fetchErr;
+    }
+
+    if (!timefmRes.ok) {
+      const body = await timefmRes.text().catch(() => '');
+      return res.status(502).json({ error: `TimeFM error ${timefmRes.status}: ${body}` });
+    }
+
+    const forecast = await timefmRes.json();
+
+    // ── 4. Attach timestamp anchor so the chart can project bars correctly ────
+    // lastTime = Unix seconds of the most recent real candle.  The chart plots
+    // forecast[i] at lastTime + (i+1) × intervalSeconds.
+    const lastCandle  = candles[candles.length - 1];
+    forecast.lastTime = Math.floor(new Date(lastCandle.date).getTime() / 1000);
+    forecast.interval = interval;
+
+    res.json(forecast);
+  } catch (err) {
+    console.error('[/forecast]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/ichimoku/:token?interval=15minute
 // Returns Ichimoku signals. If putBuySignal or callBuySignal fires,
 // also resolves and attaches the ATM CE/PE instrument for that index.

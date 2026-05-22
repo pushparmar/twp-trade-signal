@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "npm run install:all && concurrently --names \"server,client\" --prefix-colors \"cyan,magenta\" \"npm run server\" \"npm run client\"",
+    "dev:full": "npm run install:all && concurrently --names \"server,client,timefm\" --prefix-colors \"cyan,magenta,yellow\" \"npm run server\" \"npm run client\" \"npm run timefm\"",
     "server": "cd server && node index.js",
     "client": "cd client && npm run dev",
+    "timefm": "bash timefm_service/start.sh",
     "install:all": "cd server && npm install && cd ../client && npm install"
   },
   "dependencies": {

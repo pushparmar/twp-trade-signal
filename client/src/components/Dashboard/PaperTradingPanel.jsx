@@ -806,10 +806,22 @@ export default function PaperTradingPanel() {
     }
 
     /** Download today's trade report as a CSV with pattern logic included. */
-    function handleExportCSV() {
+    async function handleExportCSV() {
         const today = new Date(Date.now() + 5.5 * 60 * 60 * 1000)
             .toISOString().slice(0, 10);
-        window.open(`/api/paper/export?date=${today}`, '_blank');
+        try {
+            const res = await api.get(`/paper/export?date=${today}`, {
+                responseType: 'blob',
+            });
+            const url = URL.createObjectURL(res.data);
+            const a   = document.createElement('a');
+            a.href     = url;
+            a.download = `trades-${today}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('[Export CSV]', err.message);
+        }
     }
 
     const openGetVal = (t, f) => {

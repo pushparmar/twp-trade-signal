@@ -169,6 +169,15 @@ const useAppStore = create(
   setMacroPrices:        (macroPrices)        => set({ macroPrices }),
   setSelectedInstrument: (selectedInstrument) => set({ selectedInstrument }),
 
+  // ── TimeFM forecast map — persists across instrument switches ───────────────
+  // Keyed by token so each instrument remembers its own forecast independently.
+  // Cleared at 15:45 IST (15 min after NSE close) via scheduleEodForecastClear()
+  // so stale intraday forecasts never bleed into the next trading session.
+  forecastMap: {},
+  setForecast:      (token, data) => set((s) => ({ forecastMap: { ...s.forecastMap, [token]: data } })),
+  clearForecast:    (token)       => set((s) => { const m = { ...s.forecastMap }; delete m[token]; return { forecastMap: m }; }),
+  clearAllForecasts:()            => set({ forecastMap: {} }),
+
   // ── Scanner tab — accumulated pattern alert events ──────────────────────────
   scanAlerts: [],
   addScanAlert: (alert) =>

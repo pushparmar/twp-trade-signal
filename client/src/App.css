@@ -3176,6 +3176,78 @@ body {
   border-color:  var(--accent, #3b82f6);
   color:         #fff;
 }
+.ichi-chart-auto-btn--off {
+  border-color: var(--txt3);
+  color:        var(--txt3);
+  opacity:      0.5;
+}
+
+/* Horizon input — sits just left of the Forecast button */
+.ichi-forecast-horizon {
+  width:         36px;
+  background:    transparent;
+  border:        1px solid var(--border2);
+  border-radius: 4px;
+  color:         var(--txt3);
+  font-size:     10px;
+  font-weight:   600;
+  padding:       2px 4px;
+  text-align:    center;
+  line-height:   1.6;
+  /* hide browser spin arrows */
+  -moz-appearance: textfield;
+}
+.ichi-forecast-horizon::-webkit-inner-spin-button,
+.ichi-forecast-horizon::-webkit-outer-spin-button { -webkit-appearance: none; }
+.ichi-forecast-horizon:disabled { opacity: 0.5; }
+
+/* TimeFM AI forecast button — same base shape as Auto, indigo accent */
+.ichi-chart-forecast-btn {
+  background:     transparent;
+  border:         1px solid var(--border2);
+  border-radius:  4px;
+  color:          var(--txt3);
+  font-size:      10px;
+  font-weight:    600;
+  padding:        2px 7px;
+  cursor:         pointer;
+  letter-spacing: 0.04em;
+  transition:     background 0.15s, color 0.15s, border-color 0.15s;
+  line-height:    1.6;
+  white-space:    nowrap;
+}
+.ichi-chart-forecast-btn:hover:not(:disabled) {
+  background:   rgba(99, 102, 241, 0.15);
+  border-color: #6366f1;
+  color:        #a5b4fc;
+}
+.ichi-chart-forecast-btn--active {
+  background:   rgba(99, 102, 241, 0.20);
+  border-color: #6366f1;
+  color:        #a5b4fc;
+}
+.ichi-chart-forecast-btn:disabled {
+  opacity: 0.5;
+  cursor:  default;
+}
+
+/* Directional bias badge next to the forecast button */
+.ichi-forecast-badge {
+  font-size:     11px;
+  font-weight:   700;
+  padding:       2px 7px;
+  border-radius: 4px;
+  line-height:   1.6;
+  white-space:   nowrap;
+}
+.ichi-forecast-badge--bullish {
+  background: rgba(34, 197, 94, 0.15);
+  color:      #22c55e;
+}
+.ichi-forecast-badge--bearish {
+  background: rgba(239, 68, 68, 0.15);
+  color:      #ef4444;
+}
 
 /* Live price shown alongside the instrument name in the chart header */
 .ichi-chart-ltp {
