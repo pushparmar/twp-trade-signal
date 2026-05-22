@@ -15,9 +15,10 @@
  *   • kiteTicker unsubscribes the token when no longer needed
  */
 
-const store         = require('../store');
-const { broadcast } = require('../sseHub');
-const db            = require('../db');
+const store                        = require('../store');
+const { broadcast }                = require('../sseHub');
+const db                           = require('../db');
+const { isNseOpen, isMcxOpen }     = require('../utils/marketHours');
 
 function _ticker() {
   return require('./kiteTicker');
@@ -154,6 +155,16 @@ function onTick(token, lastPrice) {
       t.triggerPrice != null,
   );
   for (const trade of pendingTrades) {
+    // ── Market-hours gate for pending activation ──────────────────────────
+    // A pending order placed before market close must NOT activate on a tick
+    // that arrives after the exchange has closed.
+    //   NSE / F&O / CDS → isNseOpen()   [09:20–15:20 IST]
+    //   MCX             → isMcxOpen()   [09:00–23:30 IST]
+    const tradeExchange = String(trade.exchange ?? 'NSE').toUpperCase();
+    const tradeIsMcx    = tradeExchange === 'MCX';
+    if (tradeIsMcx  && !isMcxOpen())  continue; // MCX closed
+    if (!tradeIsMcx && !isNseOpen())  continue; // NSE/F&O window closed
+
     const triggered =
       trade.triggerDir === 'above'
         ? lastPrice >= trade.triggerPrice
