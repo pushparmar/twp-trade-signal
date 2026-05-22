@@ -612,6 +612,11 @@ body {
 .td-tgt    { color: var(--green); }
 .td-mono   { font-family: var(--mono); font-size: 12px; color: var(--txt2); }
 .td-muted  { color: var(--txt3); }
+
+/* ── Date + time stacked in a single column ── */
+.td-datetime         { display: flex; flex-direction: column; gap: 1px; line-height: 1.25; }
+.td-dt-date          { font-family: var(--mono); font-size: 11px; color: var(--txt2); font-weight: 500; }
+.td-dt-time          { font-family: var(--mono); font-size: 10px; color: var(--txt3); }
 .td-raw    { color: var(--txt3); font-family: var(--mono); font-size: 11px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Settings ────────────────────────────────────── */

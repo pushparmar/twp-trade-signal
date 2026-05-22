@@ -19,6 +19,7 @@ const store                        = require('../store');
 const { broadcast }                = require('../sseHub');
 const db                           = require('../db');
 const { isNseOpen, isMcxOpen }     = require('../utils/marketHours');
+const kiteOrderBridge              = require('./kiteOrderBridge');
 
 function _ticker() {
   return require('./kiteTicker');
@@ -133,6 +134,11 @@ function _closeTrade(trade, closeAt, reason) {
     `entry=₹${closed.entryPrice} exit=₹${closeAt} pnl=₹${closed.pnl}`,
   );
 
+  // Place live Kite exit order to square off the real position.
+  kiteOrderBridge.placeExitOrder(closed, reason).catch(err =>
+    console.error('[TradeWatcher] kiteOrderBridge.placeExitOrder error:', err.message),
+  );
+
   setTimeout(() => _closing.delete(trade.id), 1_000);
 }
 
@@ -181,6 +187,11 @@ function onTick(token, lastPrice) {
     console.log(
       `[TradeWatcher] ⚡ TRIGGERED — ${activated.symbol} ${activated.action}` +
       ` @ ₹${activated.entryPrice} (trigger ₹${activated.triggerPrice}, ltp ₹${lastPrice})`,
+    );
+
+    // Place live Kite entry order now that the trade is OPEN.
+    kiteOrderBridge.placeEntryOrder(activated).catch(err =>
+      console.error('[TradeWatcher] kiteOrderBridge.placeEntryOrder error:', err.message),
     );
   }
 

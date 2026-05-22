@@ -32,6 +32,7 @@ const kiteTicker      = require('./kiteTicker');
 const db              = require('../db');
 const instrumentCache = require('./instrumentCache');
 const kiteService     = require('./kiteService');
+const kiteOrderBridge = require('./kiteOrderBridge');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
@@ -473,6 +474,15 @@ async function _onAlert(alert, source) {
   }
 
   db.tradeRepo.upsertTrade(trade);
+
+  // ── 11. Live Kite order (only when liveOrderEnabled: true in config.json) ──
+  // PENDING trades do NOT get an entry order here — the order fires when the
+  // trigger price is hit and tradeWatcher transitions the trade to OPEN.
+  if (trade.status === 'OPEN') {
+    kiteOrderBridge.placeEntryOrder(trade).catch(err =>
+      console.error('[AutoTrader] kiteOrderBridge.placeEntryOrder error:', err.message),
+    );
+  }
 
   const mtfTag = mtfSource ? ` ⚡MTF(${mtfSource})` : '';
   const qtyTag = tradeExchange === 'MCX'

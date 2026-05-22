@@ -405,6 +405,33 @@ function setAutoTraderSettings(updates) {
     return config.autoTrader;
 }
 
+// ── Live order flag (config-file only, no UI) ─────────────────────────────────
+/**
+ * Returns true ONLY when `"liveOrderEnabled": true` is present in config.json.
+ * Strict equality — string "true", 1, or any other truthy value returns false.
+ * This flag has no UI toggle; it must be set manually in config.json.
+ */
+function getLiveOrderEnabled() {
+    const config = readConfig();
+    return config.liveOrderEnabled === true;
+}
+
+/**
+ * Write Kite order IDs back onto a paper trade for cross-referencing.
+ * Works on trades of any status (including CLOSED).
+ * Only the kiteEntryOrderId / kiteExitOrderId fields are written.
+ *
+ * @param {string} id
+ * @param {{ kiteEntryOrderId?: string, kiteExitOrderId?: string }} fields
+ */
+function setTradeKiteOrderIds(id, fields) {
+    const trade = _paperTrades.find(t => t.id === id);
+    if (!trade) return;
+    if (fields.kiteEntryOrderId != null) trade.kiteEntryOrderId = fields.kiteEntryOrderId;
+    if (fields.kiteExitOrderId  != null) trade.kiteExitOrderId  = fields.kiteExitOrderId;
+    _saveTrades();
+}
+
 module.exports = {
     getConfig,
     setAccessToken,
@@ -435,5 +462,7 @@ module.exports = {
     removeFromWatchlist,
     getAutoTraderSettings,
     setAutoTraderSettings,
+    getLiveOrderEnabled,
+    setTradeKiteOrderIds,
     getLotMultiplier
 };

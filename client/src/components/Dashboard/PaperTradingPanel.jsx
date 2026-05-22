@@ -65,6 +65,12 @@ function fmt(ts) {
     return new Date(ts).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+/** "22 May" — short date for the stacked date+time column */
+function fmtDateShort(ts) {
+    if (!ts) return "";
+    return new Date(ts).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
 function fmtPrice(n) {
     if (n == null || isNaN(n)) return "—";
     return Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -293,7 +299,12 @@ function OpenTradeRow({ trade, onClose }) {
     return (
         <>
         <tr className={slHit ? "paper-row--sl" : targetHit ? "paper-row--target" : ""}>
-            <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
+            <td className="td-mono mob-hide">
+                <div className="td-datetime">
+                    <span className="td-dt-date">{fmtDateShort(trade.ts)}</span>
+                    <span className="td-dt-time">{fmt(trade.ts)}</span>
+                </div>
+            </td>
             <td className="mob-hide">
                 <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <span className={`pill ${trade.action === "BUY" ? "pill-green" : "pill-red"}`}>{trade.action}</span>
@@ -416,9 +427,15 @@ function OpenTradeRow({ trade, onClose }) {
                 {unrealizedPnl != null ? `${unrealizedPnl >= 0 ? "+" : ""}₹${unrealizedPnl.toFixed(2)}` : "—"}
             </td>
 
-            {/* Stacked column — mobile only: LTP / P&L (Qty moved into symbol cell) */}
+            {/* Stacked column — mobile only: Date/Time / LTP / P&L */}
             <td className="td-mob-only">
                 <div className="td-stacked">
+                    <div className="td-stacked-row">
+                        <span className="td-stacked-label">Time</span>
+                        <span className="td-stacked-val td-mono" style={{ fontSize: 10 }}>
+                            {fmtDateShort(trade.ts)} · {fmt(trade.ts)}
+                        </span>
+                    </div>
                     <div className="td-stacked-row">
                         <span className="td-stacked-label">LTP</span>
                         <span ref={priceRef} className="td-stacked-val td-ltp">
@@ -483,7 +500,12 @@ function PendingOrderRow({ trade, onCancel }) {
     return (
         <>
         <tr className="paper-row--pending">
-            <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
+            <td className="td-mono mob-hide">
+                <div className="td-datetime">
+                    <span className="td-dt-date">{fmtDateShort(trade.ts)}</span>
+                    <span className="td-dt-time">{fmt(trade.ts)}</span>
+                </div>
+            </td>
             <td className="td-symbol">
                 <span className={`td-sym-side td-sym-side--${trade.action === "BUY" ? "b" : "s"}`}>
                     {trade.action === "BUY" ? "B" : "S"}
@@ -1206,7 +1228,12 @@ export default function PaperTradingPanel() {
                                             <tbody>
                                                 {sortTrades(dayTrades, closedSort, closedGetVal).map(t => (
                                                     <tr key={t.id}>
-                                                        <td className="td-mono mob-hide">{fmt(t.closedTs)}</td>
+                                                        <td className="td-mono mob-hide">
+                                                            <div className="td-datetime">
+                                                                <span className="td-dt-date">{fmtDateShort(t.closedTs)}</span>
+                                                                <span className="td-dt-time">{fmt(t.closedTs)}</span>
+                                                            </div>
+                                                        </td>
                                                         <td className="mob-hide">
                                                             <span
                                                                 className={`pill ${
@@ -1300,9 +1327,15 @@ export default function PaperTradingPanel() {
                                                                 ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}`
                                                                 : "—"}
                                                         </td>
-                                                        {/* Stacked cell — mobile only: Entry / Exit / P&L */}
+                                                        {/* Stacked cell — mobile only: Time / Entry / Exit / P&L */}
                                                         <td className="td-mob-only">
                                                             <div className="td-stacked">
+                                                                <div className="td-stacked-row">
+                                                                    <span className="td-stacked-label">Time</span>
+                                                                    <span className="td-stacked-val td-mono" style={{ fontSize: 10 }}>
+                                                                        {fmtDateShort(t.closedTs)} · {fmt(t.closedTs)}
+                                                                    </span>
+                                                                </div>
                                                                 <div className="td-stacked-row">
                                                                     <span className="td-stacked-label">Entry</span>
                                                                     <span className="td-stacked-val">
@@ -1557,7 +1590,12 @@ function OrderHistoryPanel() {
                         <tbody>
                             {trades.map(t => (
                                 <tr key={t.id}>
-                                    <td className="td-mono mob-hide">{fmt(t.ts)}</td>
+                                    <td className="td-mono mob-hide">
+                                        <div className="td-datetime">
+                                            <span className="td-dt-date">{fmtDateShort(t.ts)}</span>
+                                            <span className="td-dt-time">{fmt(t.ts)}</span>
+                                        </div>
+                                    </td>
                                     <td className="mob-hide">
                                         <span className={`pill ${t.action === "BUY" ? "pill-green" : "pill-red"}`}>
                                             {t.action}
