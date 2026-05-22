@@ -339,6 +339,12 @@ function OpenTradeRow({ trade, onClose }) {
                         {trade.patternLabel}
                     </span>
                 )}
+                {/* Pattern score badge — stored for later analysis */}
+                {trade.score != null && (
+                    <span className="td-sym-score" title={`Pattern score: ${trade.score}/5`}>
+                        {'★'.repeat(trade.score)}{'☆'.repeat(Math.max(0, 5 - trade.score))}
+                    </span>
+                )}
                 {/* RSI chip — shows overbought/oversold colouring at a glance */}
                 {trade.rsi14 != null && (
                     <span
@@ -454,17 +460,45 @@ function PendingOrderRow({ trade, onCancel }) {
     const tick = useAppStore(s => s.ticks[trade.token]);
     const ltp = tick?.lastPrice ?? null;
 
+    // Local state for the Ichimoku chart modal — mirrors OpenTradeRow behaviour.
+    const [chartOpen, setChartOpen] = useState(false);
+
     const dirLabel = trade.triggerDir === "above" ? "↑ ≥" : "↓ ≤";
     const dist = ltp != null ? Math.abs(ltp - trade.triggerPrice).toFixed(2) : null;
 
+    // Build a minimal alert-shaped object so ScanChartModal can render the chart.
+    const chartAlert = {
+        token:        trade.token,
+        label:        trade.symbol,
+        interval:     trade.interval  ?? "day",
+        tfLabel:      trade.tfLabel   ?? "1d",
+        patternLabel: trade.patternLabel ?? null,
+        patternId:    trade.patternId  ?? null,
+        signal:       trade.signal     ?? "bullish",
+        close:        trade.triggerPrice ?? 0,
+        sl:           trade.sl         ?? null,
+        target:       trade.target     ?? null,
+    };
+
     return (
+        <>
         <tr className="paper-row--pending">
             <td className="td-mono mob-hide">{fmt(trade.ts)}</td>
             <td className="td-symbol">
                 <span className={`td-sym-side td-sym-side--${trade.action === "BUY" ? "b" : "s"}`}>
                     {trade.action === "BUY" ? "B" : "S"}
                 </span>
-                {trade.symbol}
+                {/* Symbol — click opens the Ichimoku chart modal */}
+                <span
+                    className="td-sym-link"
+                    role="button"
+                    tabIndex={0}
+                    title={`View ${trade.symbol} chart`}
+                    onClick={() => setChartOpen(true)}
+                    onKeyDown={e => e.key === "Enter" && setChartOpen(true)}
+                >
+                    {trade.symbol}
+                </span>
                 <span className="paper-pending-badge">⏳</span>
             </td>
             <td className="td-num">
@@ -503,6 +537,15 @@ function PendingOrderRow({ trade, onCancel }) {
                 </button>
             </td>
         </tr>
+
+        {/* Ichimoku chart modal — rendered outside the <tr> via Fragment */}
+        {chartOpen && (
+            <ScanChartModal
+                alert={chartAlert}
+                onClose={() => setChartOpen(false)}
+            />
+        )}
+        </>
     );
 }
 
@@ -550,6 +593,11 @@ function AutoTraderSettings() {
     function toggleTsl() {
         if (!settings) return;
         patch({ tslEnabled: !settings.tslEnabled });
+    }
+
+    function toggleSlCandle() {
+        if (!settings) return;
+        patch({ slViaCandleClose: !settings.slViaCandleClose });
     }
 
     async function saveEdits() {
@@ -615,6 +663,16 @@ function AutoTraderSettings() {
                         title="Toggle Trailing Stop Loss"
                     >
                         {settings.tslEnabled ? `ON · ${settings.tslTriggerR}R / ${settings.tslDistanceR}R` : "OFF"}
+                    </button>
+                    <span className="at-risk-sep">·</span>
+                    <span className="at-risk-label" title="SL via 15m candle close">SL close</span>
+                    <button
+                        className={`at-tsl-pill ${settings.slViaCandleClose ? "at-tsl-pill--on" : ""}`}
+                        onClick={toggleSlCandle}
+                        disabled={saving}
+                        title="When ON: SL exits wait for a 15m candle close below/above SL (avoids wick-triggered false exits)"
+                    >
+                        {settings.slViaCandleClose ? "ON" : "OFF"}
                     </button>
                     <button className="at-edit-btn" onClick={startEdit} title="Edit thresholds">
                         <svg

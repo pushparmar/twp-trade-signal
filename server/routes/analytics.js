@@ -62,11 +62,19 @@ router.get('/summary', async (req, res) => {
   }
 
   const opts = _parseDateRange(req.query);
+  // Optional exchange filter: 'NSE', 'NFO', 'MCX', etc.
+  // Client sends 'NSE' to mean both NSE+NFO equity; we map that here.
+  const { exchange } = req.query;
+  if (exchange === 'NSE') {
+    opts.exchange = { $in: ['NSE', 'NFO'] };
+  } else if (exchange) {
+    opts.exchange = exchange;
+  }
 
   try {
     const [patternStats, winRate, dailyPnl] = await Promise.all([
       db.alertRepo.patternStats(opts),
-      db.tradeRepo.patternWinRate(),
+      db.tradeRepo.patternWinRate(opts),
       db.tradeRepo.dailyPnl(opts),
     ]);
     res.json({ patternStats, winRate, dailyPnl, dbReady: true });

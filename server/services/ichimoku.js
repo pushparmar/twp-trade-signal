@@ -1811,6 +1811,53 @@ function round(n) {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Determine the colour of the FUTURE Ichimoku cloud — the cloud currently
+ * being projected 26 bars ahead of the last candle.
+ *
+ * In standard Ichimoku charting the cloud you see at the current price was
+ * calculated 26 bars ago.  The cloud plotted AHEAD of price is determined by
+ * the Senkou Span values computed from the CURRENT (most-recent) candle:
+ *
+ *   Future Senkou A = (Tenkan₀ + Kijun₀) / 2   (9-bar and 26-bar midpoints)
+ *   Future Senkou B = (52-bar high + 52-bar low) / 2
+ *
+ * Bullish future cloud  →  Span A > Span B  (green cloud ahead — uptrend bias)
+ * Bearish future cloud  →  Span A < Span B  (red cloud ahead  — downtrend bias)
+ *
+ * @param {Array} candles  Raw OHLCV array, at least 52 bars required.
+ * @returns {'bullish' | 'bearish' | 'neutral' | null}
+ */
+function getFutureCloudColor(candles) {
+  if (!candles || candles.length < 52) return null;
+  const n = candles.length;
+
+  // Tenkan-sen — 9-period midpoint of the most recent 9 candles
+  const tenkanH = highest(candles, 9,  n - 1);
+  const tenkanL = lowest(candles,  9,  n - 1);
+  if (tenkanH == null || tenkanL == null) return null;
+  const tenkan = (tenkanH + tenkanL) / 2;
+
+  // Kijun-sen — 26-period midpoint of the most recent 26 candles
+  const kijunH = highest(candles, 26, n - 1);
+  const kijunL = lowest(candles,  26, n - 1);
+  if (kijunH == null || kijunL == null) return null;
+  const kijun = (kijunH + kijunL) / 2;
+
+  // Future Senkou Span A — plotted 26 bars ahead
+  const futureSenkouA = (tenkan + kijun) / 2;
+
+  // Future Senkou Span B — 52-period midpoint, plotted 26 bars ahead
+  const senkou52H = highest(candles, 52, n - 1);
+  const senkou52L = lowest(candles,  52, n - 1);
+  if (senkou52H == null || senkou52L == null) return null;
+  const futureSenkouB = (senkou52H + senkou52L) / 2;
+
+  if (futureSenkouA > futureSenkouB) return 'bullish';
+  if (futureSenkouA < futureSenkouB) return 'bearish';
+  return 'neutral';
+}
+
 module.exports = {
   calculate,
   snapshot,
@@ -1832,4 +1879,5 @@ module.exports = {
   getATR,
   getRSI,
   to4H,
+  getFutureCloudColor,
 };

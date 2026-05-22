@@ -391,7 +391,10 @@ function getAutoTraderSettings() {
         // After activation, SL trails tslDistanceR × initial-risk behind the peak.
         tslEnabled: config.autoTrader?.tslEnabled ?? true,
         tslTriggerR: config.autoTrader?.tslTriggerR ?? 1.0,
-        tslDistanceR: config.autoTrader?.tslDistanceR ?? 0.5
+        tslDistanceR: config.autoTrader?.tslDistanceR ?? 0.5,
+        // When true, SL exits wait for a 15-minute candle close beyond the SL
+        // level before closing the position — avoids wick-triggered false exits.
+        slViaCandleClose: config.autoTrader?.slViaCandleClose ?? false,
     };
 }
 

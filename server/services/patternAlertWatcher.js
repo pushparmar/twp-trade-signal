@@ -27,7 +27,7 @@ const patternAlertMessage = require('./patternAlertMessage');
 const { isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 
 // Lazy-required to keep the same circular-dep pattern used in macroWatcher.
-const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
+const { getFrontMonthFutures } = require('./macroAnalysis');
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -78,6 +78,46 @@ function _claimFire(key) {
 // Session-aware 4h synthesis — imported from ichimoku.js.
 const _to4H = to4H;
 
+// ── MTF alignment helper ─────────────────────────────────────────────────────
+
+/**
+ * Returns true if at least one pattern on any higher timeframe (1h / 4h / 1d)
+ * matches the given signal direction for this token.
+ *
+ * Used as the 15m Telegram gate: an index/macro 15m alert is only worth
+ * sending to Telegram when a structurally higher TF confirms the same bias.
+ */
+function _hasHigherTfAlignment(token, signal) {
+  const intervals = [
+    { interval: '60minute', candles: candleStore.getCandlesSync(token, '60minute') },
+    { interval: 'day',      candles: candleStore.getCandlesSync(token, 'day') },
+  ];
+
+  // Synthesise 4h from the 1h buffer when enough bars exist.
+  const c1h = candleStore.getCandlesSync(token, '60minute');
+  if (c1h && c1h.length >= 8) {
+    const c4h = _to4H(c1h);
+    if (c4h.length >= 52) {
+      intervals.push({ interval: '4h', candles: c4h });
+    }
+  }
+
+  for (const { interval, candles } of intervals) {
+    if (!candles || candles.length < 52) continue;
+    for (const { id: patternId } of patternRegistry.list()) {
+      const pattern = patternRegistry.get(patternId);
+      let result;
+      try {
+        result = pattern.run(candles, pattern.defaultOpts);
+      } catch {
+        continue;
+      }
+      if (result?.matched && result.signal === signal) return true;
+    }
+  }
+  return false;
+}
+
 // ── Alert builder ────────────────────────────────────────────────────────────
 
 async function _runAndAlert(token, interval, candles) {
@@ -109,6 +149,38 @@ async function _runAndAlert(token, interval, candles) {
 
     const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
     if (!_claimFire(dedupKey)) continue; // already sent today
+
+    // ── 15m Telegram MTF gate ─────────────────────────────────────────────
+    // For 15-minute intervals, only send to Telegram when at least one
+    // higher TF (1h / 4h / 1d) confirms the same directional signal.
+    // SSE broadcast below still fires unconditionally so the Scanner UI
+    // remains live even when the MTF gate suppresses the Telegram message.
+    if (interval === '15minute') {
+      const aligned = _hasHigherTfAlignment(Number(token), result.signal);
+      if (!aligned) {
+        console.log(`[PatternAlert] ⏭  ${patternId} ${result.signal} — ${label} (15m) — no MTF alignment, Telegram skipped`);
+        // Fall through to SSE broadcast below — skip only the Telegram send.
+        broadcast('scan_alert', {
+          token:         Number(token),
+          label,
+          tradingsymbol: _tokenTradingsymbol.get(Number(token)) ?? null,
+          interval,
+          tfLabel,
+          patternId,
+          patternLabel,
+          signal:        result.signal,
+          score:         result.score         ?? null,
+          close:         result.close         ?? null,
+          strength:         result.strength         ?? null,
+          cloudPosition:    result.cloudPosition    ?? null,
+          barsAgo:          result.barsAgo          ?? null,
+          consecutiveBars:  result.consecutiveBars  ?? null,
+          cloudThickness:   result.cloudThickness   ?? null,
+          ts:            Date.now(),
+        });
+        continue;
+      }
+    }
 
     // Use the shared message builder so the wording stays in sync with liveScanner.
     // 'index' for NIFTY/BANKNIFTY, 'macro' for VIX/Crude/Gold/Silver/USDINR.
@@ -197,7 +269,8 @@ function start() {
   _tokenLabel.set(260105, 'NIFTY BANK'); _exchangeMap.set(260105, 'NSE');
 
   // ── Macro instruments ─────────────────────────────────────────────────
-  _tokenLabel.set(VIX_TOKEN, 'India VIX'); _exchangeMap.set(VIX_TOKEN, 'NSE');
+  // India VIX intentionally excluded — it is a volatility index, not a
+  // tradeable instrument, so Ichimoku pattern alerts on it are meaningless.
 
   const crudeInst      = getFrontMonthFutures('CRUDEOIL',   'MCX');
   const goldInst       = getFrontMonthFutures('GOLD',       'MCX');

@@ -302,6 +302,8 @@ async function dailyPnl(opts = {}) {
       if (opts.fromDate) match.closedAt.$gte = opts.fromDate;
       if (opts.toDate)   match.closedAt.$lte = opts.toDate;
     }
+    // Filter by exchange when provided (e.g. 'MCX' or 'NSE')
+    if (opts.exchange) match.exchange = opts.exchange;
     return await mongo.db().collection(COLLECTION).aggregate([
       { $match: match },
       {
@@ -327,11 +329,13 @@ async function dailyPnl(opts = {}) {
  *
  * @returns {Promise<Array>}
  */
-async function patternWinRate() {
+async function patternWinRate(opts = {}) {
   if (!mongo.isReady()) return [];
   try {
+    const match = { status: 'CLOSED', patternId: { $ne: null }, pnl: { $ne: null } };
+    if (opts.exchange) match.exchange = opts.exchange;
     return await mongo.db().collection(COLLECTION).aggregate([
-      { $match: { status: 'CLOSED', patternId: { $ne: null }, pnl: { $ne: null } } },
+      { $match: match },
       {
         $group: {
           _id:    '$patternId',

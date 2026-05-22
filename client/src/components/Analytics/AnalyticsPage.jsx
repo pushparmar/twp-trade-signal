@@ -254,25 +254,38 @@ function SummaryCards({ patternStats, winRate, dailyPnl }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+const EXCHANGES = [
+  { key: 'all', label: 'All' },
+  { key: 'NSE', label: 'NSE / NFO' },
+  { key: 'MCX', label: 'MCX' },
+];
+
 export default function AnalyticsPage() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState(null);
+  const [exchange, setExchange] = useState('all'); // 'all' | 'NSE' | 'MCX'
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (exch = exchange) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get('/analytics/summary');
+      const params = exch !== 'all' ? { exchange: exch } : {};
+      const res = await api.get('/analytics/summary', { params });
       setData(res.data);
     } catch (err) {
       setError(err.response?.data?.error ?? err.message ?? 'Failed to load analytics');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [exchange]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  function handleExchangeChange(exch) {
+    setExchange(exch);
+    fetchData(exch);
+  }
 
   return (
     <div className="an-page">
@@ -282,7 +295,20 @@ export default function AnalyticsPage() {
           <h1 className="an-title">Pattern Analytics</h1>
           <span className="an-subtitle">MongoDB-backed performance data</span>
         </div>
-        <button className="an-refresh-btn" onClick={fetchData} disabled={loading} title="Refresh data">
+        {/* Exchange filter tabs */}
+        <div className="an-exchange-tabs">
+          {EXCHANGES.map(e => (
+            <button
+              key={e.key}
+              className={`an-exchange-tab${exchange === e.key ? ' an-exchange-tab--active' : ''}`}
+              onClick={() => handleExchangeChange(e.key)}
+              disabled={loading}
+            >
+              {e.label}
+            </button>
+          ))}
+        </div>
+        <button className="an-refresh-btn" onClick={() => fetchData(exchange)} disabled={loading} title="Refresh data">
           <svg
             width="15"
             height="15"

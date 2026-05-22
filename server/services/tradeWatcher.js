@@ -3,8 +3,10 @@
  *
  * Server-side SL / Target / Trailing-SL handler for cash/equity paper trades.
  *
- * Per-tick monitoring: SL, TSL, and target fire immediately when the share
- * price tick breaches the level — no candle-close gating, no derivatives.
+ * Per-tick monitoring: SL, TSL, and target fire when the share price tick
+ * breaches the level.  When the `slViaCandleClose` setting is enabled, SL/TSL
+ * exits are deferred until a 15-minute candle *closes* beyond the SL level —
+ * preventing wick-triggered false exits.  Target hits are always immediate.
  *
  * Output:
  *   • broadcast('paper_trade_update', closedTrade)
@@ -23,6 +25,11 @@ function _ticker() {
 
 const _closing           = new Set();
 const _lastTickBroadcast = new Map();
+
+// Pending SL breach confirmations — populated when a tick crosses SL and
+// settings.slViaCandleClose is true.  Cleared on price recovery or 15m candle close.
+// tradeId → { sl: number, reason: string, breachTime: number }
+const _slBreachMap = new Map();
 
 /**
  * Move the stop-loss favourably when TSL is enabled and the profit threshold
@@ -184,8 +191,33 @@ function onTick(token, lastPrice) {
 
     const exit = _checkExit(trade, lastPrice);
     if (exit) {
+      if (exit.reason !== 'TARGET' && settings.slViaCandleClose) {
+        // SL/TSL hit — defer close until a 15m candle close confirms the breach.
+        if (!_slBreachMap.has(trade.id)) {
+          _slBreachMap.set(trade.id, { sl: exit.closeAt, reason: exit.reason, breachTime: Date.now() });
+          console.log(
+            `[TradeWatcher] ⚠  SL breached (tick) — ${trade.symbol ?? trade.token}` +
+            ` @ ₹${lastPrice} | SL ₹${exit.closeAt} | waiting for 15m close`,
+          );
+        }
+        // Broadcast warning so the UI can show an amber "SL pending" indicator.
+        broadcast('paper_trade_tick', {
+          id:         trade.id,
+          token:      Number(trade.token),
+          ltp:        lastPrice,
+          slBreached: true,
+        });
+        continue;
+      }
+      // TARGET hit, or slViaCandleClose is disabled — close immediately.
       _closeTrade(trade, exit.closeAt, exit.reason);
       continue;
+    }
+
+    // Price recovered back inside the SL — cancel any pending breach.
+    if (_slBreachMap.has(trade.id)) {
+      _slBreachMap.delete(trade.id);
+      console.log(`[TradeWatcher] ✅ SL breach cancelled (price recovered) — ${trade.symbol ?? trade.token}`);
     }
 
     // ── Live PnL broadcast — throttled to 500 ms per trade ──────────────────
@@ -207,4 +239,47 @@ function onTick(token, lastPrice) {
   }
 }
 
-module.exports = { onTick };
+/**
+ * Called by backgroundScanner after every 15-minute candle cycle for each token.
+ * When `slViaCandleClose` is enabled, this is the gate that decides whether a
+ * pending SL breach is real (candle closed beyond SL) or just a wick (recovered).
+ *
+ * No-op when the map is empty or the interval is not '15minute'.
+ *
+ * @param {number} token            Instrument token
+ * @param {string} interval         Only '15minute' triggers confirmation
+ * @param {number} candleClosePrice Close price of the just-completed 15m candle
+ */
+function onCandleClose(token, interval, candleClosePrice) {
+  if (interval !== '15minute' || _slBreachMap.size === 0) return;
+
+  const numToken    = Number(token);
+  const pendingTrades = store.getPaperTrades().filter(
+    (t) => t.status === 'OPEN' && Number(t.token) === numToken && _slBreachMap.has(t.id),
+  );
+
+  for (const trade of pendingTrades) {
+    const breach = _slBreachMap.get(trade.id);
+    _slBreachMap.delete(trade.id);
+
+    const confirmed =
+      trade.action === 'BUY'
+        ? candleClosePrice <= breach.sl
+        : candleClosePrice >= breach.sl;
+
+    if (confirmed) {
+      console.log(
+        `[TradeWatcher] 🔴 SL confirmed on 15m close — ${trade.symbol ?? trade.token}` +
+        ` close ₹${candleClosePrice} vs SL ₹${breach.sl}`,
+      );
+      _closeTrade(trade, breach.sl, breach.reason);
+    } else {
+      console.log(
+        `[TradeWatcher] ✅ SL NOT confirmed (wick) — ${trade.symbol ?? trade.token}` +
+        ` close ₹${candleClosePrice} vs SL ₹${breach.sl}`,
+      );
+    }
+  }
+}
+
+module.exports = { onTick, onCandleClose };

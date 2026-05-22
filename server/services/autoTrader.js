@@ -175,21 +175,84 @@ async function _onAlert(alert, source) {
 
   const numToken = Number(token);
 
-  // ── 3. Dedup — once per (token, interval, patternId, signal) per IST day ─
-  const today    = _istDateStr();
-  const dedupKey = `${numToken}:${interval}:${patternId}:${signal}`;
-  const lastFired = _dedup.get(dedupKey);
-  if (lastFired && lastFired === today) return;
+  // ── 2.6  Future cloud direction gate ────────────────────────────────────
+  // The Ichimoku cloud projected 26 bars AHEAD of the current price must agree
+  // with the trade direction:
+  //   BUY  → future cloud must be bullish (Senkou A > Senkou B)
+  //   SELL → future cloud must be bearish (Senkou A < Senkou B)
+  //
+  // Angle fallback: if the future cloud is wrong but the pattern's overall
+  // Ichimoku score is ≥ 3 (most system components — TK position, chikou,
+  // cloud colour, consecutive bars — confirm the direction), the trade is
+  // still allowed.  score < 3 with a conflicting future cloud = skip.
+  {
+    const { futureCloudColor } = alert;
+    const expectedCloud = signal === 'bullish' ? 'bullish' : 'bearish';
+    if (futureCloudColor && futureCloudColor !== 'neutral' && futureCloudColor !== expectedCloud) {
+      const score = alert.score ?? 0;
+      if (score < 3) {
+        console.log(
+          `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel} ${signal})` +
+          ` — future cloud ${futureCloudColor}, score ${score} < 3 (angle weak, skipped)`,
+        );
+        return;
+      }
+      console.log(
+        `[AutoTrader] ⚠  ${alert.label ?? token} (${alert.tfLabel} ${signal})` +
+        ` — future cloud ${futureCloudColor} but score ${score} ≥ 3 (angle ok, proceeding)`,
+      );
+    }
+  }
 
-  // ── 4. No stacking ───────────────────────────────────────────────────────
-  const alreadyOpen = store.getPaperTrades().some(
+  // ── 2.7  MCX — no 15-minute orders ─────────────────────────────────────
+  // MCX commodities (Crude, Gold, Silver, NatGas) are volatile and require
+  // at least a 1h setup to filter noise. 15m orders are disabled for MCX.
+  if ((interval === '15minute' || alert.tfLabel === '15m') && isMcxSymbol) {
+    console.log(
+      `[AutoTrader] ⏭  ${alert.label ?? token} (MCX 15m ${signal}) — skipped: 15m orders disabled for MCX`,
+    );
+    return;
+  }
+
+  // ── 2.7  15m requires 1h MTF alignment ──────────────────────────────────
+  // A 15-minute setup only triggers a trade when the scan's own MTF check
+  // confirms at least the 1h timeframe is aligned in the same direction.
+  // alignedTfs is populated by the pattern engine at scan time — no cache,
+  // no timing dependency.
+  if (interval === '15minute' || alert.tfLabel === '15m') {
+    const higherTfs  = new Set(['1h', '4h', '1d']);
+    const hasHigherTf = alert.alignedTfs?.some(tf => higherTfs.has(tf));
+    if (!hasHigherTf) {
+      console.log(
+        `[AutoTrader] ⏭  ${alert.label ?? token} (15m ${signal}) — skipped: no 1h/4h/1d MTF alignment`,
+      );
+      return;
+    }
+  }
+
+  // ── 3. Dedup — once per (token, interval, signal) per IST day ───────────
+  // patternId is intentionally excluded from the key: if two different patterns
+  // both fire on the same stock+TF+direction (e.g. kumo-breakout + kijun-bounce
+  // on the same 15m bullish bar), only the FIRST one places an order.
+  const today    = _istDateStr();
+  const dedupKey = `${numToken}:${interval}:${signal}`;
+  const lastFired = _dedup.get(dedupKey);
+  if (lastFired && lastFired === today) {
+    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel} ${signal}) — already traded this direction today`);
+    return;
+  }
+
+  // ── 4. No stacking — block if OPEN or PENDING trade exists on same TF ───
+  // PENDING orders count too: a triggered-entry order that hasn't filled yet
+  // still represents an open position intention for this (token, interval).
+  const alreadyActive = store.getPaperTrades().some(
     (t) =>
-      t.status   === 'OPEN'  &&
+      (t.status === 'OPEN' || t.status === 'PENDING') &&
       Number(t.token) === numToken &&
       t.interval === interval,
   );
-  if (alreadyOpen) {
-    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open trade already exists on this TF`);
+  if (alreadyActive) {
+    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open/pending trade already exists on this TF`);
     return;
   }
 
@@ -393,6 +456,9 @@ async function _onAlert(alert, source) {
     volumeConfirmed: alert.volumeConfirmed ?? null,
     volumeRatio:     alert.volumeRatio    ?? null,
     mtfAligned:      alert.mtfAligned     ?? false,
+    // Pattern quality score (1–5 stars) — stored for later analysis;
+    // not used as a trade filter at this stage.
+    score:           alert.score          ?? null,
   };
 
   // ── 10. Persist + broadcast ───────────────────────────────────────────────

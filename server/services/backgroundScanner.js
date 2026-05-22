@@ -40,7 +40,7 @@ const patternRegistry     = require('./patternRegistry');
 const telegramNotifier    = require('./telegramNotifier');
 const { broadcast }       = require('../sseHub');
 const store               = require('../store');
-const { to4H }            = require('./ichimoku');
+const { to4H, getFutureCloudColor } = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
@@ -48,6 +48,9 @@ const { isAnyMarketOpen, isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../uti
 const { getFrontMonthFutures } = require('./macroAnalysis');
 const db                  = require('../db');
 const alertBus            = require('./alertBus');
+
+// Lazy require to avoid circular dependency (tradeWatcher → store ← backgroundScanner)
+function _tradeWatcher() { return require('./tradeWatcher'); }
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -81,6 +84,23 @@ const TF_LABEL = {
   '4h':       '4h',
   'day':      '1d',
 };
+
+// Numeric rank for each interval — used to compare timeframe priority.
+// Higher rank = higher timeframe = takes precedence over lower TF alerts.
+const TF_RANK_MAP = {
+  '15minute': 1, '15m': 1,
+  '60minute': 2, '1h':  2,
+  '4h':       3,
+  'day':      4, '1d':  4,
+};
+
+// Tracks the best Telegram already sent today for each (token, signal).
+// Key: "token:signal:YYYY-MM-DD"  Value: { tfRank, score }
+//
+// Used for two rules:
+//   • Higher TF suppresses lower TF  — e.g. 1h alert blocks a later 15m Telegram.
+//   • Highest score wins same TF     — e.g. score-5 blocks a later score-3 Telegram.
+const _tgSentTfMap = new Map();
 
 // ── Dedup ────────────────────────────────────────────────────────────────────
 
@@ -343,6 +363,19 @@ async function _runScanForInterval(interval) {
     if (!candles || candles.length < MIN_BARS) continue;
     scannedCount++;
 
+    // Notify tradeWatcher of the latest 15m candle close so it can confirm or
+    // cancel any pending SL breach for trades on this instrument.
+    // This runs for every subscribed token regardless of whether a pattern matched.
+    if (interval === '15minute') {
+      try {
+        _tradeWatcher().onCandleClose(inst.instrumentToken, interval, candles[candles.length - 1].close);
+      } catch { /* never let candle-close notification block the scan */ }
+    }
+
+    // Future cloud colour for this instrument+interval — computed once and
+    // attached to every alert payload so autoTrader can gate on it.
+    const futureCloudColor = getFutureCloudColor(candles);
+
     // Store cloud bias for this token×interval so MTF alignment checks below
     // can compare against other intervals already scanned (or scanned earlier today).
     const _bias = _computeCloudBias(candles);
@@ -352,7 +385,21 @@ async function _runScanForInterval(interval) {
 
     const label = inst.name || inst.tradingsymbol;
 
+    // Per-instrument Telegram candidates — keyed by signal.
+    // After the pattern loop we pick the highest-score match per signal and
+    // apply the MTF gate + TF-priority rules before sending to Telegram.
+    // SSE, MongoDB, and alertBus still fire for EVERY match regardless.
+    const tgBestBySignal = new Map(); // signal → { alertPayload, score, result, patternLabel }
+
     for (const { id: patternId, label: patternLabel } of patterns) {
+      // NSE 15m — only kijun-bounce and kumo-breakout patterns.
+      // Other patterns (kumo-bounce, cloud-support, kumo-base-entry) produce too
+      // many low-quality signals on the shorter timeframe for NSE equity stocks.
+      // MCX 15m is not restricted here (MCX 15m orders are blocked in autoTrader).
+      if (interval === '15minute' && inst.exchange !== 'MCX') {
+        if (patternId !== 'kijun-bounce' && patternId !== 'kumo-breakout') continue;
+      }
+
       const patternDef = patternRegistry.get(patternId);
 
       let result;
@@ -403,6 +450,9 @@ async function _runScanForInterval(interval) {
         // Volume
         volumeRatio:       result.volumeRatio      ?? null,
         volumeConfirmed:   result.volumeConfirmed  ?? null,
+        // Future cloud colour — 'bullish' | 'bearish' | 'neutral' | null
+        // Used by autoTrader to gate orders on cloud direction alignment.
+        futureCloudColor,
         // MTF alignment — other TFs where price confirms the same direction
         mtfAligned,
         alignedTfs,
@@ -423,24 +473,72 @@ async function _runScanForInterval(interval) {
       const mtfTag = alignedTfs.length      ? ` ⚡MTF(${alignedTfs.join('+')})` : '';
       console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}`);
 
-      // ── Telegram — gated on the instrument's own exchange hours ─────────
-      // NSE / CDS stocks  → only alert during NSE session  (09:15–15:30 IST)
-      // MCX commodities   → only alert during MCX session  (09:00–23:30 IST)
-      // SSE broadcast above always fires so the Scanner UI stays live.
-      const mktOpen = inst.exchange === 'MCX' ? isMcxOpen() : isNseOpen();
-      if (chatId && mktOpen) {
+      // Collect Telegram candidate — keep highest score per signal for this instrument
+      const score = result.score ?? 0;
+      const prevBest = tgBestBySignal.get(result.signal);
+      if (!prevBest || score > (prevBest.score ?? 0)) {
+        tgBestBySignal.set(result.signal, { alertPayload, score, result, patternLabel });
+      }
+    }
+
+    // ── Telegram — one message per instrument per signal (best score only) ──
+    // Rules applied before each send:
+    //   1. 15m MTF gate  — skip if no 1h/4h/1d timeframe is aligned
+    //   2. TF priority   — skip if a HIGHER timeframe already alerted today for
+    //                       this (token, signal) — avoids 15m noise after 1h fires
+    //   3. Score dedup   — skip if same TF but equal/higher score already sent today
+    //
+    // SSE and alertBus already fired above for every match — these rules only
+    // control what reaches the user's Telegram chat.
+    const mktOpen = inst.exchange === 'MCX' ? isMcxOpen() : isNseOpen();
+    if (chatId && mktOpen && tgBestBySignal.size > 0) {
+      const today          = _istDateStr();
+      const currentTfRank  = TF_RANK_MAP[interval] ?? 0;
+
+      for (const [signal, best] of tgBestBySignal) {
+        // Rule 1: 15-minute alerts require at least one higher TF aligned
+        if (interval === '15minute') {
+          const hasHigherTf = best.alertPayload.alignedTfs?.some(
+            (tf) => tf === '1h' || tf === '4h' || tf === '1d',
+          );
+          if (!hasHigherTf) {
+            console.log(`[BgScanner] ⏭ Telegram skipped — ${label} (15m ${signal}) no 1h/4h/1d MTF`);
+            continue;
+          }
+        }
+
+        // Rules 2 + 3: TF priority and score dedup
+        const sentKey  = `${inst.instrumentToken}:${signal}:${today}`;
+        const prevSent = _tgSentTfMap.get(sentKey);
+        if (prevSent) {
+          if (prevSent.tfRank > currentTfRank) {
+            // A higher timeframe already alerted today — suppress this lower TF
+            console.log(`[BgScanner] ⏭ Telegram skipped — ${label} (${tfLabel} ${signal}) higher TF already sent`);
+            continue;
+          }
+          if (prevSent.tfRank === currentTfRank && prevSent.score >= best.score) {
+            // Same TF, already sent equal or better score today
+            continue;
+          }
+        }
+
         const text = patternAlertMessage.build({
-          label, tfLabel, patternLabel, result, kind: inst.exchange === 'MCX' ? 'macro' : 'stock',
-          confluenceTfs: alignedTfs,
+          label,
+          tfLabel,
+          patternLabel: best.patternLabel,
+          result:       best.result,
+          kind:         inst.exchange === 'MCX' ? 'macro' : 'stock',
+          confluenceTfs: best.alertPayload.alignedTfs,
         });
         try {
           await telegramNotifier.sendMessage(chatId, text);
+          _tgSentTfMap.set(sentKey, { tfRank: currentTfRank, score: best.score });
         } catch (err) {
           console.warn(`[BgScanner] Telegram failed for ${label}:`, err.message);
         }
-      } else if (chatId && !mktOpen) {
-        console.log(`[BgScanner] ⏸ Telegram skipped — ${label} (${inst.exchange} closed)`);
       }
+    } else if (chatId && !mktOpen && tgBestBySignal.size > 0) {
+      console.log(`[BgScanner] ⏸ Telegram skipped — ${label} (${inst.exchange} closed)`);
     }
   }
 

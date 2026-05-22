@@ -36,6 +36,13 @@ const MIN_SL_ATR_MULT = 0.5;
 const SL_ANCHOR_BUFFER_PCT = 0.003;   // 0.3% of the anchor level
 const SL_ANCHOR_BUFFER_ATR = 0.15;    // 0.15 × ATR14 (used when ATR available)
 
+// Kijun-bounce uses a wider buffer because the Kijun is a structural S/R zone,
+// not a precise hard level — a small wick through it is normal candle noise.
+// 0.6% (double the standard) + 0.4×ATR gives meaningful breathing room without
+// materially shifting the logical invalidation point.
+const KIJUN_SL_BUFFER_PCT = 0.006;   // 0.6% of the Kijun level
+const KIJUN_SL_BUFFER_ATR = 0.40;    // 0.40 × ATR14
+
 // Natural-target search window — how many recent bars to scan for swing high/low.
 // 30 bars is enough to catch the most recent meaningful structure on any TF
 // without reaching back to stale levels from a previous trend.
@@ -157,8 +164,12 @@ function computeSLTarget(patternId, signal, result, candles) {
   // trade even when price immediately reverses back.  We apply a small buffer
   // (larger of 0.3% or 0.15×ATR) so the stop only triggers on a genuine break.
   if (sl != null) {
-    const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
-    const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+    // kijun-bounce gets a wider dedicated buffer (0.6% / 0.4×ATR) — the Kijun
+    // is a structural zone and a normal wick through it should not exit the trade.
+    const bufPct = patternId === 'kijun-bounce' ? KIJUN_SL_BUFFER_PCT : SL_ANCHOR_BUFFER_PCT;
+    const bufAtr = patternId === 'kijun-bounce' ? KIJUN_SL_BUFFER_ATR : SL_ANCHOR_BUFFER_ATR;
+    const pctBuf = sl * bufPct;
+    const atrBuf = atr != null ? bufAtr * atr : 0;
     const buf    = Math.max(pctBuf, atrBuf);
     sl = signal === 'bullish' ? sl - buf : sl + buf;
   }

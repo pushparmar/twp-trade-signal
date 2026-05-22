@@ -39,7 +39,7 @@ const backgroundScanner = require('../services/backgroundScanner');
 const historicalCache  = require('../services/historicalCache');
 const { broadcast }    = require('../sseHub');
 const store            = require('../store');
-const { to4H }         = require('../services/ichimoku');
+const { to4H, getFutureCloudColor } = require('../services/ichimoku');
 const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis');
 const instrumentCache  = require('../services/instrumentCache');
 const foStockRegistry  = require('../services/foStockRegistry');
@@ -507,8 +507,19 @@ router.post('/', async (req, res) => {
             _bEntry[interval] = _bias;
             scanBiasMap.set(Number(item.instrumentToken), _bEntry);
 
+            // Future cloud colour — computed once per instrument×interval so every
+            // match from this candle set gets the same value without re-computation.
+            const _futureCloudColor = getFutureCloudColor(candles);
+
             // Run every selected pattern against this candle set
             for (const p of patternsToRun) {
+              // NSE 15m — restrict to kijun-bounce and kumo-breakout only.
+              // Mirrors the backgroundScanner rule to keep manual and automated
+              // scans consistent.
+              if (interval === '15minute' && item.exchange !== 'MCX') {
+                if (p.id !== 'kijun-bounce' && p.id !== 'kumo-breakout') continue;
+              }
+
               let result;
               try {
                 result = p.run(candles, opts);
@@ -555,18 +566,13 @@ router.post('/', async (req, res) => {
                 volumeConfirmed: result.volumeConfirmed ?? null,
                 // RSI(14) at scan time — computed from same candle array, no extra API call
                 rsi14:           result.rsi14           ?? null,
+                // Future cloud colour — used by autoTrader cloud-direction gate
+                futureCloudColor: _futureCloudColor     ?? null,
               };
               matches.push(matchEntry);
-
-              // Mirror to MongoDB + notify auto-trader — both fire-and-forget
-              const _alertBusPayload = {
-                ...matchEntry,
-                label:   matchEntry.name || matchEntry.tradingsymbol,
-                tfLabel: { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' }[interval] || interval,
-                ts:      Date.now(),
-              };
-              db.alertRepo.insertAlert(_alertBusPayload, 'manual');
-              alertBus.emit('alert', _alertBusPayload, 'manual');
+              // alertBus.emit and db.alertRepo.insertAlert are fired AFTER the
+              // MTF annotation loop below — so alignedTfs is populated before
+              // autoTrader receives the alert and can apply the 15m MTF gate.
             }
           } catch (err) {
             // Silence per-instrument errors — one bad token shouldn't abort the scan
@@ -612,6 +618,20 @@ router.post('/', async (req, res) => {
     // Backward-compat fields for Telegram message builder
     m.confluenceTfs   = alignedTfs;
     m.confluenceCount = alignedTfs.length + 1;
+  }
+
+  // ── Mirror every match to MongoDB + alertBus (auto-trader) ─────────────
+  // Done here (after MTF annotation) so alignedTfs is populated when
+  // autoTrader's 15m MTF gate evaluates the alert.
+  for (const m of matches) {
+    const _alertBusPayload = {
+      ...m,
+      label:  m.name || m.tradingsymbol,
+      tfLabel: _TF_LABEL[m.interval] || m.interval,
+      ts:     Date.now(),
+    };
+    db.alertRepo.insertAlert(_alertBusPayload, 'manual');
+    alertBus.emit('alert', _alertBusPayload, 'manual');
   }
 
   // Sort: bullish first, then bearish; then by score descending within each group

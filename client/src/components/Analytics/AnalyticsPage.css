@@ -349,3 +349,31 @@
   background-size: 600px 100%;
   animation: an-shimmer 1.4s infinite linear;
 }
+
+/* Exchange filter tabs */
+.an-exchange-tabs {
+  display:     flex;
+  gap:         4px;
+  align-items: center;
+}
+.an-exchange-tab {
+  background:    transparent;
+  border:        1px solid var(--border2, #2a2a3a);
+  border-radius: 5px;
+  color:         var(--txt3, #8892aa);
+  font-size:     11px;
+  font-weight:   600;
+  padding:       4px 10px;
+  cursor:        pointer;
+  transition:    background 0.15s, color 0.15s, border-color 0.15s;
+}
+.an-exchange-tab:hover:not(:disabled) {
+  border-color: var(--accent, #3b82f6);
+  color:        var(--accent, #3b82f6);
+}
+.an-exchange-tab--active {
+  background:   rgba(59, 130, 246, 0.15);
+  border-color: var(--accent, #3b82f6);
+  color:        var(--accent, #3b82f6);
+}
+.an-exchange-tab:disabled { opacity: 0.5; cursor: default; }

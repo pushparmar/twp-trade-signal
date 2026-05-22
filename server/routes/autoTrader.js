@@ -17,7 +17,11 @@ router.get('/settings', (req, res) => {
 });
 
 router.post('/settings', (req, res) => {
-  const { enabled, riskPerTrade, minProfit, minRR } = req.body;
+  const {
+    enabled, riskPerTrade, minProfit, minRR,
+    tslEnabled, tslTriggerR, tslDistanceR,
+    slViaCandleClose,
+  } = req.body;
   const updates = {};
 
   if (enabled !== undefined) {
@@ -48,11 +52,42 @@ router.post('/settings', (req, res) => {
     updates.minRR = rr;
   }
 
+  if (tslEnabled !== undefined) {
+    updates.tslEnabled = !!tslEnabled;
+  }
+
+  if (tslTriggerR !== undefined) {
+    const v = Number(tslTriggerR);
+    if (isNaN(v) || v <= 0) {
+      return res.status(400).json({ error: 'tslTriggerR must be a positive number' });
+    }
+    updates.tslTriggerR = v;
+  }
+
+  if (tslDistanceR !== undefined) {
+    const v = Number(tslDistanceR);
+    if (isNaN(v) || v <= 0) {
+      return res.status(400).json({ error: 'tslDistanceR must be a positive number' });
+    }
+    updates.tslDistanceR = v;
+  }
+
+  if (slViaCandleClose !== undefined) {
+    if (typeof slViaCandleClose !== 'boolean') {
+      return res.status(400).json({ error: 'slViaCandleClose must be boolean' });
+    }
+    updates.slViaCandleClose = slViaCandleClose;
+  }
+
   const settings = setAutoTraderSettings(updates);
   broadcast('auto_trader_settings', settings);
 
   const state = settings.enabled ? 'ENABLED' : 'DISABLED';
-  console.log(`[AutoTrader] Settings updated — ${state}, risk=₹${settings.riskPerTrade}, minProfit=₹${settings.minProfit}, minRR=${settings.minRR}`);
+  console.log(
+    `[AutoTrader] Settings updated — ${state}, risk=₹${settings.riskPerTrade},` +
+    ` minProfit=₹${settings.minProfit}, minRR=${settings.minRR},` +
+    ` tsl=${settings.tslEnabled}, slViaCandleClose=${settings.slViaCandleClose}`,
+  );
 
   res.json(settings);
 });

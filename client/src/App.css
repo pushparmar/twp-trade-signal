@@ -4635,6 +4635,16 @@ body {
   text-overflow: ellipsis;
   max-width: 120px;
 }
+/* Pattern score (★★★★☆) badge shown below pattern label in trade rows */
+.td-sym-score {
+  display: inline-block;
+  font-size: 10px;
+  letter-spacing: 1px;
+  margin-top: 2px;
+  color: #facc15;   /* amber stars */
+  line-height: 1.4;
+}
+
 /* RSI(14) chip shown below the pattern label in trade rows */
 .td-sym-rsi {
   display: inline-block;
@@ -4902,6 +4912,29 @@ body {
   background: rgba(74,222,128,.22);
 }
 .at-tsl-pill:disabled { opacity: .55; cursor: not-allowed; }
+
+/* Min-score stepper (− ★★★★ +) */
+.at-score-btn {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--txt2);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  cursor: pointer;
+  line-height: 1.6;
+  transition: background .15s;
+}
+.at-score-btn:hover:not(:disabled) { background: var(--bg3); }
+.at-score-btn:disabled { opacity: .4; cursor: not-allowed; }
+.at-score-val {
+  font-size: 11px;
+  color: #facc15;   /* amber stars */
+  letter-spacing: 1px;
+  font-weight: 700;
+  padding: 0 2px;
+}
 
 /* TSL lock indicator inside the SL cell */
 .paper-tsl-tag {

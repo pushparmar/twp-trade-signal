@@ -133,6 +133,7 @@ async function patternStats(opts = {}) {
       if (opts.fromDate) match.firedAt.$gte = opts.fromDate;
       if (opts.toDate)   match.firedAt.$lte = opts.toDate;
     }
+    if (opts.exchange) match.exchange = opts.exchange;
     return await mongo.db().collection(COLLECTION).aggregate([
       { $match: match },
       {
