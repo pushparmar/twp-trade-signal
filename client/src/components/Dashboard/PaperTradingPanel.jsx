@@ -813,11 +813,13 @@ export default function PaperTradingPanel() {
             const res = await api.get(`/paper/export?date=${today}`, {
                 responseType: 'blob',
             });
-            const url = URL.createObjectURL(res.data);
+            const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv;charset=utf-8;' }));
             const a   = document.createElement('a');
             a.href     = url;
             a.download = `trades-${today}.csv`;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
             URL.revokeObjectURL(url);
         } catch (err) {
             console.error('[Export CSV]', err.message);
