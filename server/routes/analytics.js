@@ -137,4 +137,59 @@ router.get('/daily-pnl', async (req, res) => {
   }
 });
 
+// ── GET /api/analytics/signal-outcomes ────────────────────────────────────────
+/**
+ * Signal outcome stats — win rate, avg MFE/MAE per pattern + timeframe.
+ * Phase 2 data collection endpoint.
+ *
+ * Query params:
+ *   from       — ISO date string, inclusive
+ *   to         — ISO date string, inclusive
+ *   patternId  — filter by specific pattern (e.g. "kijun-bounce")
+ *   tfLabel    — filter by timeframe label (e.g. "15m", "1h", "4h", "1d")
+ */
+router.get('/signal-outcomes', async (req, res) => {
+  if (!mongo.isReady()) {
+    return res.json({ stats: [], dbReady: false });
+  }
+  try {
+    const opts = _parseDateRange(req.query);
+    if (req.query.patternId) opts.patternId = req.query.patternId;
+    if (req.query.tfLabel)   opts.tfLabel   = req.query.tfLabel;
+    const stats = await db.signalOutcomeRepo.getStats(opts);
+    res.json({ stats, dbReady: true });
+  } catch (err) {
+    console.error('[Analytics] signal-outcomes failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/analytics/price-path ────────────────────────────────────────────
+/**
+ * Price path distribution for TSL calibration — MFE, MAE, returnFromMFE.
+ * Returns individual signal outcomes with R-multiple stats (no raw pricePath
+ * array — just the summary fields to keep response size small).
+ *
+ * Query params:
+ *   patternId  — required or recommended for meaningful results
+ *   tfLabel    — optional timeframe filter
+ *   from       — ISO date string, inclusive
+ *   to         — ISO date string, inclusive
+ */
+router.get('/price-path', async (req, res) => {
+  if (!mongo.isReady()) {
+    return res.json({ data: [], dbReady: false });
+  }
+  try {
+    const opts = _parseDateRange(req.query);
+    if (req.query.patternId) opts.patternId = req.query.patternId;
+    if (req.query.tfLabel)   opts.tfLabel   = req.query.tfLabel;
+    const data = await db.signalOutcomeRepo.getPricePathStats(opts);
+    res.json({ data, dbReady: true });
+  } catch (err) {
+    console.error('[Analytics] price-path failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

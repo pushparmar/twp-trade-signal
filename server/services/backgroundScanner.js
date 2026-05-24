@@ -40,7 +40,7 @@ const patternRegistry     = require('./patternRegistry');
 const telegramNotifier    = require('./telegramNotifier');
 const { broadcast }       = require('../sseHub');
 const store               = require('../store');
-const { to4H, getFutureCloudColor } = require('./ichimoku');
+const { to4H, getFutureCloudColor, snapshot, getATR, getRSI } = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
@@ -181,6 +181,57 @@ function _getMtfAlignment(token, currentInterval, signal) {
     if (bias === signal) alignedTfs.push(TF_LABEL[interval] || interval);
   }
   return { mtfAligned: alignedTfs.length > 0, alignedTfs };
+}
+
+// ── Phase 2 data enrichment helpers ──────────────────────────────────────────
+
+/** NIFTY 50 daily cloud colour — cached for the whole scan cycle. */
+function _getNiftyBias() {
+  try {
+    const niftyCandles = candleStore.getCandlesSync(256265, 'day');
+    if (!niftyCandles || niftyCandles.length < 52) return null;
+    return getFutureCloudColor(niftyCandles); // 'bullish' | 'bearish' | 'neutral'
+  } catch { return null; }
+}
+
+/**
+ * Enrich an alertPayload with Ichimoku snapshot, ATR, RSI, and context fields.
+ * All values are computed from already-in-memory candles — no network I/O.
+ * Mutates alertPayload in place.
+ */
+function _enrichAlertPayload(alertPayload, candles) {
+  const ich   = snapshot(candles);
+  const atr14 = getATR(candles, 14);
+  const rsi14 = getRSI(candles, 14);
+
+  const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+  const hour   = nowIST.getHours();
+
+  const closePrice = alertPayload.close;
+
+  Object.assign(alertPayload, {
+    tenkan:            ich?.tenkan            ?? null,
+    kijun:             ich?.kijun             ?? null,
+    senkouA:           ich?.senkouA           ?? null,
+    senkouB:           ich?.senkouB           ?? null,
+    cloudTop:          ich?.cloudTop          ?? null,
+    cloudBottom:       ich?.cloudBottom       ?? null,
+    cloudThicknessPct: ich && ich.cloudTop != null && ich.cloudBottom != null && closePrice
+      ? +((ich.cloudTop - ich.cloudBottom) / closePrice * 100).toFixed(2)
+      : null,
+    priceVsCloud:      ich?.aboveCloud ? 'above' : ich?.belowCloud ? 'below' : ich ? 'inside' : null,
+    tkCross:           ich?.tkCross           ?? null,
+    atr14:             atr14 != null ? +atr14.toFixed(2) : null,
+    atr14Pct:          atr14 != null && closePrice
+      ? +(atr14 / closePrice * 100).toFixed(2)
+      : null,
+    rsi14:             rsi14 != null ? +rsi14.toFixed(1) : null,
+    alignedTfCount:    alertPayload.alignedTfs?.length ?? 0,
+    dayOfWeek:         nowIST.getDay(),
+    hourIST:           hour,
+    sessionSlot:       hour < 11 ? 'open' : hour >= 14 ? 'close' : 'mid',
+    niftyBias:         _getNiftyBias(),
+  });
 }
 
 // ── Next-candle-close calculator ──────────────────────────────────────────────
@@ -461,6 +512,10 @@ async function _runScanForInterval(interval) {
         confluenceCount: alignedTfs.length + 1,
         ts:              Date.now(),
       };
+
+      // ── Phase 2: enrich with Ichimoku snapshot + context (no recompute) ───
+      _enrichAlertPayload(alertPayload, candles);
+
       broadcast('scan_alert', alertPayload);
 
       // ── MongoDB — fire-and-forget (never blocks the scan loop) ────────────

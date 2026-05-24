@@ -15,9 +15,10 @@
  * All MongoDB logic lives in the mongoClient and individual repo files.
  */
 
-const mongo     = require('../services/mongoClient');
-const alertRepo = require('./repositories/alertRepo');
-const tradeRepo = require('./repositories/tradeRepo');
+const mongo              = require('../services/mongoClient');
+const alertRepo          = require('./repositories/alertRepo');
+const tradeRepo          = require('./repositories/tradeRepo');
+const signalOutcomeRepo  = require('./repositories/signalOutcomeRepo');
 
 /**
  * Connect to MongoDB and bootstrap collection indexes.
@@ -31,10 +32,11 @@ async function init() {
   const connected = await mongo.init();
   if (!connected) return false;
 
-  // Create indexes in parallel — both are safe to run concurrently.
+  // Create indexes in parallel — all are safe to run concurrently.
   await Promise.all([
     alertRepo.createIndexes(),
     tradeRepo.createIndexes(),
+    signalOutcomeRepo.createIndexes(),
   ]);
 
   return true;
@@ -47,4 +49,4 @@ async function close() {
   await mongo.close();
 }
 
-module.exports = { init, close, alertRepo, tradeRepo };
+module.exports = { init, close, alertRepo, tradeRepo, signalOutcomeRepo };

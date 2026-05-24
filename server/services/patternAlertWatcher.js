@@ -22,9 +22,11 @@ const patternRegistry  = require('./patternRegistry');
 const telegramNotifier = require('./telegramNotifier');
 const store            = require('../store');
 const { broadcast }    = require('../sseHub');
-const { to4H }         = require('./ichimoku');
+const { to4H, getFutureCloudColor, snapshot, getATR, getRSI } = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const { isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../utils/marketHours');
+const db             = require('../db');
+const alertBus       = require('./alertBus');
 
 // Lazy-required to keep the same circular-dep pattern used in macroWatcher.
 const { getFrontMonthFutures } = require('./macroAnalysis');
@@ -118,11 +120,60 @@ function _hasHigherTfAlignment(token, signal) {
   return false;
 }
 
+// ── Phase 2 data enrichment helpers ──────────────────────────────────────────
+
+function _getNiftyBias() {
+  try {
+    const niftyCandles = candleStore.getCandlesSync(256265, 'day');
+    if (!niftyCandles || niftyCandles.length < 52) return null;
+    return getFutureCloudColor(niftyCandles);
+  } catch { return null; }
+}
+
+/**
+ * Enrich an alertPayload with Ichimoku snapshot, ATR, RSI, and context fields.
+ * All values come from already-in-memory candles — no network I/O.
+ */
+function _enrichAlertPayload(alertPayload, candles) {
+  const ich   = snapshot(candles);
+  const atr14 = getATR(candles, 14);
+  const rsi14 = getRSI(candles, 14);
+
+  const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+  const hour   = nowIST.getHours();
+
+  const closePrice = alertPayload.close;
+
+  Object.assign(alertPayload, {
+    tenkan:            ich?.tenkan            ?? null,
+    kijun:             ich?.kijun             ?? null,
+    senkouA:           ich?.senkouA           ?? null,
+    senkouB:           ich?.senkouB           ?? null,
+    cloudTop:          ich?.cloudTop          ?? null,
+    cloudBottom:       ich?.cloudBottom       ?? null,
+    cloudThicknessPct: ich && ich.cloudTop != null && ich.cloudBottom != null && closePrice
+      ? +((ich.cloudTop - ich.cloudBottom) / closePrice * 100).toFixed(2)
+      : null,
+    priceVsCloud:      ich?.aboveCloud ? 'above' : ich?.belowCloud ? 'below' : ich ? 'inside' : null,
+    tkCross:           ich?.tkCross           ?? null,
+    atr14:             atr14 != null ? +atr14.toFixed(2) : null,
+    atr14Pct:          atr14 != null && closePrice
+      ? +(atr14 / closePrice * 100).toFixed(2)
+      : null,
+    rsi14:             rsi14 != null ? +rsi14.toFixed(1) : null,
+    dayOfWeek:         nowIST.getDay(),
+    hourIST:           hour,
+    sessionSlot:       hour < 11 ? 'open' : hour >= 14 ? 'close' : 'mid',
+    niftyBias:         _getNiftyBias(),
+  });
+}
+
 // ── Alert builder ────────────────────────────────────────────────────────────
 
 async function _runAndAlert(token, interval, candles) {
   const chatId = store.getTelegramChatId();
-  if (!chatId) return; // Telegram not configured — nothing to do
+  // Note: chatId may be null if Telegram is not configured. SSE broadcasts,
+  // MongoDB writes, and alertBus events still fire — only Telegram is skipped.
 
   const label   = _tokenLabel.get(Number(token)) || `Token ${token}`;
   const tfLabel = TF_LABEL[interval] || interval;
@@ -150,34 +201,53 @@ async function _runAndAlert(token, interval, candles) {
     const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
     if (!_claimFire(dedupKey)) continue; // already sent today
 
+    // Build a full alertPayload (same shape as backgroundScanner) so MongoDB,
+    // alertBus, and signalOutcomeTracker all receive enriched data.
+    const exchange = _exchangeMap.get(Number(token)) ?? 'NSE';
+    const alertPayload = {
+      token:           Number(token),
+      label,
+      tradingsymbol:   _tokenTradingsymbol.get(Number(token)) ?? null,
+      exchange,
+      interval,
+      tfLabel,
+      patternId,
+      patternLabel,
+      signal:          result.signal,
+      score:           result.score           ?? null,
+      close:           result.close           ?? null,
+      strength:        result.strength        ?? null,
+      cloudPosition:   result.cloudPosition   ?? null,
+      barsAgo:         result.barsAgo         ?? null,
+      consecutiveBars: result.consecutiveBars ?? null,
+      cloudThickness:  result.cloudThickness  ?? null,
+      sl:              result.sl              ?? null,
+      target:          result.target          ?? null,
+      targetSource:    result.targetSource    ?? null,
+      volumeRatio:     result.volumeRatio     ?? null,
+      volumeConfirmed: result.volumeConfirmed ?? null,
+      futureCloudColor: null,
+      mtfAligned:      false,
+      alignedTfs:      [],
+      confluenceTfs:   [],
+      confluenceCount: 1,
+      ts:              Date.now(),
+    };
+
+    // ── Phase 2: enrich with Ichimoku snapshot + context ──────────────────
+    _enrichAlertPayload(alertPayload, candles);
+
     // ── 15m Telegram MTF gate ─────────────────────────────────────────────
     // For 15-minute intervals, only send to Telegram when at least one
     // higher TF (1h / 4h / 1d) confirms the same directional signal.
-    // SSE broadcast below still fires unconditionally so the Scanner UI
-    // remains live even when the MTF gate suppresses the Telegram message.
+    // SSE broadcast + MongoDB + alertBus still fire unconditionally.
     if (interval === '15minute') {
       const aligned = _hasHigherTfAlignment(Number(token), result.signal);
       if (!aligned) {
         console.log(`[PatternAlert] ⏭  ${patternId} ${result.signal} — ${label} (15m) — no MTF alignment, Telegram skipped`);
-        // Fall through to SSE broadcast below — skip only the Telegram send.
-        broadcast('scan_alert', {
-          token:         Number(token),
-          label,
-          tradingsymbol: _tokenTradingsymbol.get(Number(token)) ?? null,
-          interval,
-          tfLabel,
-          patternId,
-          patternLabel,
-          signal:        result.signal,
-          score:         result.score         ?? null,
-          close:         result.close         ?? null,
-          strength:         result.strength         ?? null,
-          cloudPosition:    result.cloudPosition    ?? null,
-          barsAgo:          result.barsAgo          ?? null,
-          consecutiveBars:  result.consecutiveBars  ?? null,
-          cloudThickness:   result.cloudThickness   ?? null,
-          ts:            Date.now(),
-        });
+        broadcast('scan_alert', alertPayload);
+        db.alertRepo.insertAlert(alertPayload, 'live');
+        alertBus.emit('alert', alertPayload, 'live');
         continue;
       }
     }
@@ -187,43 +257,28 @@ async function _runAndAlert(token, interval, candles) {
     const kind = (Number(token) === 256265 || Number(token) === 260105) ? 'index' : 'macro';
     const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind });
 
-    // Gate Telegram on the instrument's own exchange hours:
+    // Gate Telegram on chatId + exchange hours:
     //   MCX (Crude/Gold/Silver) → isMcxOpen()  [09:00–23:30 IST]
     //   NSE / VIX / CDS         → isNseOpen()  [09:00–15:30 IST]
     // SSE broadcast below always fires so the Scanner UI stays live.
-    const exchange  = _exchangeMap.get(Number(token)) ?? 'NSE';
-    const mktOpen   = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
-    if (mktOpen) {
-      try {
-        await telegramNotifier.sendMessage(chatId, text);
-        console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
-      } catch (err) {
-        console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);
+    if (chatId) {
+      const mktOpen = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
+      if (mktOpen) {
+        try {
+          await telegramNotifier.sendMessage(chatId, text);
+          console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
+        } catch (err) {
+          console.warn(`[PatternAlert] Telegram send failed for ${label}:`, err.message);
+        }
+      } else {
+        console.log(`[PatternAlert] ⏸ ${patternId} ${result.signal} — ${label} (${tfLabel}) — Telegram skipped (${exchange} closed)`);
       }
-    } else {
-      console.log(`[PatternAlert] ⏸ ${patternId} ${result.signal} — ${label} (${tfLabel}) — Telegram skipped (${exchange} closed)`);
     }
 
-    // Broadcast to SSE clients so the Scanner tab updates in real time,
-    // regardless of whether Telegram succeeded.
-    broadcast('scan_alert', {
-      token:         Number(token),
-      label,
-      tradingsymbol: _tokenTradingsymbol.get(Number(token)) ?? null,
-      interval,
-      tfLabel,
-      patternId,
-      patternLabel,
-      signal:        result.signal,
-      score:         result.score         ?? null,
-      close:         result.close         ?? null,
-      strength:         result.strength         ?? null,
-      cloudPosition:    result.cloudPosition    ?? null,
-      barsAgo:          result.barsAgo          ?? null,
-      consecutiveBars:  result.consecutiveBars  ?? null,
-      cloudThickness:   result.cloudThickness   ?? null,
-      ts:            Date.now(),
-    });
+    // Broadcast to SSE + store in MongoDB + emit to alertBus for outcome tracking
+    broadcast('scan_alert', alertPayload);
+    db.alertRepo.insertAlert(alertPayload, 'live');
+    alertBus.emit('alert', alertPayload, 'live');
   }
 }
 
