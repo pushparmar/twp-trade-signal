@@ -229,19 +229,19 @@ app.listen(PORT, async () => {
     console.warn('[AutoTrader] Could not start:', err.message);
   }
 
-  // Phase 2 data collection — signal outcome tracker + daily market snapshots.
-  // signalOutcomeTracker recovers pending observations from MongoDB on start,
-  // then passively listens to alertBus for new signals. Zero impact on trading.
-  try {
-    signalOutcomeTracker.start();
-  } catch (err) {
-    console.warn('[SignalOutcomeTracker] Could not start:', err.message);
-  }
-  try {
-    dailySnapshotJob.start();
-  } catch (err) {
-    console.warn('[DailySnapshot] Could not start:', err.message);
-  }
+  // Phase 2 data collection — DISABLED to reduce MongoDB write load.
+  // signalOutcomeTracker was tracking every signal candle-by-candle (20 bars),
+  // causing too many writes for Atlas free tier. Re-enable after upgrading to M2+.
+  // try {
+  //   signalOutcomeTracker.start();
+  // } catch (err) {
+  //   console.warn('[SignalOutcomeTracker] Could not start:', err.message);
+  // }
+  // try {
+  //   dailySnapshotJob.start();
+  // } catch (err) {
+  //   console.warn('[DailySnapshot] Could not start:', err.message);
+  // }
 
   // Load F&O stock registry from disk immediately — no auth needed.
   // The registry (fo-stocks.json) holds stable NSE EQ tokens that never expire.
