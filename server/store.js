@@ -147,6 +147,71 @@ function setTelegramChatId(chatId) {
     return config.telegramChatId;
 }
 
+// ── Pattern Config ──────────────────────────────────────
+// Controls which patterns run on which timeframes for scan, telegram alerts, and auto orders.
+// Shape: { "pattern-id:interval": { scan: bool, alert: bool, order: bool } }
+// Missing keys default to { scan: true, alert: true, order: true } (everything enabled).
+
+function getPatternConfig() {
+    const config = readConfig();
+    return config.patternConfig ?? {};
+}
+
+function setPatternConfig(updates) {
+    const config = readConfig();
+    config.patternConfig = { ...(config.patternConfig ?? {}), ...updates };
+    writeConfig(config);
+    // Persist to MongoDB so config survives Railway redeploys
+    try {
+        const db = require('./db');
+        if (db.settingsRepo) {
+            db.settingsRepo.set('patternConfig', config.patternConfig).catch(() => {});
+        }
+    } catch { /* DB not initialized yet — skip */ }
+    return config.patternConfig;
+}
+
+/**
+ * Load pattern config from MongoDB on boot.
+ * MongoDB is the source of truth — overrides whatever is in config.json.
+ * Call this once after db.init() completes.
+ */
+async function loadPatternConfigFromMongo() {
+    try {
+        const db = require('./db');
+        const mongoConfig = await db.settingsRepo.get('patternConfig');
+        if (mongoConfig && typeof mongoConfig === 'object') {
+            const config = readConfig();
+            config.patternConfig = mongoConfig;
+            writeConfig(config);
+            const keyCount = Object.keys(mongoConfig).length;
+            console.log(`[store] Loaded patternConfig from MongoDB (${keyCount} entries)`);
+            return true;
+        }
+        console.log('[store] No patternConfig in MongoDB — using config.json / defaults');
+        return false;
+    } catch (err) {
+        console.warn('[store] loadPatternConfigFromMongo failed:', err.message);
+        return false;
+    }
+}
+
+/**
+ * Check if a specific pattern+interval+channel is enabled.
+ * Returns true by default if no config exists for the combination.
+ * @param {string} patternId  e.g. 'kumo-breakout'
+ * @param {string} interval   e.g. '15minute', '60minute', '4h', 'day'
+ * @param {'scan'|'alert'|'order'} channel
+ * @returns {boolean}
+ */
+function isPatternEnabled(patternId, interval, channel) {
+    const pc = getPatternConfig();
+    const key = `${patternId}:${interval}`;
+    const entry = pc[key];
+    if (!entry) return true;  // default: enabled
+    return entry[channel] !== false;  // only disabled if explicitly set to false
+}
+
 // ── Test / Paper trading ─────────────────────────────
 
 // Write-through path for paper trades — survives server restarts.
@@ -464,5 +529,9 @@ module.exports = {
     setAutoTraderSettings,
     getLiveOrderEnabled,
     setTradeKiteOrderIds,
-    getLotMultiplier
+    getLotMultiplier,
+    getPatternConfig,
+    setPatternConfig,
+    isPatternEnabled,
+    loadPatternConfigFromMongo
 };

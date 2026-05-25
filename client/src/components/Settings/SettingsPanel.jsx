@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
 
@@ -306,6 +306,234 @@ export default function SettingsPanel() {
                         <p className="diag-hint">Click Refresh to check scanner health.</p>
                     )}
                 </div>
+
+                {/* Pattern Config */}
+                <PatternConfigPanel />
+            </div>
+        </div>
+    );
+}
+
+// ── TF label map ────────────────────────────────────────────────────────────
+const TF_SHORT = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
+const CHANNELS = ['scan', 'alert', 'order'];
+const CH_LABELS = { scan: 'Scan', alert: 'Telegram', order: 'Order' };
+const CH_COLORS = { scan: '#4dabf7', alert: '#51cf66', order: '#ffd43b' };
+
+function PatternConfigPanel() {
+    const [patterns,  setPatterns]  = useState([]);
+    const [intervals, setIntervals] = useState([]);
+    const [savedConfig, setSavedConfig] = useState({});   // last-saved server state
+    const [draft,     setDraft]     = useState({});        // local edits (unsaved)
+    const [loading,   setLoading]   = useState(true);
+    const [saving,    setSaving]    = useState(false);
+    const [saveMsg,   setSaveMsg]   = useState('');
+
+    useEffect(() => {
+        api.get('/settings/pattern-config')
+            .then(r => {
+                setPatterns(r.data.patterns || []);
+                setIntervals(r.data.intervals || []);
+                const serverConfig = r.data.config || {};
+                setSavedConfig(serverConfig);
+                setDraft(serverConfig);
+            })
+            .catch(() => {})
+            .finally(() => setLoading(false));
+    }, []);
+
+    // Check if draft has unsaved changes compared to savedConfig
+    const hasChanges = JSON.stringify(draft) !== JSON.stringify(savedConfig);
+
+    function isEnabled(patternId, interval, channel) {
+        const key = `${patternId}:${interval}`;
+        const entry = draft[key];
+        if (!entry) return true;
+        return entry[channel] !== false;
+    }
+
+    // Check if a cell was changed from the saved state
+    function isChanged(patternId, interval, channel) {
+        const key = `${patternId}:${interval}`;
+        const savedEntry = savedConfig[key];
+        const draftEntry = draft[key];
+        const savedVal = savedEntry ? savedEntry[channel] !== false : true;
+        const draftVal = draftEntry ? draftEntry[channel] !== false : true;
+        return savedVal !== draftVal;
+    }
+
+    function toggle(patternId, interval, channel) {
+        const key = `${patternId}:${interval}`;
+        const current = isEnabled(patternId, interval, channel);
+        const existing = draft[key] || { scan: true, alert: true, order: true };
+        const updated  = { ...existing, [channel]: !current };
+        setDraft(prev => ({ ...prev, [key]: updated }));
+        setSaveMsg('');
+    }
+
+    function toggleFullRow(patternId) {
+        // Check if ALL cells across ALL intervals are ON
+        const allOn = intervals.every(iv =>
+            CHANNELS.every(ch => isEnabled(patternId, iv, ch))
+        );
+        const newVal = !allOn;
+        const updates = {};
+        for (const iv of intervals) {
+            updates[`${patternId}:${iv}`] = { scan: newVal, alert: newVal, order: newVal };
+        }
+        setDraft(prev => ({ ...prev, ...updates }));
+        setSaveMsg('');
+    }
+
+    function resetDraft() {
+        setDraft(savedConfig);
+        setSaveMsg('');
+    }
+
+    async function saveDraft() {
+        // Only send the keys that actually changed
+        const changedEntries = {};
+        for (const key of Object.keys(draft)) {
+            if (JSON.stringify(draft[key]) !== JSON.stringify(savedConfig[key])) {
+                changedEntries[key] = draft[key];
+            }
+        }
+        if (Object.keys(changedEntries).length === 0) return;
+
+        setSaving(true);
+        setSaveMsg('');
+        try {
+            const r = await api.post('/settings/pattern-config', changedEntries);
+            const newSaved = r.data.config || { ...savedConfig, ...changedEntries };
+            setSavedConfig(newSaved);
+            setDraft(newSaved);
+            setSaveMsg('✅ Saved');
+            setTimeout(() => setSaveMsg(''), 3000);
+        } catch (err) {
+            setSaveMsg('❌ Save failed: ' + (err.response?.data?.error || err.message));
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    if (loading) return <div className="settings-group"><h3>Pattern Config</h3><p className="diag-hint">Loading…</p></div>;
+
+    return (
+        <div className="settings-group">
+            <h3>Pattern Config</h3>
+            <p className="diag-hint" style={{ marginBottom: 10 }}>
+                Toggle which patterns run on each timeframe for scanning, Telegram alerts, and auto orders.
+                {hasChanges && <span style={{ color: '#ffd43b', marginLeft: 8 }}>● Unsaved changes</span>}
+            </p>
+
+            <div style={{ overflowX: 'auto' }}>
+                <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+                    <thead>
+                        <tr>
+                            <th style={{ textAlign: 'left', minWidth: 120 }}>Pattern</th>
+                            {intervals.map(iv => (
+                                <th key={iv} colSpan={3} style={{ textAlign: 'center', borderLeft: '1px solid var(--border)' }}>
+                                    {TF_SHORT[iv] || iv}
+                                </th>
+                            ))}
+                        </tr>
+                        <tr>
+                            <th />
+                            {intervals.map(iv =>
+                                CHANNELS.map(ch => (
+                                    <th key={`${iv}-${ch}`}
+                                        style={{
+                                            textAlign: 'center',
+                                            fontSize: 10,
+                                            color: CH_COLORS[ch],
+                                            fontWeight: 500,
+                                            borderLeft: ch === 'scan' ? '1px solid var(--border)' : 'none',
+                                        }}>
+                                        {CH_LABELS[ch]}
+                                    </th>
+                                ))
+                            )}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {patterns.map(p => (
+                            <tr key={p.id}>
+                                <td
+                                    style={{ fontWeight: 500, whiteSpace: 'nowrap', cursor: 'pointer' }}
+                                    title="Click to toggle all timeframes & channels for this pattern"
+                                    onClick={() => toggleFullRow(p.id)}
+                                >
+                                    {p.label}
+                                </td>
+                                {intervals.map(iv =>
+                                    CHANNELS.map(ch => {
+                                        const on = isEnabled(p.id, iv, ch);
+                                        const changed = isChanged(p.id, iv, ch);
+                                        return (
+                                            <td key={`${p.id}-${iv}-${ch}`}
+                                                style={{
+                                                    textAlign: 'center',
+                                                    cursor: 'pointer',
+                                                    borderLeft: ch === 'scan' ? '1px solid var(--border)' : 'none',
+                                                }}
+                                                onClick={() => toggle(p.id, iv, ch)}
+                                                title={`${p.label} · ${TF_SHORT[iv]} · ${CH_LABELS[ch]}: ${on ? 'ON' : 'OFF'}${changed ? ' (changed)' : ''}`}
+                                            >
+                                                <span style={{
+                                                    display: 'inline-block',
+                                                    width: 18,
+                                                    height: 18,
+                                                    lineHeight: '18px',
+                                                    borderRadius: 4,
+                                                    fontSize: 11,
+                                                    background: on ? CH_COLORS[ch] + '22' : 'var(--bg-secondary)',
+                                                    color: on ? CH_COLORS[ch] : 'var(--text-muted)',
+                                                    border: `1px solid ${on ? CH_COLORS[ch] : 'var(--border)'}`,
+                                                    outline: changed ? `2px solid ${CH_COLORS[ch]}` : 'none',
+                                                    outlineOffset: 1,
+                                                }}>
+                                                    {on ? '✓' : '×'}
+                                                </span>
+                                            </td>
+                                        );
+                                    })
+                                )}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Legend */}
+            <div style={{ marginTop: 8, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {CHANNELS.map(ch => (
+                    <span key={ch} style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        <span style={{ color: CH_COLORS[ch], fontWeight: 600 }}>■</span> {CH_LABELS[ch]}
+                    </span>
+                ))}
+            </div>
+
+            {/* Save / Reset buttons */}
+            <div style={{ marginTop: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+                <button
+                    className="btn btn-primary btn-sm"
+                    onClick={saveDraft}
+                    disabled={!hasChanges || saving}
+                >
+                    {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={resetDraft}
+                    disabled={!hasChanges || saving}
+                >
+                    Reset
+                </button>
+                {saveMsg && (
+                    <span style={{ fontSize: 12, color: saveMsg.startsWith('✅') ? '#51cf66' : '#ff6b6b' }}>
+                        {saveMsg}
+                    </span>
+                )}
             </div>
         </div>
     );

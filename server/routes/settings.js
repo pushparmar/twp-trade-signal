@@ -1,5 +1,6 @@
 const express = require('express');
-const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken } = require('../store');
+const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken, getPatternConfig, setPatternConfig } = require('../store');
+const patternRegistry = require('../services/patternRegistry');
 
 const router = express.Router();
 
@@ -46,6 +47,28 @@ router.post('/telegram', (req, res) => {
   }
 
   res.json({ chatId: getTelegramChatId(), botTokenSet: !!getTelegramBotToken() });
+});
+
+// ── Pattern Config ──────────────────────────────────────────────────────────
+// GET  /api/settings/pattern-config → { patterns: [...], intervals: [...], config: {...} }
+// POST /api/settings/pattern-config → update config entries
+
+const SCAN_INTERVALS = ['15minute', '60minute', '4h', 'day'];
+
+router.get('/pattern-config', (_req, res) => {
+  const patterns  = patternRegistry.list().map(p => ({ id: p.id, label: p.label }));
+  const config    = getPatternConfig();
+  res.json({ patterns, intervals: SCAN_INTERVALS, config });
+});
+
+router.post('/pattern-config', (req, res) => {
+  // Body: { "patternId:interval": { scan: bool, alert: bool, order: bool }, ... }
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object') {
+    return res.status(400).json({ error: 'Body must be an object of pattern:interval → { scan, alert, order }' });
+  }
+  const saved = setPatternConfig(updates);
+  res.json({ config: saved });
 });
 
 module.exports = router;

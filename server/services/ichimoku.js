@@ -1858,6 +1858,451 @@ function getFutureCloudColor(candles) {
   return 'neutral';
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Cloud Exit (Kumo Exit) — Trend Reversal Cloud Crossover
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Detects the FIRST TIME price appears on the opposite side of the cloud
+// after a long run on one side.
+//
+//   Bearish: price was ABOVE cloud for many bars → now below cloud (first time)
+//   Bullish: price was BELOW cloud for many bars → now above cloud (first time)
+//
+// This is a trend reversal signal — the cloud acted as support/resistance for
+// a long time and price has finally crossed through to the other side.
+//
+// How it works:
+//   1. Current bar: price is below cloud (bearish signal) or above cloud (bullish)
+//   2. Scan backward to find how recently price was on the OPPOSITE side
+//   3. Count how many bars it was on the opposite side (the "long run")
+//   4. If the opposite-side run was long enough → match
+
+function getCloudExit(candles, opts = {}) {
+  if (!candles || candles.length < 78) return null;
+
+  const ichi = calculate(candles);
+  const n    = ichi.length;
+
+  const lookback     = opts.lookback     ?? 5;   // current bar must be outside cloud within last N bars
+  const minRunBars   = opts.minRunBars   ?? 5;   // minimum bars on the opposite side before crossover
+  const scanBars     = opts.scanBars     ?? 40;  // how far back to scan for the opposite-side run
+
+  // ── Step 1: Find a recent bar that is outside the cloud ───────────────────
+  let exitIdx = -1;
+  let signal  = null;
+
+  for (let i = n - 1; i >= Math.max(0, n - lookback); i--) {
+    const bar = ichi[i];
+    if (!bar || bar.cloudTop == null || bar.cloudBottom == null) continue;
+
+    if (bar.belowCloud) {
+      exitIdx = i;
+      signal  = 'bearish';
+      break;
+    }
+    if (bar.aboveCloud) {
+      exitIdx = i;
+      signal  = 'bullish';
+      break;
+    }
+  }
+
+  if (exitIdx < 0 || !signal) return { matched: false, signal: null };
+
+  // ── Step 2: Scan backward — find the opposite-side run ────────────────────
+  // Walk back from exitIdx to find bars that were on the OPPOSITE side.
+  // Allow cloud-inside bars as "transition" — they don't break the pattern.
+  //
+  // We want: [ABOVE ABOVE ABOVE ... INSIDE INSIDE ... BELOW(current)]  → bearish
+  //          ^^^^^^^^^^^^^^^^^^^^^^ this is the "opposite run" for bearish
+
+  let transitionBars = 0;  // bars inside the cloud (the crossing period)
+  let oppositeBars   = 0;  // bars on the opposite side (the long run)
+  let phase          = 'transition';  // start looking for transition, then opposite
+
+  const scanStart = Math.max(0, exitIdx - scanBars);
+
+  for (let i = exitIdx - 1; i >= scanStart; i--) {
+    const bar = ichi[i];
+    if (!bar || bar.cloudTop == null) continue;
+
+    if (phase === 'transition') {
+      // In transition: bars inside cloud or already on opposite side
+      if (bar.inCloud) {
+        transitionBars++;
+        continue;
+      }
+      // Check if this bar was on the OPPOSITE side (the long run we're looking for)
+      const wasOpposite = (signal === 'bearish' && bar.aboveCloud) ||
+                          (signal === 'bullish' && bar.belowCloud);
+      if (wasOpposite) {
+        oppositeBars++;
+        phase = 'opposite';  // now count the run
+        continue;
+      }
+      // Bar is on the SAME side as current → not a crossover, just continuation
+      break;
+    }
+
+    if (phase === 'opposite') {
+      const stillOpposite = (signal === 'bearish' && bar.aboveCloud) ||
+                            (signal === 'bullish' && bar.belowCloud);
+      // Allow cloud-inside bars mixed in (price can dip into cloud and come back)
+      if (stillOpposite || bar.inCloud) {
+        oppositeBars++;
+      } else {
+        break;  // hit same side or no data — end of the run
+      }
+    }
+  }
+
+  // ── Step 3: Was the opposite-side run long enough? ────────────────────────
+  if (oppositeBars < minRunBars) return { matched: false, signal: null };
+
+  const exitBar = ichi[exitIdx];
+  const close   = exitBar.close;
+  const tenkan  = exitBar.tenkan;
+  const kijun   = exitBar.kijun;
+
+  // ── Score (0–5) ───────────────────────────────────────────────────────────
+  let score = 1;  // base: crossover detected
+
+  // +1 TK alignment agrees with new direction
+  if (tenkan != null && kijun != null) {
+    if (signal === 'bearish' && tenkan < kijun)  score++;
+    if (signal === 'bullish' && tenkan > kijun)  score++;
+  }
+
+  // +1 Strong candle body on exit bar
+  const bodySize  = Math.abs(exitBar.close - exitBar.open);
+  const rangeSize = exitBar.high - exitBar.low;
+  const bodyRatio = rangeSize > 0 ? bodySize / rangeSize : 0;
+  if (signal === 'bearish' && exitBar.close < exitBar.open && bodyRatio > 0.4) score++;
+  if (signal === 'bullish' && exitBar.close > exitBar.open && bodyRatio > 0.4) score++;
+
+  // +1 Future cloud agrees with exit direction
+  const futureCloudColor = getFutureCloudColor(candles);
+  if ((signal === 'bearish' && futureCloudColor === 'bearish') ||
+      (signal === 'bullish' && futureCloudColor === 'bullish')) score++;
+
+  // +1 Long opposite-side run (10+ bars = strong trend was in place)
+  if (oppositeBars >= 10) score++;
+
+  // +1 Chikou span confirms
+  if (exitBar.chikou != null && exitIdx >= 26) {
+    const pastBar = ichi[exitIdx - 26];
+    if (pastBar) {
+      if (signal === 'bearish' && exitBar.chikou < pastBar.close) score++;
+      if (signal === 'bullish' && exitBar.chikou > pastBar.close) score++;
+    }
+  }
+
+  score = Math.min(score, 5);
+
+  const exitEdge = signal === 'bearish' ? exitBar.cloudBottom : exitBar.cloudTop;
+  const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
+
+  return {
+    matched:           true,
+    signal,
+    score,
+    close,
+    strength,
+    tenkan:            tenkan ?? null,
+    kijun:             kijun  ?? null,
+    senkouA:           exitBar.senkouA,
+    senkouB:           exitBar.senkouB,
+    cloudTop:          exitBar.cloudTop,
+    cloudBottom:       exitBar.cloudBottom,
+    cloudPosition:     signal === 'bearish' ? 'below' : 'above',
+    oppositeBars,
+    transitionBars,
+    exitEdge,
+    futureCloudColor,
+    barsAgo:           n - 1 - exitIdx,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Kijun Retest — pullback to Kijun after a cloud crossover
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// After price crosses through the cloud to the other side (kumo crossover),
+// it often pulls back to retest the Kijun-sen (26-period baseline).
+//
+//   Bearish: price is below cloud, pulls back UP to touch Kijun → Kijun = resistance
+//   Bullish: price is above cloud, pulls back DOWN to touch Kijun → Kijun = support
+//
+// The wick must touch/cross the Kijun but the close stays on the trend side.
+// This confirms the Kijun is holding as the new support/resistance after the crossover.
+//
+// Conditions:
+//   1. Price is currently on one side of the cloud (above/below)
+//   2. Price was on the OPPOSITE side within the last N bars (recent crossover)
+//   3. Recent bar's wick touched or crossed the Kijun
+//   4. Close stays on the correct side of Kijun (didn't break through)
+
+function getKijunRetest(candles, opts = {}) {
+  if (!candles || candles.length < 78) return null;
+
+  const ichi = calculate(candles);
+  const n    = ichi.length;
+
+  const lookback       = opts.lookback       ?? 3;    // bars to check for the retest candle
+  const crossoverScan  = opts.crossoverScan  ?? 20;   // how far back to look for the crossover
+  const tolerance      = opts.tolerance      ?? 0.003; // 0.3% tolerance for "touching" kijun
+
+  // ── Step 1: Find the retest candle within last `lookback` bars ────────────
+  let retestIdx = -1;
+  let signal    = null;
+
+  for (let i = n - 1; i >= Math.max(0, n - lookback); i--) {
+    const bar = ichi[i];
+    if (!bar || bar.kijun == null || bar.cloudTop == null) continue;
+
+    const kijun    = bar.kijun;
+    const tol      = kijun * tolerance;
+
+    // Bearish retest: price is below cloud, wick reached up to Kijun, close stayed below Kijun
+    if (bar.belowCloud || bar.inCloud) {
+      const wickTouchedKijun = bar.high >= kijun - tol;
+      const closeBelow       = bar.close < kijun;
+      if (wickTouchedKijun && closeBelow) {
+        retestIdx = i;
+        signal    = 'bearish';
+        break;
+      }
+    }
+
+    // Bullish retest: price is above cloud, wick reached down to Kijun, close stayed above Kijun
+    if (bar.aboveCloud || bar.inCloud) {
+      const wickTouchedKijun = bar.low <= kijun + tol;
+      const closeAbove       = bar.close > kijun;
+      if (wickTouchedKijun && closeAbove) {
+        retestIdx = i;
+        signal    = 'bullish';
+        break;
+      }
+    }
+  }
+
+  if (retestIdx < 0 || !signal) return { matched: false, signal: null };
+
+  // ── Step 2: Verify a recent crossover happened ────────────────────────────
+  // Scan backward from the retest bar to confirm price was on the OPPOSITE
+  // side of the cloud recently — proving this is a post-crossover retest,
+  // not just a random Kijun touch in a ranging market.
+  let hadOpposite = false;
+  const scanStart = Math.max(0, retestIdx - crossoverScan);
+
+  for (let i = retestIdx - 1; i >= scanStart; i--) {
+    const bar = ichi[i];
+    if (!bar || bar.cloudTop == null) continue;
+
+    if (signal === 'bearish' && bar.aboveCloud) { hadOpposite = true; break; }
+    if (signal === 'bullish' && bar.belowCloud) { hadOpposite = true; break; }
+  }
+
+  if (!hadOpposite) return { matched: false, signal: null };
+
+  const retestBar = ichi[retestIdx];
+  const close     = retestBar.close;
+  const tenkan    = retestBar.tenkan;
+  const kijun     = retestBar.kijun;
+
+  // ── Score (0–5) ───────────────────────────────────────────────────────────
+  let score = 1;  // base: retest detected after crossover
+
+  // +1 TK alignment agrees with signal
+  if (tenkan != null && kijun != null) {
+    if (signal === 'bearish' && tenkan < kijun) score++;
+    if (signal === 'bullish' && tenkan > kijun) score++;
+  }
+
+  // +1 Close is well away from Kijun (strong rejection, not just sitting on it)
+  const distFromKijun = Math.abs(close - kijun);
+  const distPct       = close > 0 ? distFromKijun / close : 0;
+  if (distPct > 0.003) score++;  // close is >0.3% away from Kijun
+
+  // +1 Future cloud agrees
+  const futureCloudColor = getFutureCloudColor(candles);
+  if ((signal === 'bearish' && futureCloudColor === 'bearish') ||
+      (signal === 'bullish' && futureCloudColor === 'bullish')) score++;
+
+  // +1 Rejection candle — wick shows the retest, body closes away
+  //   Bearish: upper wick is long (reached to Kijun), body is in lower half
+  //   Bullish: lower wick is long (dipped to Kijun), body is in upper half
+  const bodyTop = Math.max(retestBar.open, retestBar.close);
+  const bodyBot = Math.min(retestBar.open, retestBar.close);
+  const range   = retestBar.high - retestBar.low;
+  if (range > 0) {
+    if (signal === 'bearish') {
+      const upperWick = retestBar.high - bodyTop;
+      if (upperWick / range > 0.3) score++;  // long upper wick = rejection
+    }
+    if (signal === 'bullish') {
+      const lowerWick = bodyBot - retestBar.low;
+      if (lowerWick / range > 0.3) score++;  // long lower wick = rejection
+    }
+  }
+
+  // +1 Price is below cloud (bearish) or above cloud (bullish) — clean position
+  if (signal === 'bearish' && retestBar.belowCloud) score++;
+  if (signal === 'bullish' && retestBar.aboveCloud) score++;
+
+  score = Math.min(score, 5);
+
+  const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
+
+  return {
+    matched:           true,
+    signal,
+    score,
+    close,
+    strength,
+    tenkan:            tenkan ?? null,
+    kijun,
+    kijunValue:        kijun,
+    senkouA:           retestBar.senkouA,
+    senkouB:           retestBar.senkouB,
+    cloudTop:          retestBar.cloudTop,
+    cloudBottom:       retestBar.cloudBottom,
+    cloudPosition:     retestBar.aboveCloud ? 'above' : retestBar.belowCloud ? 'below' : 'inside',
+    futureCloudColor,
+    barsAgo:           n - 1 - retestIdx,
+  };
+}
+
+// ─── TK Reversion (Mean Reversion to Kijun) ─────────────────────────────────
+//
+// After a fast move in one direction, the Tenkan–Kijun spread widens.
+// Price then slows down and crosses the Tenkan in the direction of the Kijun.
+// This signals a mean-reversion move toward Kijun or the cloud edge.
+//
+// Bearish signal (after bullish rally):
+//   • Tenkan well above Kijun (spread > minSpreadPct)
+//   • Previous bar closed above Tenkan, current bar closes below Tenkan
+//   • Target = Kijun (price reverting down)
+//
+// Bullish signal (after bearish dump):
+//   • Kijun well above Tenkan (spread > minSpreadPct)
+//   • Previous bar closed below Tenkan, current bar closes above Tenkan
+//   • Target = Kijun (price reverting up)
+//
+// Returns null when conditions are not met.
+
+/**
+ * @param {object[]} candles
+ * @param {object}   opts
+ * @param {number}   opts.minSpreadPct   — minimum |tenkan − kijun| / close × 100 to qualify (default 0.5%)
+ * @param {number}   opts.lookback       — how many recent bars to check for the Tenkan cross (default 3)
+ * @param {number}   opts.spreadLookback — bars to look back for peak spread to confirm it was widening (default 10)
+ * @returns {object|null}
+ */
+function getTKReversion(candles, opts = {}) {
+  const minSpreadPct   = opts.minSpreadPct   ?? 0.5;
+  const lookback       = opts.lookback       ?? 3;
+  const spreadLookback = opts.spreadLookback ?? 10;
+
+  if (!candles || candles.length < 78) return null;
+
+  const results = calculate(candles);
+  const n       = results.length;
+
+  // Scan the last `lookback` bars for a Tenkan cross event
+  for (let offset = 0; offset < lookback; offset++) {
+    const idx  = n - 1 - offset;
+    const prev = results[idx - 1];
+    const curr = results[idx];
+
+    if (!curr || !prev) continue;
+    if (curr.tenkan == null || curr.kijun == null) continue;
+    if (prev.tenkan == null || prev.kijun == null) continue;
+
+    const close      = curr.close;
+    const tenkan     = curr.tenkan;
+    const kijun      = curr.kijun;
+    const tkSpread   = Math.abs(tenkan - kijun);
+    const spreadPct  = (tkSpread / close) * 100;
+
+    // Must have wide enough TK spread
+    if (spreadPct < minSpreadPct) continue;
+
+    let signal = null;
+
+    // ── Bearish signal: prior bullish rally now reverting ─────────────────
+    // Tenkan above Kijun (was rallying), price crosses below Tenkan
+    if (tenkan > kijun && prev.close > prev.tenkan && curr.close < tenkan) {
+      signal = 'bearish';
+    }
+
+    // ── Bullish signal: prior bearish dump now reverting ──────────────────
+    // Kijun above Tenkan (was dumping), price crosses above Tenkan
+    if (kijun > tenkan && prev.close < prev.tenkan && curr.close > tenkan) {
+      signal = 'bullish';
+    }
+
+    if (!signal) continue;
+
+    // ── Verify the spread was genuinely widening (not just flat-wide) ────
+    // Check that the current spread is near peak over the spreadLookback window.
+    // This filters out long-sideways conditions where TK happen to be apart.
+    let peakSpreadPct = 0;
+    const spreadStart = Math.max(0, idx - spreadLookback);
+    for (let j = spreadStart; j <= idx; j++) {
+      const r = results[j];
+      if (r.tenkan != null && r.kijun != null && r.close > 0) {
+        const sp = (Math.abs(r.tenkan - r.kijun) / r.close) * 100;
+        if (sp > peakSpreadPct) peakSpreadPct = sp;
+      }
+    }
+    // Current spread must be at least 60% of peak — confirms it's still wide
+    if (peakSpreadPct > 0 && spreadPct < peakSpreadPct * 0.6) continue;
+
+    // ── Score (0–5) ──────────────────────────────────────────────────────
+    let score = 2; // base: wide spread + Tenkan cross confirmed
+
+    // Wider spread = stronger reversion potential
+    if (spreadPct >= minSpreadPct * 2)  score++;
+    if (spreadPct >= minSpreadPct * 3)  score++;
+
+    // Candle body confirms direction (not just a wick cross)
+    const bodyRatio = Math.abs(curr.close - curr.open) / (curr.high - curr.low + 0.0001);
+    if (bodyRatio >= 0.5) score++;
+
+    // Cloud agreement: reversion toward cloud adds conviction
+    if (signal === 'bearish' && curr.aboveCloud) score = Math.min(score + 0, 5); // already above, room to fall
+    if (signal === 'bullish' && curr.belowCloud) score = Math.min(score + 0, 5);
+
+    score = Math.min(score, 5);
+    const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
+
+    // ── Future cloud color ───────────────────────────────────────────────
+    const futureCloudColor = getFutureCloudColor(candles);
+
+    return {
+      matched: true,
+      signal,
+      score,
+      close,
+      strength,
+      tenkan,
+      kijun,
+      kijunValue:       kijun,
+      senkouA:          curr.senkouA,
+      senkouB:          curr.senkouB,
+      cloudTop:         curr.cloudTop,
+      cloudBottom:      curr.cloudBottom,
+      cloudPosition:    curr.aboveCloud ? 'above' : curr.belowCloud ? 'below' : 'inside',
+      futureCloudColor,
+      tkSpreadPct:      +spreadPct.toFixed(2),
+      barsAgo:          offset,
+    };
+  }
+
+  return null;
+}
+
 module.exports = {
   calculate,
   snapshot,
@@ -1880,4 +2325,7 @@ module.exports = {
   getRSI,
   to4H,
   getFutureCloudColor,
+  getCloudExit,
+  getKijunRetest,
+  getTKReversion,
 };

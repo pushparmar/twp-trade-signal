@@ -187,6 +187,11 @@ app.listen(PORT, async () => {
       console.warn('[DB] Could not load cumulative PnL from MongoDB:', err.message);
     }
 
+    // ── Restore pattern config from MongoDB ──────────────────────────────────
+    // MongoDB is source of truth — overrides config.json so the pattern
+    // enable/disable settings survive Railway redeploys.
+    await store.loadPatternConfigFromMongo();
+
     // ── Backfill: any trades already in memory but not yet in MongoDB ───────
     // Covers the race where a trade was placed during the brief window
     // BEFORE db.init() completed (mongo.isReady() was false at write time).

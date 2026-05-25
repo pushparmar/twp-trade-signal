@@ -437,13 +437,8 @@ async function _runScanForInterval(interval) {
     const tgBestBySignal = new Map(); // signal → { alertPayload, score, result, patternLabel }
 
     for (const { id: patternId, label: patternLabel } of patterns) {
-      // NSE 15m — only kijun-bounce and kumo-breakout patterns.
-      // Other patterns (kumo-bounce, cloud-support, kumo-base-entry) produce too
-      // many low-quality signals on the shorter timeframe for NSE equity stocks.
-      // MCX 15m is not restricted here (MCX 15m orders are blocked in autoTrader).
-      if (interval === '15minute' && inst.exchange !== 'MCX') {
-        if (patternId !== 'kijun-bounce' && patternId !== 'kumo-breakout') continue;
-      }
+      // Pattern config gate — skip if scan is disabled for this pattern+interval
+      if (!store.isPatternEnabled(patternId, interval, 'scan')) continue;
 
       const patternDef = patternRegistry.get(patternId);
 
@@ -541,9 +536,8 @@ async function _runScanForInterval(interval) {
       const today = _istDateStr();
 
       for (const [signal, best] of tgBestBySignal) {
-        // Note: MTF and bias filtering are handled in autoTrader.js (order gate only).
-        // Telegram alerts fire for ALL pattern matches regardless of MTF alignment,
-        // so the user sees every signal and can judge quality from the data.
+        // Pattern config gate — skip Telegram if alert is disabled for this pattern+interval
+        if (!store.isPatternEnabled(best.alertPayload.patternId, interval, 'alert')) continue;
 
         // Score dedup — skip if same TF + same signal already sent with equal/higher score today.
         // Each TF fires independently — 15m alerts are NOT suppressed by a prior 1h alert.

@@ -229,6 +229,9 @@ async function _onAlert(alert, source) {
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
 
+  // ── 1.1  Pattern config gate — skip if order disabled for this pattern+interval
+  if (!store.isPatternEnabled(alert.patternId, alert.interval, 'order')) return;
+
   // ── 2. Required fields ───────────────────────────────────────────────────
   const entry    = alert.close;
   const { sl, target, token, interval, patternId, signal } = alert;

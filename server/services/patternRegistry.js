@@ -20,6 +20,7 @@ const {
   getKumoBreakoutTwist, getKumoBreakout, getKumoBaseEntry, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
   getKijunLevel, getCloudSupport, getVolumeContext, getATR, getRSI,
+  getCloudExit, getKijunRetest, getTKReversion,
 } = require('./ichimoku');
 
 // Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
@@ -354,6 +355,139 @@ const PATTERNS = {
       if (!_tkAligned(result)) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
       return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+    },
+  },
+
+  'cloud-exit': {
+    id:          'cloud-exit',
+    label:       'Kumo Crossover',
+    description: 'Price was on one side of the cloud for a long run and has crossed through to the other side for the first time — trend reversal signal.',
+    defaultOpts: { lookback: 5, minRunBars: 5, scanBars: 40 },
+
+    run(candles, opts = {}) {
+      const result = getCloudExit(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.matched) return { matched: false };
+
+      // Use computeSLTarget for target, then override SL to the exit edge
+      const { target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+
+      // SL = the cloud edge price just crossed + buffer
+      // (going back into the cloud = reversal failed)
+      let sl = result.exitEdge;
+      if (sl != null) {
+        const atrVal = atr ?? 0;
+        const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+        const atrBuf = atrVal > 0 ? SL_ANCHOR_BUFFER_ATR * atrVal : 0;
+        const buf    = Math.max(pctBuf, atrBuf);
+        sl = result.signal === 'bearish' ? sl + buf : sl - buf;
+        sl = Math.round(sl * 100) / 100;
+      }
+
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+    },
+  },
+
+  'kijun-retest': {
+    id:          'kijun-retest',
+    label:       'Kijun Retest',
+    description: 'After a kumo crossover, price pulls back to retest the Kijun-sen — wick touches Kijun but close stays on the trend side. Confirms Kijun as new support/resistance.',
+    defaultOpts: { lookback: 3, crossoverScan: 20, tolerance: 0.003 },
+
+    run(candles, opts = {}) {
+      const result = getKijunRetest(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.matched) return { matched: false };
+      // SL = Kijun itself (if price closes through it, the retest failed)
+      const { sl, target, atr, targetSource } = computeSLTarget('kijun-bounce', result.signal, result, candles);
+      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+    },
+  },
+
+  'tk-reversion': {
+    id:          'tk-reversion',
+    label:       'TK Reversion',
+    description: 'After a fast move widened the Tenkan–Kijun spread, price crosses Tenkan in the direction of Kijun — mean reversion toward Kijun or cloud.',
+    defaultOpts: { lookback: 3, minSpreadPct: 0.5, spreadLookback: 10 },
+
+    run(candles, opts = {}) {
+      const result = getTKReversion(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.matched) return { matched: false };
+
+      // Target = Kijun (the reversion destination)
+      // SL = recent swing beyond Tenkan (the wrong-side extreme)
+      const { close, signal, kijun } = result;
+      const atr = getATR(candles, 14);
+      const atrFloor = atr != null ? MIN_SL_ATR_MULT * atr : null;
+
+      // SL: beyond the Tenkan on the side the price came from
+      // For bearish (price falling to kijun): SL above recent high
+      // For bullish (price rising to kijun): SL below recent low
+      let sl;
+      const recentBars = candles.slice(-10);
+      if (signal === 'bearish') {
+        sl = Math.max(...recentBars.map(c => c.high));
+        const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+        const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+        sl = sl + Math.max(pctBuf, atrBuf);
+      } else {
+        sl = Math.min(...recentBars.map(c => c.low));
+        const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+        const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+        sl = sl - Math.max(pctBuf, atrBuf);
+      }
+
+      // ATR floor
+      if (atrFloor != null) {
+        const naturalDist = Math.abs(close - sl);
+        if (naturalDist < atrFloor) {
+          sl = signal === 'bullish' ? close - atrFloor : close + atrFloor;
+        }
+      }
+      sl = Math.round(sl * 100) / 100;
+
+      // Target = closer of Kijun or cloud edge (first obstacle in reversion direction)
+      //   Bullish (reverting UP):   target = min(kijun, cloudBottom) — whichever is nearer above
+      //   Bearish (reverting DOWN): target = max(kijun, cloudTop)   — whichever is nearer below
+      const risk = Math.abs(close - sl);
+      const { cloudTop, cloudBottom } = result;
+
+      // Collect valid target candidates on the correct side of close
+      const candidates = [];
+      if (signal === 'bullish') {
+        if (kijun > close)       candidates.push({ level: kijun,       source: 'kijun' });
+        if (cloudBottom > close) candidates.push({ level: cloudBottom, source: 'cloud' });
+      } else {
+        if (kijun < close)       candidates.push({ level: kijun,       source: 'kijun' });
+        if (cloudTop < close)    candidates.push({ level: cloudTop,    source: 'cloud' });
+      }
+
+      let target, targetSource;
+      if (candidates.length > 0) {
+        // Pick the closer one (first obstacle price will hit)
+        candidates.sort((a, b) => Math.abs(a.level - close) - Math.abs(b.level - close));
+        target       = candidates[0].level;
+        targetSource = candidates[0].source;
+      } else {
+        // Neither Kijun nor cloud on the correct side — fallback to 2× risk
+        target       = signal === 'bearish' ? close - 2 * risk : close + 2 * risk;
+        targetSource = 'fixed';
+      }
+
+      // Ensure at least 1:1 R:R — if the natural target is too close, use 2× risk
+      if (Math.abs(target - close) < risk) {
+        target       = signal === 'bearish' ? close - 2 * risk : close + 2 * risk;
+        targetSource = 'fixed';
+      }
+      target = Math.round(target * 100) / 100;
+
+      return {
+        matched: true,
+        ...result,
+        sl, target,
+        atr: atr != null ? Math.round(atr * 100) / 100 : null,
+        targetSource,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
     },
   },
 
