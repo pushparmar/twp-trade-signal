@@ -1,7 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useIndexTrade from './useIndexTrade';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Inject mobile styles once
+const MOBILE_STYLE_ID = 'idx-trade-mobile-css';
+if (typeof document !== 'undefined' && !document.getElementById(MOBILE_STYLE_ID)) {
+  const style = document.createElement('style');
+  style.id = MOBILE_STYLE_ID;
+  style.textContent = `
+    @media (max-width: 768px) {
+      .idx-ohl-cell { display: none !important; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 
 function fmtPrice(v) {
   if (v == null) return '—';
@@ -367,13 +380,13 @@ function OptionChainIndex({ indexName, data }) {
             <tr>
               <th style={{ textAlign: 'right', color: '#51cf66' }}>Chg%</th>
               <th style={{ textAlign: 'right', color: '#51cf66' }}>CE LTP</th>
-              <th style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>Open</th>
-              <th style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>High</th>
-              <th style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>Low</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>Open</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>High</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'right', color: '#51cf66', fontSize: 10 }}>Low</th>
               <th style={{ textAlign: 'center' }}>Strike</th>
-              <th style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>Low</th>
-              <th style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>High</th>
-              <th style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>Open</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>Low</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>High</th>
+              <th className="idx-ohl-cell" style={{ textAlign: 'left', color: '#ff6b6b', fontSize: 10 }}>Open</th>
               <th style={{ textAlign: 'left', color: '#ff6b6b' }}>PE LTP</th>
               <th style={{ textAlign: 'left', color: '#ff6b6b' }}>Chg%</th>
             </tr>
@@ -401,13 +414,13 @@ function OptionChainIndex({ indexName, data }) {
                   }}>
                     {fmtPrice(row.ce?.ltp)}
                   </td>
-                  <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.ce?.dayOpen)}
                   </td>
-                  <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.ce?.dayHigh)}
                   </td>
-                  <td style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'right', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.ce?.dayLow)}
                   </td>
                   <td style={{
@@ -419,13 +432,13 @@ function OptionChainIndex({ indexName, data }) {
                     {row.strike}
                     {isAtm && <span style={{ fontSize: 9, marginLeft: 4, color: '#4dabf7' }}>ATM</span>}
                   </td>
-                  <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.pe?.dayLow)}
                   </td>
-                  <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.pe?.dayHigh)}
                   </td>
-                  <td style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
+                  <td className="idx-ohl-cell" style={{ textAlign: 'left', fontSize: 11, color: 'var(--text-muted)' }}>
                     {fmtPrice(row.pe?.dayOpen)}
                   </td>
                   <td style={{
@@ -466,12 +479,12 @@ export default function IndexTradePage() {
 
   return (
     <div className="page">
-      <div className="page-header">
-        <div>
+      <div className="page-header" style={{ overflowX: 'auto', whiteSpace: 'nowrap' }}>
+        <div style={{ minWidth: 0 }}>
           <h2 className="page-title">Index Trade</h2>
-          <p className="page-sub">NIFTY & SENSEX options — ATM ± 5 strikes — auto scan & paper trade</p>
+          <p className="page-sub" style={{ whiteSpace: 'nowrap' }}>NIFTY & SENSEX options — ATM ± 5 strikes — auto scan & paper trade</p>
         </div>
-        <button className="btn btn-sm btn-secondary" onClick={fetchStatus}>
+        <button className="btn btn-sm btn-secondary" onClick={fetchStatus} style={{ flexShrink: 0 }}>
           Refresh
         </button>
       </div>
