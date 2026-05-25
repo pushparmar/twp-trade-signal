@@ -10,6 +10,7 @@ import MarketWatch from './components/Market/MarketWatch';
 import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import AnalyticsPage from './components/Analytics/AnalyticsPage';
 import BacktestPage from './components/Backtest/BacktestPage';
+import IndexTradePage from './components/IndexTrade/IndexTradePage';
 import ToastContainer from './components/Toast/Toast';
 import LoginPage from './components/Auth/LoginPage';
 import './App.css';
@@ -155,10 +156,11 @@ function useTheme() {
 const PAGES = {
   dashboard: Dashboard,
   market:    MarketWatch,
-  scanner:   ScanAlertsPage,
-  analytics: AnalyticsPage,
-  backtest:  BacktestPage,
-  settings:  SettingsPanel,
+  scanner:      ScanAlertsPage,
+  'index-trade': IndexTradePage,
+  analytics:    AnalyticsPage,
+  backtest:     BacktestPage,
+  settings:     SettingsPanel,
 };
 
 // ── EOD forecast clear ────────────────────────────────────────────────────────

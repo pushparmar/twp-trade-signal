@@ -1,0 +1,202 @@
+/**
+ * tradeStore.js — Index Trade module
+ *
+ * In-memory trade state with fire-and-forget MongoDB persistence.
+ * Completely independent from the main app's store.js / tradeRepo.
+ *
+ * MongoDB collection: index_trades (separate from paper_trades)
+ */
+
+const { v4: uuidv4 } = require('uuid');
+const mongo = require('../services/mongoClient');
+
+const COLLECTION = 'index_trades';
+const CONFIG_COLLECTION = 'settings'; // reuse existing settings collection
+
+// ── In-memory state ─────────────────────────────────────────────────────────
+
+let _trades = [];
+let _config = {
+  enabled: true,
+  lotQuantity: 1,        // number of lots per trade
+  tslEnabled: true,
+  tslTriggerR: 1.0,      // activate TSL at 1× risk profit
+  tslDistanceR: 0.5,     // trail 0.5× risk behind peak
+  minRR: 1.5,            // minimum reward:risk ratio
+};
+
+// ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────
+
+function _col() {
+  return mongo.isReady() ? mongo.db().collection(COLLECTION) : null;
+}
+
+function _upsertToMongo(trade) {
+  const col = _col();
+  if (!col) return;
+  col.updateOne(
+    { tradeId: trade.id },
+    { $set: { ...trade, tradeId: trade.id, updatedAt: new Date() } },
+    { upsert: true },
+  ).catch(err => console.warn('[IdxTradeStore] upsert failed:', err.message));
+}
+
+async function createIndexes() {
+  const col = _col();
+  if (!col) return;
+  try {
+    await col.createIndex({ tradeId: 1 }, { unique: true });
+    await col.createIndex({ status: 1 });
+    await col.createIndex({ index: 1 });
+    await col.createIndex({ ts: -1 });
+    console.log(`[IdxTradeStore] Indexes ensured on "${COLLECTION}"`);
+  } catch (err) {
+    console.warn('[IdxTradeStore] createIndexes failed:', err.message);
+  }
+}
+
+// ── Boot: restore from MongoDB ──────────────────────────────────────────────
+
+async function restore() {
+  const col = _col();
+  if (!col) return;
+  try {
+    // Restore OPEN trades so they resume SL/Target monitoring
+    const openTrades = await col.find({ status: 'OPEN' }).toArray();
+    if (openTrades.length > 0) {
+      for (const doc of openTrades) {
+        // Avoid duplicates if already in memory
+        if (!_trades.find(t => t.id === doc.tradeId)) {
+          _trades.push({ ...doc, id: doc.tradeId });
+        }
+      }
+      console.log(`[IdxTradeStore] Restored ${openTrades.length} open trade(s) from MongoDB`);
+    }
+
+    // Load config
+    const settingsCol = mongo.db().collection(CONFIG_COLLECTION);
+    const configDoc = await settingsCol.findOne({ key: 'indexTradeConfig' });
+    if (configDoc?.value && typeof configDoc.value === 'object') {
+      _config = { ..._config, ...configDoc.value };
+      console.log('[IdxTradeStore] Loaded config from MongoDB');
+    }
+  } catch (err) {
+    console.warn('[IdxTradeStore] restore failed:', err.message);
+  }
+}
+
+// ── Trade CRUD ──────────────────────────────────────────────────────────────
+
+function addTrade(tradeData) {
+  const trade = {
+    id: uuidv4(),
+    ts: Date.now(),
+    status: 'OPEN',
+    pnl: null,
+    exitPrice: null,
+    exitReason: null,
+    closedTs: null,
+    tslActivated: false,
+    peakPrice: tradeData.entryPrice,
+    ...tradeData,
+  };
+  _trades.unshift(trade);
+  if (_trades.length > 500) _trades.pop();
+  _upsertToMongo(trade);
+  return trade;
+}
+
+function closeTrade(id, exitPrice, exitReason = 'manual') {
+  const trade = _trades.find(t => t.id === id);
+  if (!trade || trade.status !== 'OPEN') return null;
+
+  const lotSize = trade.lotSize || 1;
+  const qty = trade.quantity || 1;
+  const pnl = trade.action === 'BUY'
+    ? (exitPrice - trade.entryPrice) * qty * lotSize
+    : (trade.entryPrice - exitPrice) * qty * lotSize;
+
+  trade.status = 'CLOSED';
+  trade.exitPrice = exitPrice;
+  trade.pnl = Math.round(pnl * 100) / 100;
+  trade.exitReason = exitReason;
+  trade.closedTs = Date.now();
+
+  _upsertToMongo(trade);
+  return trade;
+}
+
+function updateTrade(id, fields) {
+  const trade = _trades.find(t => t.id === id);
+  if (!trade || trade.status !== 'OPEN') return null;
+  const allowed = ['sl', 'peakPrice', 'tslActivated'];
+  for (const k of allowed) {
+    if (fields[k] !== undefined) trade[k] = fields[k];
+  }
+  _upsertToMongo(trade);
+  return trade;
+}
+
+// ── Queries ─────────────────────────────────────────────────────────────────
+
+function getOpenTrades()   { return _trades.filter(t => t.status === 'OPEN'); }
+function getClosedTrades() { return _trades.filter(t => t.status === 'CLOSED'); }
+function getAllTrades()     { return _trades; }
+function getTrade(id)      { return _trades.find(t => t.id === id) || null; }
+
+function getPnlSummary() {
+  const closed = getClosedTrades();
+  const wins   = closed.filter(t => t.pnl > 0);
+  const losses = closed.filter(t => t.pnl <= 0);
+  const totalPnl = closed.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+  // Today's PnL (IST)
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+  const todayClosed = closed.filter(t => {
+    if (!t.closedTs) return false;
+    return new Date(t.closedTs + IST_OFFSET_MS).toISOString().slice(0, 10) === todayIST;
+  });
+  const todayPnl = todayClosed.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+  return {
+    totalPnl: Math.round(totalPnl * 100) / 100,
+    todayPnl: Math.round(todayPnl * 100) / 100,
+    winCount: wins.length,
+    lossCount: losses.length,
+    winRate: closed.length > 0 ? Math.round((wins.length / closed.length) * 100) : 0,
+    openCount: getOpenTrades().length,
+    totalTrades: closed.length,
+  };
+}
+
+function clearTrades() {
+  _trades = [];
+  const col = _col();
+  if (col) col.deleteMany({}).catch(() => {});
+}
+
+// ── Config ──────────────────────────────────────────────────────────────────
+
+function getConfig() { return { ..._config }; }
+
+function setConfig(updates) {
+  _config = { ..._config, ...updates };
+  // Persist to MongoDB
+  if (mongo.isReady()) {
+    mongo.db().collection(CONFIG_COLLECTION).updateOne(
+      { key: 'indexTradeConfig' },
+      { $set: { key: 'indexTradeConfig', value: _config, updatedAt: new Date() } },
+      { upsert: true },
+    ).catch(() => {});
+  }
+  return _config;
+}
+
+module.exports = {
+  createIndexes, restore,
+  addTrade, closeTrade, updateTrade,
+  getOpenTrades, getClosedTrades, getAllTrades, getTrade,
+  getPnlSummary, clearTrades,
+  getConfig, setConfig,
+};

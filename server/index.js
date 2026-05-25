@@ -33,6 +33,7 @@ const signalOutcomeTracker  = require('./services/signalOutcomeTracker');
 const dailySnapshotJob      = require('./services/dailySnapshotJob');
 const db                    = require('./db');
 const store = require('./store');
+const indexTrade            = require('./index-trade');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -99,6 +100,7 @@ app.use('/api/scan',      scanRouter);
 app.use('/api/analytics',   analyticsRouter);
 app.use('/api/auto-trader', autoTraderRouter);
 app.use('/api/backtest',    backtestRouter);
+app.use('/api/index-trade', indexTrade.router);
 
 app.listen(PORT, async () => {
   console.log(`Trading dashboard server running on http://localhost:${PORT}`);
@@ -336,6 +338,11 @@ app.listen(PORT, async () => {
     } catch (err) {
       console.warn('[BgScanner] Could not start:', err.message);
     }
+    try {
+      indexTrade.start();
+    } catch (err) {
+      console.warn('[IndexTrade] Could not start:', err.message);
+    }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }
@@ -351,6 +358,7 @@ function _gracefulShutdown(signal) {
   backgroundScanner.stop();
   autoTrader.stop();
   dailySnapshotJob.stop();
+  indexTrade.stop();
   // Close MongoDB connection so any in-flight writes complete before exit
   db.close().catch(() => {});
   // Give in-flight requests a moment to complete, then exit
