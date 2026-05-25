@@ -551,16 +551,9 @@ async function _runScanForInterval(interval) {
       const currentTfRank  = TF_RANK_MAP[interval] ?? 0;
 
       for (const [signal, best] of tgBestBySignal) {
-        // Rule 1: 15-minute alerts require at least one higher TF aligned
-        if (interval === '15minute') {
-          const hasHigherTf = best.alertPayload.alignedTfs?.some(
-            (tf) => tf === '1h' || tf === '4h' || tf === '1d',
-          );
-          if (!hasHigherTf) {
-            console.log(`[BgScanner] ⏭ Telegram skipped — ${label} (15m ${signal}) no 1h/4h/1d MTF`);
-            continue;
-          }
-        }
+        // Note: MTF and bias filtering are handled in autoTrader.js (order gate only).
+        // Telegram alerts fire for ALL pattern matches regardless of MTF alignment,
+        // so the user sees every signal and can judge quality from the data.
 
         // Rules 2 + 3: TF priority and score dedup
         const sentKey  = `${inst.instrumentToken}:${signal}:${today}`;

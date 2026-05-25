@@ -8,12 +8,13 @@
  *     never crashes the trading server or blocks a scan / tick handler.
  *   • Lazy connect — call init() once on boot; all repos check isReady()
  *     before using the client.
- *   • Auto-reconnect — topology event listeners detect disconnects and flip
- *     _ready to false. A background health check retries connection every
- *     30 seconds when down. The MongoDB driver also has built-in reconnect
+ *   • Resilient ready state — a single heartbeat failure does NOT flip _ready
+ *     to false. Only consecutive failures (3+) mark as disconnected. This
+ *     prevents Railway's transient network blips from causing "skipped" writes.
+ *   • Auto-reconnect — a background health check retries connection every
+ *     30 seconds when truly down. The MongoDB driver also has built-in retry
  *     (retryWrites, retryReads) for transient Atlas/Railway blips.
- *   • Keepalive — socket keepalive + heartbeat prevent Railway's proxy
- *     from killing idle connections.
+ *   • Keepalive — heartbeat + minPoolSize keep connections warm.
  *
  * Usage:
  *   const mongo = require('./mongoClient');
@@ -35,6 +36,10 @@ let _reconnecting   = false;
 // Track for logging — avoid spamming the same error every 30s
 let _lastErrorMsg   = null;
 
+// Consecutive heartbeat failure counter — only flip _ready after threshold
+let _consecutiveHeartbeatFails = 0;
+const HEARTBEAT_FAIL_THRESHOLD = 3;  // 3 failures × 15s heartbeat = 45s tolerance
+
 // ── Config ─────────────────────────────────────────────────────────────────────
 
 const HEALTH_CHECK_MS    = 30_000;  // check connection every 30 seconds
@@ -52,11 +57,12 @@ function _buildOptions() {
   return {
     // ── Timeouts ──────────────────────────────────────────────────────────
     // serverSelectionTimeoutMS: how long the driver waits to find a suitable
-    // server. Set to 15s (up from 8s) to survive Atlas primary elections and
-    // Railway network hiccups. The driver retries internally during this window.
-    serverSelectionTimeoutMS: 15_000,
-    connectTimeoutMS:         10_000,
-    socketTimeoutMS:          45_000,
+    // server. Set to 30s to survive Atlas primary elections, Railway network
+    // hiccups, and cold-start delays. The driver retries internally during
+    // this window — so individual operations succeed without our code retrying.
+    serverSelectionTimeoutMS: 30_000,
+    connectTimeoutMS:         15_000,
+    socketTimeoutMS:          60_000,
 
     // ── Retry ─────────────────────────────────────────────────────────────
     retryWrites: true,
@@ -65,19 +71,19 @@ function _buildOptions() {
     // ── Keepalive ─────────────────────────────────────────────────────────
     // Railway's proxy may kill idle TCP connections after ~60s.
     // heartbeatFrequencyMS pings the server regularly so the connection
-    // stays alive. Combined with socket keepalive, this prevents most
+    // stays alive. Combined with minPoolSize, this prevents most
     // "connection closed" errors on idle periods.
-    heartbeatFrequencyMS: 15_000,    // driver pings server every 15s (default 10s)
+    heartbeatFrequencyMS: 15_000,    // driver pings server every 15s
 
     // ── Connection pool ───────────────────────────────────────────────────
     // Small pool for a single-server trading dashboard.
     // maxPoolSize of 10 is plenty; minPoolSize of 2 keeps connections warm.
     maxPoolSize: 10,
     minPoolSize: 2,
-    maxIdleTimeMS: 60_000,           // close idle connections after 60s
+    maxIdleTimeMS: 120_000,          // close idle connections after 2min (was 60s)
 
     // ── Compression ───────────────────────────────────────────────────────
-    compressors: ['zstd', 'snappy'], // reduce bandwidth on Railway ↔ Atlas
+    compressors: ['zstd', 'snappy'], // reduce bandwidth on Railway <> Atlas
   };
 }
 
@@ -90,13 +96,29 @@ function _attachTopologyListeners(client) {
   //   'topologyDescriptionChanged' — server set topology changed
 
   client.on('serverHeartbeatFailed', (event) => {
-    if (_ready) {
+    _consecutiveHeartbeatFails++;
+    // Only mark disconnected after THRESHOLD consecutive failures.
+    // A single transient blip should NOT flip _ready — the driver's built-in
+    // retryWrites/retryReads will handle it transparently.
+    if (_ready && _consecutiveHeartbeatFails >= HEARTBEAT_FAIL_THRESHOLD) {
       _ready = false;
-      console.warn(`[MongoDB] ⚠️  Heartbeat failed (${event.failure?.message ?? 'unknown'}) — marking as disconnected`);
+      console.warn(
+        `[MongoDB] ⚠️  ${_consecutiveHeartbeatFails} consecutive heartbeat failures ` +
+        `(${event.failure?.message ?? 'unknown'}) — marking as disconnected`,
+      );
+    } else if (_consecutiveHeartbeatFails < HEARTBEAT_FAIL_THRESHOLD) {
+      console.warn(
+        `[MongoDB] ⚠️  Heartbeat blip ${_consecutiveHeartbeatFails}/${HEARTBEAT_FAIL_THRESHOLD} ` +
+        `(${event.failure?.message ?? 'unknown'}) — still ready, driver will retry`,
+      );
     }
   });
 
   client.on('serverHeartbeatSucceeded', () => {
+    // Reset failure counter on any success
+    if (_consecutiveHeartbeatFails > 0) {
+      _consecutiveHeartbeatFails = 0;
+    }
     if (!_ready && _db) {
       _ready = true;
       _lastErrorMsg = null;
@@ -116,6 +138,7 @@ function _attachTopologyListeners(client) {
       console.warn('[MongoDB] ⚠️  No usable servers in topology — marking as disconnected');
     } else if (hasServer && !_ready && _db) {
       _ready = true;
+      _consecutiveHeartbeatFails = 0;
       _lastErrorMsg = null;
       console.log('[MongoDB] ✅ Usable server found in topology — connection restored');
     }
@@ -132,7 +155,9 @@ function _attachTopologyListeners(client) {
 /** Returns true if current IST time is within the active window (07:00–23:45). */
 function _isActiveHours() {
   const nowIST = new Date(Date.now() + IST_OFFSET_MS);
-  const mins   = nowIST.getHours() * 60 + nowIST.getMinutes();
+  // Use getUTCHours/getUTCMinutes — the IST offset was already added to the epoch,
+  // so UTC accessors give the IST-equivalent values regardless of server timezone.
+  const mins   = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
   return mins >= ACTIVE_START_MINS && mins <= ACTIVE_END_MINS;
 }
 
@@ -148,12 +173,16 @@ function _startHealthCheck() {
     if (_ready && _client && _db) {
       try {
         await _db.command({ ping: 1 });
-        // Connection is healthy — nothing to do
+        // Connection is healthy — reset failure counter
+        _consecutiveHeartbeatFails = 0;
       } catch (err) {
-        _ready = false;
+        _consecutiveHeartbeatFails++;
+        if (_consecutiveHeartbeatFails >= HEARTBEAT_FAIL_THRESHOLD) {
+          _ready = false;
+        }
         const msg = err.message;
         if (msg !== _lastErrorMsg) {
-          console.warn(`[MongoDB] ⚠️  Health check ping failed: ${msg}`);
+          console.warn(`[MongoDB] ⚠️  Health check ping failed (${_consecutiveHeartbeatFails}/${HEARTBEAT_FAIL_THRESHOLD}): ${msg}`);
           _lastErrorMsg = msg;
         }
       }
@@ -182,6 +211,7 @@ function _startHealthCheck() {
       const dbName = process.env.MONGODB_DB || 'twp';
       _db    = _client.db(dbName);
       _ready = true;
+      _consecutiveHeartbeatFails = 0;
       _lastErrorMsg = null;
 
       console.log(`[MongoDB] ♻️  Reconnected → database: "${dbName}"`);
@@ -227,6 +257,7 @@ async function init() {
     const dbName = process.env.MONGODB_DB || 'twp';
     _db    = _client.db(dbName);
     _ready = true;
+    _consecutiveHeartbeatFails = 0;
     _lastErrorMsg = null;
 
     console.log(`[MongoDB] Connected → database: "${dbName}"`);

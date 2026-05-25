@@ -237,20 +237,8 @@ async function _runAndAlert(token, interval, candles) {
     // ── Phase 2: enrich with Ichimoku snapshot + context ──────────────────
     _enrichAlertPayload(alertPayload, candles);
 
-    // ── 15m Telegram MTF gate ─────────────────────────────────────────────
-    // For 15-minute intervals, only send to Telegram when at least one
-    // higher TF (1h / 4h / 1d) confirms the same directional signal.
-    // SSE broadcast + MongoDB + alertBus still fire unconditionally.
-    if (interval === '15minute') {
-      const aligned = _hasHigherTfAlignment(Number(token), result.signal);
-      if (!aligned) {
-        console.log(`[PatternAlert] ⏭  ${patternId} ${result.signal} — ${label} (15m) — no MTF alignment, Telegram skipped`);
-        broadcast('scan_alert', alertPayload);
-        db.alertRepo.insertAlert(alertPayload, 'live');
-        alertBus.emit('alert', alertPayload, 'live');
-        continue;
-      }
-    }
+    // Note: MTF and bias filtering are handled in autoTrader.js (order gate only).
+    // Telegram alerts fire for ALL pattern matches so the user sees every signal.
 
     // Use the shared message builder so the wording stays in sync with liveScanner.
     // 'index' for NIFTY/BANKNIFTY, 'macro' for VIX/Crude/Gold/Silver/USDINR.

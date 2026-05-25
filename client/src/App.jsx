@@ -81,13 +81,16 @@ function usePaperAutoClose() {
           const trailGap = tslDistanceR * riskPerUnit;
           const candidateSl = trade.action === 'BUY' ? newPeak - trailGap : newPeak + trailGap;
 
-          // SL may only move favourably (never widen) — and must clear break-even
+          // SL may only move favourably (never widen) — and must clear break-even.
+          // Compare ROUNDED values to prevent infinite re-render loop:
+          // without rounding, candidateSl (e.g. 100.1234) is always > trade.sl
+          // (100.12) after the first update, triggering updatePaperTrade endlessly.
+          const newSl = Math.round(candidateSl * 100) / 100;
           const shouldMove = trade.action === 'BUY'
-            ? candidateSl > (trade.sl ?? -Infinity)
-            : candidateSl < (trade.sl ?? Infinity);
+            ? newSl > (trade.sl ?? -Infinity)
+            : newSl < (trade.sl ?? Infinity);
 
           if (shouldMove) {
-            const newSl = Math.round(candidateSl * 100) / 100;
             // Update local state immediately for snappy UI
             updatePaperTrade({ ...trade, sl: newSl, peakPrice: newPeak, tslActivated: true });
             // Persist server-side (mirrored to MongoDB inside the route)
