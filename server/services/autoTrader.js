@@ -34,6 +34,8 @@ const instrumentCache = require('./instrumentCache');
 const kiteService     = require('./kiteService');
 const kiteOrderBridge = require('./kiteOrderBridge');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
+const candleStore     = require('./candleStore');
+const { snapshot: ichimokuSnapshot } = require('./ichimoku');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
@@ -56,6 +58,50 @@ function _labelToInterval(tfLabel) {
 
 function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+// ── Market bias gate (NIFTY daily cloud position) ────────────────────────────
+// Cached per IST date — computed once on first call, reused for the whole day.
+// 'bullish' = NIFTY price above cloud, 'bearish' = below, 'neutral' = inside.
+
+const NIFTY_TOKEN = 256265;
+let _cachedBias     = null;  // { date: 'YYYY-MM-DD', bias: 'bullish'|'bearish'|'neutral' }
+
+/**
+ * Get today's market bias from NIFTY 50 daily Ichimoku cloud position.
+ * Returns 'bullish' | 'bearish' | 'neutral'.
+ * Cached per IST trading day — the daily cloud doesn't change intraday.
+ */
+function _getMarketBias() {
+  const today = _istDateStr();
+
+  // Return cached value if same day
+  if (_cachedBias && _cachedBias.date === today) return _cachedBias.bias;
+
+  try {
+    const candles = candleStore.getCandlesSync(NIFTY_TOKEN, 'day');
+    if (!candles || candles.length < 52) {
+      _cachedBias = { date: today, bias: 'neutral' };
+      return 'neutral';
+    }
+
+    const ich = ichimokuSnapshot(candles);
+    if (!ich) {
+      _cachedBias = { date: today, bias: 'neutral' };
+      return 'neutral';
+    }
+
+    let bias = 'neutral';
+    if (ich.aboveCloud) bias = 'bullish';
+    else if (ich.belowCloud) bias = 'bearish';
+
+    _cachedBias = { date: today, bias };
+    console.log(`[AutoTrader] 📊 Market bias for ${today}: ${bias} (NIFTY daily cloud)`);
+    return bias;
+  } catch (err) {
+    console.warn('[AutoTrader] _getMarketBias error:', err.message);
+    return 'neutral';
+  }
 }
 
 // ── Trade qualifier ──────────────────────────────────────────────────────────
@@ -175,6 +221,30 @@ async function _onAlert(alert, source) {
   if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;
 
   const numToken = Number(token);
+
+  // ── 2.55 Market bias gate (15m / 1h only) ──────────────────────────────
+  // On bullish days (NIFTY above cloud), skip bearish trades for 15m and 1h.
+  // On bearish days (NIFTY below cloud), skip bullish trades for 15m and 1h.
+  // Higher TFs (4h, day) bypass this gate — they represent structural moves
+  // that can legitimately go against the daily bias.
+  // 'neutral' (NIFTY inside cloud) → allow both directions.
+  if (interval === '15minute' || interval === '60minute') {
+    const marketBias = _getMarketBias();
+    if (marketBias === 'bullish' && signal === 'bearish') {
+      console.log(
+        `[AutoTrader] ⏭  Skipped ${alert.label ?? token} ${signal} (${alert.tfLabel ?? interval})` +
+        ` — market bias is bullish, ignoring bearish on short TF`,
+      );
+      return;
+    }
+    if (marketBias === 'bearish' && signal === 'bullish') {
+      console.log(
+        `[AutoTrader] ⏭  Skipped ${alert.label ?? token} ${signal} (${alert.tfLabel ?? interval})` +
+        ` — market bias is bearish, ignoring bullish on short TF`,
+      );
+      return;
+    }
+  }
 
   // ── 2.6  Future cloud direction gate ────────────────────────────────────
   // The Ichimoku cloud projected 26 bars AHEAD of the current price must agree

@@ -37,6 +37,21 @@ const db         = require('../db');
 //          barCount, mfeR, maeR, pricePath, breakEvenBar, firstR1Bar, firstR2Bar }
 const _observations = new Map();
 
+// ── Bias alignment helper ────────────────────────────────────────────────────
+
+/**
+ * Computes whether the signal direction aligns with the NIFTY daily cloud bias.
+ *   true  → aligned (bullish signal on bullish day, or bearish on bearish day)
+ *   false → counter-trend (bullish signal on bearish day, or vice versa)
+ *   null  → unknown (neutral bias or data unavailable)
+ */
+function _computeBiasAligned(signal, niftyBias) {
+  if (!signal || !niftyBias || niftyBias === 'neutral') return null;
+  if (signal === 'bullish' && niftyBias === 'bullish')  return true;
+  if (signal === 'bearish' && niftyBias === 'bearish')  return true;
+  return false;
+}
+
 // ── Path shape classification ────────────────────────────────────────────────
 
 function _classifyPath(maeR, mfeR, outcome) {
@@ -141,6 +156,12 @@ function _onAlert(alert, source) {
     hourIST:           alert.hourIST           ?? null,
     sessionSlot:       alert.sessionSlot       ?? null,
     niftyBias:         alert.niftyBias         ?? null,
+
+    // ── Bias alignment (for intraday analysis) ──
+    // true  = signal direction matches NIFTY daily cloud (bullish+bullish or bearish+bearish)
+    // false = signal goes against NIFTY daily bias (counter-trend)
+    // null  = bias unknown (neutral or niftyBias unavailable)
+    biasAligned:       _computeBiasAligned(alert.signal, alert.niftyBias),
 
     // ── Volume + momentum
     volumeRatio:       alert.volumeRatio       ?? null,

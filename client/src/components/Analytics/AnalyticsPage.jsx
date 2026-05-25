@@ -165,7 +165,120 @@ function WinRateTable({ rows }) {
   );
 }
 
-// ── 3. Daily P&L table ────────────────────────────────────────────────────────
+// ── 3. Market Bias Alignment table ───────────────────────────────────────────
+
+function BiasStatsTable({ rows }) {
+  if (!rows || rows.length === 0) {
+    return <EmptyState icon="🧭" message="No bias data yet. Signal tracking needs 1-2 months of market data to show bias alignment results." />;
+  }
+
+  // Separate aligned vs counter-trend rows for clearer display
+  const aligned  = rows.filter((r) => r._id?.biasAligned === true);
+  const counter  = rows.filter((r) => r._id?.biasAligned === false);
+
+  // Compute totals for the summary row
+  const sumUp = (arr) => arr.reduce((acc, r) => ({
+    total:     acc.total + (r.total ?? 0),
+    targetHit: acc.targetHit + (r.targetHit ?? 0),
+    slHit:     acc.slHit + (r.slHit ?? 0),
+    expired:   acc.expired + (r.expired ?? 0),
+    mfeRSum:   acc.mfeRSum + (r.avgMfeR ?? 0) * (r.total ?? 0),
+    maeRSum:   acc.maeRSum + (r.avgMaeR ?? 0) * (r.total ?? 0),
+  }), { total: 0, targetHit: 0, slHit: 0, expired: 0, mfeRSum: 0, maeRSum: 0 });
+
+  const alignedTotals  = sumUp(aligned);
+  const counterTotals  = sumUp(counter);
+
+  const alignedWinRate  = alignedTotals.total > 0
+    ? (alignedTotals.targetHit / alignedTotals.total * 100).toFixed(1) : '—';
+  const counterWinRate  = counterTotals.total > 0
+    ? (counterTotals.targetHit / counterTotals.total * 100).toFixed(1) : '—';
+
+  const renderRow = (row, index) => {
+    const isAligned = row._id?.biasAligned;
+    const winRate   = row.winRate ?? 0;
+    return (
+      <tr key={index}>
+        <td>
+          <span className={`an-bias-badge an-bias-badge--${isAligned ? 'aligned' : 'counter'}`}>
+            {isAligned ? '✓ Aligned' : '✗ Counter'}
+          </span>
+        </td>
+        <td className="an-td-pattern">{row._id?.patternId ?? '—'}</td>
+        <td className="an-td-num">{row._id?.tfLabel ?? '—'}</td>
+        <td className="an-td-num">{row.total}</td>
+        <td className="an-td-num an-pnl--pos">{row.targetHit}</td>
+        <td className="an-td-num an-pnl--neg">{row.slHit}</td>
+        <td className="an-td-num">{row.expired}</td>
+        <td>
+          <div className="an-winbar-cell">
+            <div className="an-winbar-track">
+              <div
+                className="an-winbar-fill"
+                style={{ width: `${Math.round(winRate)}%` }}
+              />
+            </div>
+            <span className="an-winbar-label">{winRate > 0 ? `${winRate}%` : '—'}</span>
+          </div>
+        </td>
+        <td className="an-td-num">{row.avgMfeR != null ? `+${row.avgMfeR.toFixed(2)}R` : '—'}</td>
+        <td className="an-td-num">{row.avgMaeR != null ? `${row.avgMaeR.toFixed(2)}R` : '—'}</td>
+      </tr>
+    );
+  };
+
+  return (
+    <>
+      {/* Quick comparison cards */}
+      <div className="an-bias-summary">
+        <div className="an-bias-summary-card an-bias-summary-card--aligned">
+          <div className="an-bias-summary-label">✓ Aligned (with trend)</div>
+          <div className="an-bias-summary-stats">
+            <span className="an-bias-summary-winrate">{alignedWinRate}%</span>
+            <span className="an-bias-summary-count">{alignedTotals.total} signals</span>
+          </div>
+        </div>
+        <div className="an-bias-summary-vs">vs</div>
+        <div className="an-bias-summary-card an-bias-summary-card--counter">
+          <div className="an-bias-summary-label">✗ Counter-trend</div>
+          <div className="an-bias-summary-stats">
+            <span className="an-bias-summary-winrate">{counterWinRate}%</span>
+            <span className="an-bias-summary-count">{counterTotals.total} signals</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Detail table */}
+      <div className="an-table-wrap">
+        <table className="an-table">
+          <thead>
+            <tr>
+              <th>Bias</th>
+              <th>Pattern</th>
+              <th>TF</th>
+              <th>Signals</th>
+              <th>Target</th>
+              <th>SL</th>
+              <th>Expired</th>
+              <th>Win Rate</th>
+              <th>Avg MFE</th>
+              <th>Avg MAE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {aligned.map(renderRow)}
+            {aligned.length > 0 && counter.length > 0 && (
+              <tr className="an-bias-divider"><td colSpan={10} /></tr>
+            )}
+            {counter.map(renderRow)}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ── 4. Daily P&L table ────────────────────────────────────────────────────────
 
 function DailyPnlTable({ rows }) {
   if (!rows || rows.length === 0) {
@@ -261,18 +374,23 @@ const EXCHANGES = [
 ];
 
 export default function AnalyticsPage() {
-  const [data, setData]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]     = useState(null);
-  const [exchange, setExchange] = useState('all'); // 'all' | 'NSE' | 'MCX'
+  const [data, setData]           = useState(null);
+  const [biasStats, setBiasStats] = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+  const [exchange, setExchange]   = useState('all'); // 'all' | 'NSE' | 'MCX'
 
   const fetchData = useCallback(async (exch = exchange) => {
     setLoading(true);
     setError(null);
     try {
       const params = exch !== 'all' ? { exchange: exch } : {};
-      const res = await api.get('/analytics/summary', { params });
-      setData(res.data);
+      const [summaryRes, biasRes] = await Promise.all([
+        api.get('/analytics/summary', { params }),
+        api.get('/analytics/bias-stats').catch(() => ({ data: { stats: [] } })),
+      ]);
+      setData(summaryRes.data);
+      setBiasStats(biasRes.data?.stats ?? []);
     } catch (err) {
       setError(err.response?.data?.error ?? err.message ?? 'Failed to load analytics');
     } finally {
@@ -364,6 +482,13 @@ export default function AnalyticsPage() {
             subtitle="Paper trade outcomes grouped by the pattern that triggered the entry"
           >
             <WinRateTable rows={data.winRate} />
+          </Section>
+
+          <Section
+            title="Market Bias Alignment"
+            subtitle="15m &amp; 1h signal win rate — aligned with NIFTY trend vs counter-trend"
+          >
+            <BiasStatsTable rows={biasStats} />
           </Section>
 
           <Section

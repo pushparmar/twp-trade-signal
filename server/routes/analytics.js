@@ -192,4 +192,37 @@ router.get('/price-path', async (req, res) => {
   }
 });
 
+// ── GET /api/analytics/bias-stats ────────────────────────────────────────────
+/**
+ * Market bias alignment analysis — compares win rate of bias-aligned signals
+ * vs counter-trend signals for intraday (15m, 1h) scans.
+ *
+ * This answers: "Should we skip bearish trades on bullish days?"
+ * After 1-2 months of data, the numbers will show clear evidence either way.
+ *
+ * Response rows grouped by { biasAligned (true/false), tfLabel, patternId }
+ * with winRate, total, targetHit, slHit, avgMfeR, avgMaeR.
+ *
+ * Query params:
+ *   from       — ISO date string, inclusive
+ *   to         — ISO date string, inclusive
+ *   patternId  — filter by specific pattern
+ *   tfLabel    — filter by timeframe ("15m", "1h")
+ */
+router.get('/bias-stats', async (req, res) => {
+  if (!mongo.isReady()) {
+    return res.json({ stats: [], dbReady: false });
+  }
+  try {
+    const opts = _parseDateRange(req.query);
+    if (req.query.patternId) opts.patternId = req.query.patternId;
+    if (req.query.tfLabel)   opts.tfLabel   = req.query.tfLabel;
+    const stats = await db.signalOutcomeRepo.getBiasStats(opts);
+    res.json({ stats, dbReady: true });
+  } catch (err) {
+    console.error('[Analytics] bias-stats failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

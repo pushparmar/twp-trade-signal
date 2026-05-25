@@ -34,6 +34,7 @@ async function createIndexes() {
       col.createIndex({ outcome: 1 }),
       col.createIndex({ tfLabel: 1, outcome: 1 }),
       col.createIndex({ firedAt: -1 }),
+      col.createIndex({ biasAligned: 1, tfLabel: 1, outcome: 1 }),
     ]);
     console.log(`[signalOutcomeRepo] Indexes ensured on "${COLLECTION}"`);
   } catch (err) {
@@ -229,6 +230,70 @@ async function countResolvedOnDate(dateIST) {
   }
 }
 
+/**
+ * Bias alignment stats — win rate comparison for aligned vs counter-trend signals.
+ * Only meaningful for intraday (15m, 1h) where market bias filtering applies.
+ *
+ * Returns rows grouped by { biasAligned, tfLabel, patternId } with win rate,
+ * avg MFE/MAE, and counts — so you can directly compare:
+ *   "15m bullish signals on bullish days vs 15m bullish signals on bearish days"
+ *
+ * @param {object} [opts]  { fromDate, toDate, patternId, tfLabel }
+ * @returns {Promise<Array>} Aggregation results
+ */
+async function getBiasStats(opts = {}) {
+  if (!mongo.isReady()) return [];
+  try {
+    const match = {
+      outcome:     { $ne: null },
+      biasAligned: { $ne: null },  // exclude neutral / unknown bias
+    };
+    if (opts.fromDate || opts.toDate) {
+      match.firedAt = {};
+      if (opts.fromDate) match.firedAt.$gte = opts.fromDate;
+      if (opts.toDate)   match.firedAt.$lte = opts.toDate;
+    }
+    if (opts.patternId) match.patternId = opts.patternId;
+    if (opts.tfLabel)   match.tfLabel   = opts.tfLabel;
+
+    return await mongo.db().collection(COLLECTION).aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: {
+            biasAligned: '$biasAligned',
+            tfLabel:     '$tfLabel',
+            patternId:   '$patternId',
+          },
+          total:       { $sum: 1 },
+          targetHit:   { $sum: { $cond: [{ $eq: ['$outcome', 'target_hit'] }, 1, 0] } },
+          slHit:       { $sum: { $cond: [{ $eq: ['$outcome', 'sl_hit'] }, 1, 0] } },
+          expired:     { $sum: { $cond: [{ $eq: ['$outcome', 'expired'] }, 1, 0] } },
+          avgMfeR:     { $avg: '$mfeR' },
+          avgMaeR:     { $avg: '$maeR' },
+          avgReturnFromMfeR: { $avg: '$returnFromMfeR' },
+          avgBarsToExit:     { $avg: '$barsToExit' },
+        },
+      },
+      {
+        $addFields: {
+          winRate: {
+            $cond: [
+              { $gt: ['$total', 0] },
+              { $round: [{ $multiply: [{ $divide: ['$targetHit', '$total'] }, 100] }, 1] },
+              0,
+            ],
+          },
+        },
+      },
+      { $sort: { '_id.biasAligned': -1, total: -1 } },  // aligned first, then by volume
+    ]).toArray();
+  } catch (err) {
+    console.warn('[signalOutcomeRepo] getBiasStats failed:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   createIndexes,
   insert,
@@ -238,4 +303,5 @@ module.exports = {
   getStats,
   getPricePathStats,
   countResolvedOnDate,
+  getBiasStats,
 };
