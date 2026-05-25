@@ -861,7 +861,7 @@ export default function PaperTradingPanel() {
 
     const invested = openTrades.reduce((sum, t) => sum + t.entryPrice * t.quantity, 0);
     // Realized PnL shows only today's closed trades — consistent with the filtered view.
-    const todayClosedTrades = closedTrades.filter(t => toIstDateStr(t.closedTs) === toIstDateStr(Date.now()));
+    const todayClosedTrades = closedTrades.filter(t => toIstDateStr(t.closedTs) === todayIst);
     const realizedPnl = todayClosedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
     const unrealizedTarget = openTrades.reduce((sum, t) => {
         if (!t.target) return sum;
@@ -932,7 +932,6 @@ export default function PaperTradingPanel() {
     // Date groups derived from sortedClosed — used by the date-wise history view.
     const allDateGroups = groupByDate(sortedClosed);
     // Show only today's trades by default — previous days are accessible via Order History panel.
-    const todayIst = toIstDateStr(Date.now());
     const dateGroups = allDateGroups.filter(g => g.dateStr === todayIst);
 
     return (
