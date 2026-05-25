@@ -168,8 +168,16 @@ async function _getCandles(token, interval) {
 }
 
 // ── GET /api/scan/patterns ────────────────────────────────────────────────────
+// Only returns patterns that have scan enabled on at least one timeframe.
+// Patterns disabled for scan on ALL TFs are hidden from the screener dropdown.
+const SCAN_INTERVALS = ['15minute', '60minute', '4h', 'day'];
+
 router.get('/patterns', (_req, res) => {
-  res.json(patternRegistry.list());
+  const all = patternRegistry.list();
+  const visible = all.filter(p =>
+    SCAN_INTERVALS.some(iv => store.isPatternEnabled(p.id, iv, 'scan'))
+  );
+  res.json(visible);
 });
 
 // ── GET /api/scan/universe ────────────────────────────────────────────────────
