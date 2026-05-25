@@ -481,6 +481,10 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
     useEffect(() => {
         const price = tick?.lastPrice;
         if (!price || !seriesRef.current.candles || !liveRef.current) return;
+        // Reject stale ref with null OHLC (e.g. from projection bar) — seed fresh
+        if (liveRef.current.open == null || liveRef.current.close == null) {
+            liveRef.current = { time: liveRef.current.time, open: price, high: price, low: price, close: price };
+        }
 
         const iSecs = TICK_INTERVAL_SECS[intervalRef.current];
         const live = liveRef.current;
@@ -508,11 +512,12 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
                 };
             } else {
                 // Same candle — update OHLC in-place
+                // Guard against null OHLC (stale ref from projection bar or empty data)
                 updated = {
                     time: live.time,
-                    open: live.open,
-                    high: Math.max(live.high, price),
-                    low: Math.min(live.low, price),
+                    open: live.open ?? price,
+                    high: live.high != null ? Math.max(live.high, price) : price,
+                    low:  live.low  != null ? Math.min(live.low, price)  : price,
                     close: price
                 };
             }
@@ -520,9 +525,9 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
             // 4h / day, or lastTradeTime unavailable → patch last bar only
             updated = {
                 time: live.time,
-                open: live.open,
-                high: Math.max(live.high, price),
-                low: Math.min(live.low, price),
+                open: live.open ?? price,
+                high: live.high != null ? Math.max(live.high, price) : price,
+                low:  live.low  != null ? Math.min(live.low, price)  : price,
                 close: price
             };
         }
