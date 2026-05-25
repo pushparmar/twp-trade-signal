@@ -35,7 +35,7 @@ const kiteService     = require('./kiteService');
 const kiteOrderBridge = require('./kiteOrderBridge');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 const candleStore     = require('./candleStore');
-const { snapshot: ichimokuSnapshot } = require('./ichimoku');
+const { getSignals: ichimokuGetSignals, to4H } = require('./ichimoku');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
@@ -60,43 +60,99 @@ function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
-// ── Market bias gate (NIFTY daily cloud position) ────────────────────────────
-// Cached per IST date — computed once on first call, reused for the whole day.
-// 'bullish' = NIFTY price above cloud, 'bearish' = below, 'neutral' = inside.
+// ── Market bias gate (NIFTY multi-TF consensus) ─────────────────────────────
+// Same logic as the "Consensus Bias" card on the UI (OverallSignalCard):
+//   1. Run getSignals() on NIFTY 50 for 15m, 1h, 4h, day
+//   2. Each TF votes bullish/bearish/neutral (or callBuy/putBuy overrides)
+//   3. Majority vote across 4 TFs determines the final bias
+// Cached per IST 15-minute slot — the multi-TF consensus can shift intraday
+// as new candles close, so we refresh every 15 minutes.
 
-const NIFTY_TOKEN = 256265;
-let _cachedBias     = null;  // { date: 'YYYY-MM-DD', bias: 'bullish'|'bearish'|'neutral' }
+const NIFTY_TOKEN   = 256265;
+let _cachedBias     = null;  // { slot: 'YYYY-MM-DD_HH:MM', bias, confidence, details }
 
 /**
- * Get today's market bias from NIFTY 50 daily Ichimoku cloud position.
+ * Determine per-TF signal — matches the UI's overallSig() helper exactly.
+ * Priority: callBuySignal > putBuySignal > majority of 4 ichimoku indicators.
+ */
+function _tfSignal(ichi) {
+  if (!ichi) return 'neutral';
+  if (ichi.callBuySignal) return 'bullish';
+  if (ichi.putBuySignal)  return 'bearish';
+  const sigs = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
+  const bull = sigs.filter((s) => s === 'bullish').length;
+  const bear = sigs.filter((s) => s === 'bearish').length;
+  return bull > bear ? 'bullish' : bear > bull ? 'bearish' : 'neutral';
+}
+
+/**
+ * Get current market bias from NIFTY 50 multi-TF Ichimoku consensus.
  * Returns 'bullish' | 'bearish' | 'neutral'.
- * Cached per IST trading day — the daily cloud doesn't change intraday.
+ *
+ * Mirrors the UI's OverallSignalCard logic:
+ *   - If any TF has exclusive callBuySignal → bullish
+ *   - If any TF has exclusive putBuySignal  → bearish
+ *   - Else: count bullish vs bearish TFs; majority wins
+ *
+ * Cached per 15-minute IST slot so it refreshes as new candles close.
  */
 function _getMarketBias() {
-  const today = _istDateStr();
+  const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+  const slot = nowIST.toISOString().slice(0, 10) + '_'
+    + String(nowIST.getHours()).padStart(2, '0') + ':'
+    + String(Math.floor(nowIST.getMinutes() / 15) * 15).padStart(2, '0');
 
-  // Return cached value if same day
-  if (_cachedBias && _cachedBias.date === today) return _cachedBias.bias;
+  // Return cached value if same 15-minute slot
+  if (_cachedBias && _cachedBias.slot === slot) return _cachedBias.bias;
 
   try {
-    const candles = candleStore.getCandlesSync(NIFTY_TOKEN, 'day');
-    if (!candles || candles.length < 52) {
-      _cachedBias = { date: today, bias: 'neutral' };
-      return 'neutral';
-    }
+    // ── Gather candles for all 4 TFs (all in-memory, zero I/O) ──────────
+    const candles15m = candleStore.getCandlesSync(NIFTY_TOKEN, '15minute');
+    const candles1h  = candleStore.getCandlesSync(NIFTY_TOKEN, '60minute');
+    const candles1d  = candleStore.getCandlesSync(NIFTY_TOKEN, 'day');
 
-    const ich = ichimokuSnapshot(candles);
-    if (!ich) {
-      _cachedBias = { date: today, bias: 'neutral' };
-      return 'neutral';
-    }
+    // 4h is synthesised from 1h candles (same as chart + UI)
+    const candles4h = candles1h && candles1h.length >= 52 ? to4H(candles1h) : null;
 
+    // ── Run getSignals() on each TF ─────────────────────────────────────
+    const sig15m = candles15m && candles15m.length >= 52 ? ichimokuGetSignals(candles15m, '15minute') : null;
+    const sig1h  = candles1h  && candles1h.length  >= 52 ? ichimokuGetSignals(candles1h,  '60minute') : null;
+    const sig4h  = candles4h  && candles4h.length  >= 52 ? ichimokuGetSignals(candles4h,  '4h')       : null;
+    const sig1d  = candles1d  && candles1d.length  >= 52 ? ichimokuGetSignals(candles1d,  'day')      : null;
+
+    const allSigs = [sig15m, sig1h, sig4h, sig1d];
+    const tfLabels = ['15m', '1h', '4h', '1d'];
+
+    // ── Check for strong callBuy / putBuy signals (override) ────────────
+    const hasCallBuy = allSigs.some((s) => s?.callBuySignal);
+    const hasPutBuy  = allSigs.some((s) => s?.putBuySignal);
+
+    // ── Per-TF vote ─────────────────────────────────────────────────────
+    const tfVotes = allSigs.map((s) => _tfSignal(s));
+    const bullCount = tfVotes.filter((v) => v === 'bullish').length;
+    const bearCount = tfVotes.filter((v) => v === 'bearish').length;
+
+    // ── Final consensus (same as UI OverallSignalCard) ──────────────────
     let bias = 'neutral';
-    if (ich.aboveCloud) bias = 'bullish';
-    else if (ich.belowCloud) bias = 'bearish';
+    let label = 'NEUTRAL';
 
-    _cachedBias = { date: today, bias };
-    console.log(`[AutoTrader] 📊 Market bias for ${today}: ${bias} (NIFTY daily cloud)`);
+    if (hasCallBuy && !hasPutBuy) {
+      bias = 'bullish'; label = 'CALL BUY';
+    } else if (hasPutBuy && !hasCallBuy) {
+      bias = 'bearish'; label = 'PUT BUY';
+    } else if (bullCount > bearCount) {
+      bias = 'bullish'; label = 'BULLISH';
+    } else if (bearCount > bullCount) {
+      bias = 'bearish'; label = 'BEARISH';
+    }
+
+    const confidence = Math.round((Math.max(bullCount, bearCount) / 4) * 100);
+    const details = tfLabels.map((lbl, i) => `${lbl}:${tfVotes[i]}`).join(' ');
+
+    _cachedBias = { slot, bias, confidence, label, details };
+    console.log(
+      `[AutoTrader] 📊 Market bias: ${label} (${confidence}%) [${details}]`,
+    );
     return bias;
   } catch (err) {
     console.warn('[AutoTrader] _getMarketBias error:', err.message);
@@ -223,24 +279,27 @@ async function _onAlert(alert, source) {
   const numToken = Number(token);
 
   // ── 2.55 Market bias gate (15m / 1h only) ──────────────────────────────
-  // On bullish days (NIFTY above cloud), skip bearish trades for 15m and 1h.
-  // On bearish days (NIFTY below cloud), skip bullish trades for 15m and 1h.
-  // Higher TFs (4h, day) bypass this gate — they represent structural moves
-  // that can legitimately go against the daily bias.
-  // 'neutral' (NIFTY inside cloud) → allow both directions.
+  // Uses NIFTY multi-TF consensus (same as "Consensus Bias" card on UI):
+  //   - Runs getSignals() on NIFTY 15m, 1h, 4h, day
+  //   - Each TF votes bullish/bearish/neutral (callBuy/putBuy override)
+  //   - Majority wins → final bias
+  // On bullish consensus, skip bearish trades for 15m and 1h.
+  // On bearish consensus, skip bullish trades for 15m and 1h.
+  // Higher TFs (4h, day) bypass — they represent structural moves.
+  // 'neutral' consensus → allow both directions.
   if (interval === '15minute' || interval === '60minute') {
     const marketBias = _getMarketBias();
     if (marketBias === 'bullish' && signal === 'bearish') {
       console.log(
         `[AutoTrader] ⏭  Skipped ${alert.label ?? token} ${signal} (${alert.tfLabel ?? interval})` +
-        ` — market bias is bullish, ignoring bearish on short TF`,
+        ` — NIFTY consensus is BULLISH (${_cachedBias?.details}), ignoring bearish on short TF`,
       );
       return;
     }
     if (marketBias === 'bearish' && signal === 'bullish') {
       console.log(
         `[AutoTrader] ⏭  Skipped ${alert.label ?? token} ${signal} (${alert.tfLabel ?? interval})` +
-        ` — market bias is bearish, ignoring bullish on short TF`,
+        ` — NIFTY consensus is BEARISH (${_cachedBias?.details}), ignoring bullish on short TF`,
       );
       return;
     }
