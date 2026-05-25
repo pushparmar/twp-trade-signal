@@ -58,15 +58,42 @@ async function createIndexes() {
  * @param {object} trade  The trade object from store.addPaperTrade().
  */
 function upsertTrade(trade) {
-  if (!mongo.isReady()) {
-    console.warn(`[tradeRepo] upsertTrade skipped — MongoDB not ready (trade=${trade?.id ?? '?'})`);
-    return;
-  }
   if (!trade?.id) {
     console.warn('[tradeRepo] upsertTrade skipped — trade has no id');
     return;
   }
 
+  // If MongoDB isn't ready yet (boot race or transient blip), wait up to 10s
+  // before giving up. This prevents silent data loss during Railway deploys
+  // where autoTrader starts before db.init() resolves.
+  if (!mongo.isReady()) {
+    _waitForReady(10_000).then((ready) => {
+      if (!ready) {
+        console.warn(`[tradeRepo] upsertTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
+        return;
+      }
+      _doUpsert(trade);
+    });
+    return;
+  }
+
+  _doUpsert(trade);
+}
+
+/** Wait for mongo.isReady() to become true, polling every 1s up to maxMs. */
+function _waitForReady(maxMs) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      if (mongo.isReady()) return resolve(true);
+      if (Date.now() - start >= maxMs) return resolve(false);
+      setTimeout(check, 1000);
+    };
+    check();
+  });
+}
+
+function _doUpsert(trade) {
   const doc = {
     tradeId:      trade.id,
     // Instrument
@@ -132,25 +159,38 @@ function upsertTrade(trade) {
  * @param {object} trade  The closed trade object returned by store.closePaperTrade().
  */
 function closeTrade(trade) {
-  if (!mongo.isReady()) return;
   if (!trade?.id) return;
 
-  mongo.db().collection(COLLECTION)
-    .updateOne(
-      { tradeId: trade.id },
-      {
-        $set: {
-          status:    'CLOSED',
-          exitPrice: trade.exitPrice ?? null,
-          pnl:       trade.pnl       ?? null,
-          closedAt:  trade.closedTs ? new Date(trade.closedTs) : new Date(),
-          updatedAt: new Date(),
+  const doClose = () => {
+    mongo.db().collection(COLLECTION)
+      .updateOne(
+        { tradeId: trade.id },
+        {
+          $set: {
+            status:    'CLOSED',
+            exitPrice: trade.exitPrice ?? null,
+            pnl:       trade.pnl       ?? null,
+            closedAt:  trade.closedTs ? new Date(trade.closedTs) : new Date(),
+            updatedAt: new Date(),
+          },
         },
-      },
-    )
-    .catch((err) => {
-      console.warn('[tradeRepo] closeTrade failed:', err.message);
+      )
+      .catch((err) => {
+        console.warn('[tradeRepo] closeTrade failed:', err.message);
+      });
+  };
+
+  if (!mongo.isReady()) {
+    _waitForReady(10_000).then((ready) => {
+      if (!ready) {
+        console.warn(`[tradeRepo] closeTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
+        return;
+      }
+      doClose();
     });
+    return;
+  }
+  doClose();
 }
 
 // ── Read helpers ──────────────────────────────────────────────────────────────

@@ -319,8 +319,8 @@ function onCandleClose(token, interval) {
         `${interval} bar ${obs.barCount} | MFE ${obs.mfeR.toFixed(2)}R ` +
         `MAE ${obs.maeR.toFixed(2)}R | returnFromMFE ${returnFromMfeR}R | ${pathShape}`,
       );
-    } else if (obs.barCount % 5 === 0) {
-      // Progress save every 5 bars — prevents data loss on server restart
+    } else if (obs.barCount % 10 === 0) {
+      // Progress save every 10 bars — balances data safety vs MongoDB write load
       db.signalOutcomeRepo.updateProgress(obs.id, {
         pricePath: obs.pricePath,
         mfeR:      +obs.mfeR.toFixed(3),

@@ -76,11 +76,14 @@ function _buildOptions() {
     heartbeatFrequencyMS: 15_000,    // driver pings server every 15s
 
     // ── Connection pool ───────────────────────────────────────────────────
-    // Small pool for a single-server trading dashboard.
-    // maxPoolSize of 10 is plenty; minPoolSize of 2 keeps connections warm.
-    maxPoolSize: 10,
-    minPoolSize: 2,
-    maxIdleTimeMS: 120_000,          // close idle connections after 2min (was 60s)
+    // Atlas free tier (M0) has limited connections. Keep pool small but warm.
+    // maxPoolSize 5 prevents exhausting Atlas's shared connection quota.
+    // minPoolSize 1 keeps one connection alive (heartbeat keeps it warm).
+    // waitQueueTimeoutMS lets burst writes queue up instead of failing.
+    maxPoolSize: 5,
+    minPoolSize: 1,
+    maxIdleTimeMS: 120_000,          // close idle connections after 2min
+    waitQueueTimeoutMS: 10_000,      // wait up to 10s for a pool slot
 
     // ── Compression ───────────────────────────────────────────────────────
     compressors: ['zstd', 'snappy'], // reduce bandwidth on Railway <> Atlas
