@@ -203,19 +203,28 @@ router.get('/:token/chart', async (req, res) => {
     // Return only the last `bars` results — the extra seed headroom is discarded
     const slice = results.slice(-bars);
 
-    const data = slice.map((r) => ({
-      // Unix seconds — works for both intraday and daily in lightweight-charts
-      time:    Math.floor(new Date(r.date).getTime() / 1000),
-      open:    r.open,
-      high:    r.high,
-      low:     r.low,
-      close:   r.close,
-      tenkan:  r.tenkan  ?? null,
-      kijun:   r.kijun   ?? null,
-      senkouA: r.senkouA ?? null,
-      senkouB: r.senkouB ?? null,
-      chikou:  r.chikou  ?? null,
-    }));
+    // Map results to chart data, dedup timestamps (lightweight-charts v5
+    // requires strictly increasing times — duplicate timestamps cause silent
+    // candle drops and visual gaps).
+    let prevTime = 0;
+    const data = [];
+    for (const r of slice) {
+      const time = Math.floor(new Date(r.date).getTime() / 1000);
+      if (time <= prevTime) continue; // skip duplicate / out-of-order
+      prevTime = time;
+      data.push({
+        time,
+        open:    r.open,
+        high:    r.high,
+        low:     r.low,
+        close:   r.close,
+        tenkan:  r.tenkan  ?? null,
+        kijun:   r.kijun   ?? null,
+        senkouA: r.senkouA ?? null,
+        senkouB: r.senkouB ?? null,
+        chikou:  r.chikou  ?? null,
+      });
+    }
 
     // Append 26 future projection bars so the cloud extends ahead of the last candle
     _appendProjection(data, candles, results, interval);

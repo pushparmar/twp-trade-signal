@@ -170,6 +170,13 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
             crosshairMarkerVisible: false
         };
 
+        // Erase layers must not participate in auto-scale — their values
+        // extend down to zero and would stretch the Y-axis far below price.
+        const eraseOpts = {
+            ...sharedCloudOpts,
+            autoscaleInfoProvider: () => null,
+        };
+
         // Bullish upper (green gradient fill — drawn first, below)
         const bullUpper = chart.addSeries(AreaSeries, {
             ...sharedCloudOpts,
@@ -179,7 +186,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
 
         // Bullish lower (solid bg erase — drawn second, covers area below cloud)
         const bullLower = chart.addSeries(AreaSeries, {
-            ...sharedCloudOpts,
+            ...eraseOpts,
             topColor: bg,
             bottomColor: bg
         });
@@ -193,7 +200,7 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
 
         // Bearish lower (solid bg erase)
         const bearLower = chart.addSeries(AreaSeries, {
-            ...sharedCloudOpts,
+            ...eraseOpts,
             topColor: bg,
             bottomColor: bg
         });
@@ -225,7 +232,10 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
             lineStyle: LINE_DASHED,
             priceLineVisible: false,
             lastValueVisible: false,
-            crosshairMarkerVisible: false
+            crosshairMarkerVisible: false,
+            // Chikou is plotted 26 bars behind — its value can be far from
+            // current price and stretch the Y-axis. Exclude from auto-scale.
+            autoscaleInfoProvider: () => null,
         });
 
         // ── Candlestick series (topmost layer) ────────────────────────────────

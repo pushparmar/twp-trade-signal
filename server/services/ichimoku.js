@@ -2229,20 +2229,31 @@ function getTKReversion(candles, opts = {}) {
     if (spreadPct < minSpreadPct) continue;
 
     let signal = null;
+    const tkHigh = Math.max(tenkan, kijun);
+    const tkLow  = Math.min(tenkan, kijun);
+    const insideGap = close > tkLow && close < tkHigh;
 
-    // ── Bearish signal: prior bullish rally now reverting ─────────────────
-    // Tenkan above Kijun (was rallying), price crosses below Tenkan
-    if (tenkan > kijun && prev.close > prev.tenkan && curr.close < tenkan) {
+    // ── Bearish signal: prior bullish rally, price enters TK gap from above
+    // Tenkan above Kijun (was rallying), prev close was above Tenkan (outside gap),
+    // current close is inside the gap (between Tenkan and Kijun) heading down
+    if (tenkan > kijun && prev.close >= tenkan && insideGap) {
       signal = 'bearish';
     }
 
-    // ── Bullish signal: prior bearish dump now reverting ──────────────────
-    // Kijun above Tenkan (was dumping), price crosses above Tenkan
-    if (kijun > tenkan && prev.close < prev.tenkan && curr.close > tenkan) {
+    // ── Bullish signal: prior bearish dump, price enters TK gap from below
+    // Kijun above Tenkan (was dumping), prev close was below Tenkan (outside gap),
+    // current close is inside the gap (between Tenkan and Kijun) heading up
+    if (kijun > tenkan && prev.close <= tenkan && insideGap) {
       signal = 'bullish';
     }
 
     if (!signal) continue;
+
+    // ── Price must still have room to Kijun ─────────────────────────────
+    // If price is already too close to Kijun (< 30% of TK spread away),
+    // there's not enough room left for the reversion trade.
+    const priceToKijunPct = (Math.abs(close - kijun) / close) * 100;
+    if (priceToKijunPct < spreadPct * 0.3) continue;
 
     // ── Verify the spread was genuinely widening (not just flat-wide) ────
     // Check that the current spread is near peak over the spreadLookback window.
