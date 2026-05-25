@@ -129,6 +129,8 @@ function connect() {
                     // and sends Telegram. Async; ignore rejections so Telegram outages don't
                     // leak into the tick handler.
                     liveScanner.onCandleClose(token, interval).catch(() => {});
+                    // Phase 2 data collection — track signal price paths candle-by-candle
+                    try { require('./signalOutcomeTracker').onCandleClose(token, interval); } catch {}
                 },
                 tick.volume_traded
             );
