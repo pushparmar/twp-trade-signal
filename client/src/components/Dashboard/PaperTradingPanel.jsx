@@ -860,7 +860,9 @@ export default function PaperTradingPanel() {
     }
 
     const invested = openTrades.reduce((sum, t) => sum + t.entryPrice * t.quantity, 0);
-    const realizedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    // Realized PnL shows only today's closed trades — consistent with the filtered view.
+    const todayClosedTrades = closedTrades.filter(t => toIstDateStr(t.closedTs) === toIstDateStr(Date.now()));
+    const realizedPnl = todayClosedTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
     const unrealizedTarget = openTrades.reduce((sum, t) => {
         if (!t.target) return sum;
         const potential =
@@ -928,7 +930,10 @@ export default function PaperTradingPanel() {
     };
     const sortedClosed = sortTrades(closedTrades, closedSort, closedGetVal);
     // Date groups derived from sortedClosed — used by the date-wise history view.
-    const dateGroups = groupByDate(sortedClosed);
+    const allDateGroups = groupByDate(sortedClosed);
+    // Show only today's trades by default — previous days are accessible via Order History panel.
+    const todayIst = toIstDateStr(Date.now());
+    const dateGroups = allDateGroups.filter(g => g.dateStr === todayIst);
 
     return (
         <div className="paper-trading-panel">
@@ -1123,12 +1128,12 @@ export default function PaperTradingPanel() {
                 </div>
             )}
 
-            {/* Closed trades — grouped by IST date */}
-            {closedTrades.length > 0 && (
+            {/* Closed trades — only today's trades shown; previous days via Order History */}
+            {dateGroups.length > 0 && (
                 <div className="dash-section">
                     <div className="section-header">
                         <h3 className="section-title">
-                            Closed Trades <span className="count-badge">{closedTrades.length}</span>
+                            Today's Trades <span className="count-badge">{dateGroups.reduce((s, g) => s + g.trades.length, 0)}</span>
                         </h3>
 
                         <button

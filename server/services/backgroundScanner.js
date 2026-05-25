@@ -85,21 +85,10 @@ const TF_LABEL = {
   'day':      '1d',
 };
 
-// Numeric rank for each interval — used to compare timeframe priority.
-// Higher rank = higher timeframe = takes precedence over lower TF alerts.
-const TF_RANK_MAP = {
-  '15minute': 1, '15m': 1,
-  '60minute': 2, '1h':  2,
-  '4h':       3,
-  'day':      4, '1d':  4,
-};
-
-// Tracks the best Telegram already sent today for each (token, signal).
-// Key: "token:signal:YYYY-MM-DD"  Value: { tfRank, score }
-//
-// Used for two rules:
-//   • Higher TF suppresses lower TF  — e.g. 1h alert blocks a later 15m Telegram.
-//   • Highest score wins same TF     — e.g. score-5 blocks a later score-3 Telegram.
+// Score dedup per (token, signal, interval, day) — prevents re-sending the same
+// alert when a later scan produces an equal or lower score on the same TF.
+// Each TF fires independently; 15m is NOT suppressed by 1h.
+// Key: "token:signal:interval:YYYY-MM-DD"  Value: { score }
 const _tgSentTfMap = new Map();
 
 // ── Dedup ────────────────────────────────────────────────────────────────────
@@ -390,11 +379,16 @@ async function _runScanForInterval(interval) {
   const chatId   = store.getTelegramChatId();
   const tfLabel  = TF_LABEL[interval] || interval;
 
+  if (!chatId) {
+    console.warn(`[BgScanner] ⚠️  Telegram chatId not set — alerts will NOT reach Telegram. Set TELEGRAM_CHAT_ID env var or send /start to the bot.`);
+  }
+
   const t0 = Date.now();
   console.log(`[BgScanner] ${tfLabel} candle close — scanning ${instruments.length} stocks × ${patterns.length} patterns`);
 
   let scannedCount = 0;
   let matchCount   = 0;
+  let tgSentCount  = 0;
 
   for (const inst of instruments) {
     // Fetch candles; 4h synthesised from 1h buffer
@@ -537,37 +531,27 @@ async function _runScanForInterval(interval) {
     }
 
     // ── Telegram — one message per instrument per signal (best score only) ──
-    // Rules applied before each send:
-    //   1. 15m MTF gate  — skip if no 1h/4h/1d timeframe is aligned
-    //   2. TF priority   — skip if a HIGHER timeframe already alerted today for
-    //                       this (token, signal) — avoids 15m noise after 1h fires
-    //   3. Score dedup   — skip if same TF but equal/higher score already sent today
-    //
-    // SSE and alertBus already fired above for every match — these rules only
-    // control what reaches the user's Telegram chat.
+    // Score dedup per TF: skip if same (token, signal, interval) already sent
+    // with equal or higher score today. Each TF fires independently — 15m is
+    // NOT suppressed by a prior 1h alert for the same stock.
+    // SSE and alertBus already fired above for every match — this rule only
+    // controls what reaches the user's Telegram chat.
     const mktOpen = inst.exchange === 'MCX' ? isMcxOpen() : isNseOpen();
     if (chatId && mktOpen && tgBestBySignal.size > 0) {
-      const today          = _istDateStr();
-      const currentTfRank  = TF_RANK_MAP[interval] ?? 0;
+      const today = _istDateStr();
 
       for (const [signal, best] of tgBestBySignal) {
         // Note: MTF and bias filtering are handled in autoTrader.js (order gate only).
         // Telegram alerts fire for ALL pattern matches regardless of MTF alignment,
         // so the user sees every signal and can judge quality from the data.
 
-        // Rules 2 + 3: TF priority and score dedup
-        const sentKey  = `${inst.instrumentToken}:${signal}:${today}`;
+        // Score dedup — skip if same TF + same signal already sent with equal/higher score today.
+        // Each TF fires independently — 15m alerts are NOT suppressed by a prior 1h alert.
+        const sentKey  = `${inst.instrumentToken}:${signal}:${interval}:${today}`;
         const prevSent = _tgSentTfMap.get(sentKey);
-        if (prevSent) {
-          if (prevSent.tfRank > currentTfRank) {
-            // A higher timeframe already alerted today — suppress this lower TF
-            console.log(`[BgScanner] ⏭ Telegram skipped — ${label} (${tfLabel} ${signal}) higher TF already sent`);
-            continue;
-          }
-          if (prevSent.tfRank === currentTfRank && prevSent.score >= best.score) {
-            // Same TF, already sent equal or better score today
-            continue;
-          }
+        if (prevSent && prevSent.score >= best.score) {
+          // Same TF, already sent equal or better score today
+          continue;
         }
 
         const text = patternAlertMessage.build({
@@ -580,7 +564,8 @@ async function _runScanForInterval(interval) {
         });
         try {
           await telegramNotifier.sendMessage(chatId, text);
-          _tgSentTfMap.set(sentKey, { tfRank: currentTfRank, score: best.score });
+          _tgSentTfMap.set(sentKey, { score: best.score });
+          tgSentCount++;
         } catch (err) {
           console.warn(`[BgScanner] Telegram failed for ${label}:`, err.message);
         }
@@ -593,7 +578,8 @@ async function _runScanForInterval(interval) {
   const elapsed = Math.round((Date.now() - t0) / 1000);
   console.log(
     `[BgScanner] ${tfLabel} done — ${scannedCount}/${instruments.length} scanned, ` +
-    `${matchCount} alert${matchCount !== 1 ? 's' : ''} sent (${elapsed}s)`,
+    `${matchCount} match${matchCount !== 1 ? 'es' : ''}, ` +
+    `${tgSentCount} Telegram msg${tgSentCount !== 1 ? 's' : ''} sent (${elapsed}s)`,
   );
 
   // Send completion summary ONLY when matches were found.
@@ -746,11 +732,13 @@ function getSchedule() {
  * Useful after a server restart or when testing — call via POST /api/scan/clear-dedup.
  */
 function clearDedup() {
-  const count = _dedup.size;
+  const dedupCount = _dedup.size;
+  const tgCount    = _tgSentTfMap.size;
   _dedup.clear();
-  _biasMap.clear();   // also reset MTF bias so next scan starts fresh
-  console.log(`[BgScanner] Dedup cleared — ${count} entries removed`);
-  return count;
+  _tgSentTfMap.clear();  // reset Telegram score dedup so all alerts re-fire
+  _biasMap.clear();      // also reset MTF bias so next scan starts fresh
+  console.log(`[BgScanner] Dedup cleared — ${dedupCount} pattern entries + ${tgCount} Telegram entries removed`);
+  return dedupCount + tgCount;
 }
 
 /**
