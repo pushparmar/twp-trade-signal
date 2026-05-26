@@ -7,8 +7,14 @@
  * Two entry strategies:
  *
  *  1. Pattern-based — signals from scanner (5m/15m/60m, BUY-only on bullish)
- *  2. Low Premium Scalper — any subscribed option whose LTP ≤ lpEntryMax (₹)
- *     is bought immediately; special TSL kicks in when LTP hits lpTslTrigger.
+ *
+ *  2. Low Premium Scalper (LP) — buys any subscribed option whose LTP is in
+ *     the [lpEntryMin, lpEntryMax] range (e.g. ₹5–₹10). No pattern needed.
+ *     • Averages down ONCE when price drops lpAvgDownPct (60%) from entry.
+ *       Example: enter ₹10 → avg trigger = ₹10 × 0.40 = ₹4 → avg-down buy.
+ *       After avg-down: lotCount=2, avgPrice=(10+4)/2=₹7, SL updated.
+ *     • Max lpMaxPositions (4) concurrent LP trades at any time.
+ *     • TSL activates when LTP ≥ lpTslTrigger; trails at lpTslTrailPct × peak.
  */
 
 const candleStore    = require('../services/candleStore');
@@ -139,11 +145,12 @@ function onSignal(signal) {
 // ── Low Premium Scalper entry ────────────────────────────────────────────────
 
 /**
- * Scans ALL subscribed option tokens every tick. If any option's LTP is ≤
- * lpEntryMax and no trade is open for that token, buy it immediately.
+ * Scans ALL subscribed option tokens every tick. If any option's LTP is in
+ * the [lpEntryMin, lpEntryMax] range and no trade is open for that token,
+ * buy it immediately.
  *
- * This is a premium-expansion scalp — we accept near-total premium loss
- * (initial SL ≈ ₹0.5) hoping for a large expansion move.
+ * Max lpMaxPositions concurrent LP trades enforced here.
+ * Each new trade records an avgDownAt price so the monitor knows when to average.
  */
 function _checkLowPremiumEntry() {
     if (!isNseOpen()) return;
@@ -151,9 +158,19 @@ function _checkLowPremiumEntry() {
     const config = tradeStore.getConfig();
     if (!config.enabled || !config.lowPremiumEnabled) return;
 
+    // Count currently open LP positions — cap at lpMaxPositions
+    const openLpCount = tradeStore.getOpenTrades()
+        .filter(t => t.strategyType === 'low-premium').length;
+    if (openLpCount >= config.lpMaxPositions) return;
+
     const allTokens = strikeManager.getAllTokens();
 
     for (const token of allTokens) {
+        // Re-check limit inside loop (a previous iteration may have filled it)
+        const currentLpCount = tradeStore.getOpenTrades()
+            .filter(t => t.strategyType === 'low-premium').length;
+        if (currentLpCount >= config.lpMaxPositions) break;
+
         const numToken = Number(token);
 
         // Skip if there is already an open trade on this strike
@@ -161,16 +178,15 @@ function _checkLowPremiumEntry() {
 
         const ltp = _getCurrentPrice(numToken);
 
-        // Must have a live price and be at or below the entry threshold
-        if (!ltp || ltp <= 0 || ltp > config.lpEntryMax) continue;
+        // Must be in the [lpEntryMin, lpEntryMax] window
+        if (!ltp || ltp < config.lpEntryMin || ltp > config.lpEntryMax) continue;
 
         const inst = strikeManager.getInstrumentByToken(numToken);
         if (!inst) continue;
 
-        // R:R at entry: reward = (lpTarget - ltp), risk = (ltp - 0.5)
-        const riskAtEntry   = Math.max(ltp - 0.5, 0.1);
-        const rewardAtEntry = config.lpTarget - ltp;
-        const rrRatio       = +(rewardAtEntry / riskAtEntry).toFixed(2);
+        // Avg-down trigger: price at which we will buy the 2nd lot
+        // (lpAvgDownPct below entry, e.g. 60% drop → ltp × 0.40)
+        const avgDownAt = Math.round(ltp * (1 - config.lpAvgDownPct) * 100) / 100;
 
         const trade = tradeStore.addTrade({
             source:          'index-trade',
@@ -185,7 +201,11 @@ function _checkLowPremiumEntry() {
             quantity:        config.lotQuantity || 1,
             lotSize:         inst.lotSize || 1,
             entryPrice:      ltp,
-            // Initial SL near zero — accept full premium loss until TSL activates
+            avgPrice:        ltp,   // weighted avg entry — updated on avg-down
+            lotCount:        1,     // total lots held — incremented on avg-down
+            avgDownCount:    0,     // how many times we've averaged (max 1)
+            avgDownAt,              // price at which to trigger the avg-down buy
+            // Initial SL near zero — accept full premium loss until TSL or avg-down
             sl:              0.5,
             initialSl:       0.5,
             target:          config.lpTarget,
@@ -195,43 +215,51 @@ function _checkLowPremiumEntry() {
             patternLabel:    'Low Premium Scalper',
             signalDirection: 'bullish',
             score:           0,
-            rrRatio,
+            rrRatio:         +((config.lpTarget - ltp) / Math.max(ltp - 0.5, 0.1)).toFixed(2),
         });
 
         _openKeys.add(numToken);
 
         console.log(
             `[IdxOrder] 💰 LP BUY ${inst.tradingsymbol} @₹${ltp} ` +
-            `SL=₹0.5 T=₹${config.lpTarget} R:R=${rrRatio} [low-premium scalper]`,
+            `SL=₹0.5 T=₹${config.lpTarget} avgDownAt=₹${avgDownAt} ` +
+            `[${openLpCount + 1}/${config.lpMaxPositions} LP positions]`,
         );
 
         broadcast('idx_trade', trade);
     }
 }
 
-// ── Per-tick SL / Target / TSL monitoring ────────────────────────────────────
+// ── Low Premium Scalper TSL / avg-down monitoring ───────────────────────────
 
 /**
- * Handles TSL trailing for Low Premium Scalper trades.
+ * Handles the full LP trade lifecycle on every tick:
  *
- * TSL logic:
- *   Phase 1 (before trigger): SL stays at ₹0.5 until LTP hits lpTslTrigger (e.g., ₹10)
- *   Phase 2 (after trigger):  SL = lpTslTrailPct × peakPrice (e.g., 70% of peak)
- *     → any new peak immediately tightens SL
- *     → SL moves up-only, never down
+ *  Phase 0 — No TSL yet, avg-down armed:
+ *    • SL = ₹0.5 (accept full loss)
+ *    • If LTP ≤ avgDownAt AND avgDownCount = 0 → execute avg-down:
+ *        lotCount +=1, recalculate avgPrice, SL = avgDownPrice × lpAvgDownSlPct
  *
- * Example with defaults (trigger=10, trail=70%):
- *   LTP 10 → TSL activates → SL = ₹7
- *   LTP 11 → peak=11 → SL = ₹7.70
- *   LTP 13 → peak=13 → SL = ₹9.10
- *   LTP 12 (pullback) → peak still 13 → SL stays ₹9.10
- *   LTP 9.10 → TSL hit → close @₹9.10
+ *  Phase 1 → 2 — TSL activation:
+ *    • When LTP ≥ lpTslTrigger → activate TSL, SL = lpTslInitialSl
+ *
+ *  Phase 2 — TSL trailing:
+ *    • On every new peak: SL = peakPrice × lpTslTrailPct (70% of peak)
+ *
+ *  Exit: SL hit OR hard target hit
+ *
+ * Avg-down example (entry ₹10, lpAvgDownPct=60%, lpAvgDownSlPct=50%):
+ *   avgDownAt = 10 × 0.40 = ₹4
+ *   Price drops to ₹4 → buy 2nd lot @₹4
+ *   avgPrice  = (10 + 4) / 2 = ₹7
+ *   lotCount  = 2
+ *   SL        = 4 × 0.50 = ₹2   (gives room below avg-down price)
  */
 function _handleLowPremiumTSL(trade, ltp) {
-    const config    = tradeStore.getConfig();
-    const numToken  = Number(trade.token);
+    const config   = tradeStore.getConfig();
+    const numToken = Number(trade.token);
 
-    // ── Track peak ─────────────────────────────────────────────────────────
+    // ── Track peak (used for TSL trailing) ────────────────────────────────
     const currentPeak = trade.peakPrice || trade.entryPrice;
     const newPeak     = Math.max(currentPeak, ltp);
     if (newPeak !== currentPeak) {
@@ -239,7 +267,43 @@ function _handleLowPremiumTSL(trade, ltp) {
         trade.peakPrice = newPeak;
     }
 
-    // ── Phase 1 → 2: activate TSL when LTP hits the trigger price ──────────
+    // ── Avg-down: execute once when price drops lpAvgDownPct from entry ───
+    // Only if TSL hasn't activated yet (once TSL is on, we're in recovery mode)
+    if (!trade.tslActivated && (trade.avgDownCount ?? 0) === 0 && ltp <= (trade.avgDownAt ?? 0)) {
+        const prevLots    = trade.lotCount || 1;
+        const prevAvg     = trade.avgPrice ?? trade.entryPrice;
+        const newLots     = prevLots + 1;
+        // Weighted average: (prevAvg × prevLots + ltp × 1) / newLots
+        const newAvgPrice = Math.round(((prevAvg * prevLots + ltp) / newLots) * 100) / 100;
+        // SL = lpAvgDownSlPct fraction of the price we just averaged at
+        // Always below ltp so it doesn't trigger immediately
+        const newSl       = Math.round(ltp * config.lpAvgDownSlPct * 100) / 100;
+
+        tradeStore.updateTrade(trade.id, {
+            lotCount:     newLots,
+            avgPrice:     newAvgPrice,
+            avgDownCount: 1,
+            avgDownAt:    null, // disarm — no more avg-downs
+            sl:           newSl,
+        });
+
+        // Update local reference so exit check below uses new values
+        trade.lotCount     = newLots;
+        trade.avgPrice     = newAvgPrice;
+        trade.avgDownCount = 1;
+        trade.avgDownAt    = null;
+        trade.sl           = newSl;
+
+        console.log(
+            `[IdxOrder] ➕ LP Avg-Down ${trade.symbol} @₹${ltp} ` +
+            `lots=${newLots} avgPrice=₹${newAvgPrice} SL=₹${newSl}`,
+        );
+
+        // Broadcast updated trade so UI reflects new lotCount / avgPrice
+        broadcast('idx_trade_update', { ...trade, status: 'OPEN' });
+    }
+
+    // ── TSL Phase 1 → 2: activate when LTP hits trigger price ─────────────
     if (!trade.tslActivated && ltp >= config.lpTslTrigger) {
         const initialSl = config.lpTslInitialSl;
         tradeStore.updateTrade(trade.id, { tslActivated: true, sl: initialSl });
@@ -250,9 +314,8 @@ function _handleLowPremiumTSL(trade, ltp) {
         );
     }
 
-    // ── Phase 2: trail SL upward as peak rises ─────────────────────────────
+    // ── TSL Phase 2: trail SL upward as peak rises ─────────────────────────
     if (trade.tslActivated) {
-        // SL = trailing % of the highest price seen since entry
         const trailedSl = Math.round(trade.peakPrice * config.lpTslTrailPct * 100) / 100;
         if (trailedSl > trade.sl) {
             tradeStore.updateTrade(trade.id, { sl: trailedSl });
@@ -260,7 +323,7 @@ function _handleLowPremiumTSL(trade, ltp) {
         }
     }
 
-    // ── Check exit conditions ───────────────────────────────────────────────
+    // ── Check exit conditions ──────────────────────────────────────────────
     let exitPrice  = null;
     let exitReason = null;
 
@@ -280,17 +343,18 @@ function _handleLowPremiumTSL(trade, ltp) {
             console.log(
                 `[IdxOrder] ${exitReason === 'target' ? '🎯' : '🛑'} ` +
                 `LP ${trade.symbol} closed @₹${exitPrice} (${exitReason}) ` +
-                `PnL=₹${closedTrade.pnl}`,
+                `lots=${trade.lotCount ?? 1} PnL=₹${closedTrade.pnl}`,
             );
             broadcast('idx_trade_update', closedTrade);
         }
-        return; // trade closed — no tick broadcast
+        return;
     }
 
-    // Live PnL tick
-    const lotSize        = trade.lotSize || 1;
-    const qty            = trade.quantity || 1;
-    const unrealizedPnl  = (ltp - trade.entryPrice) * qty * lotSize;
+    // ── Live PnL tick (uses avgPrice + lotCount for accuracy) ─────────────
+    const lotSize       = trade.lotSize || 1;
+    const totalLots     = trade.lotCount || (trade.quantity || 1);
+    const effectiveEntry = trade.avgPrice ?? trade.entryPrice;
+    const unrealizedPnl = (ltp - effectiveEntry) * totalLots * lotSize;
 
     broadcast('idx_trade_tick', {
         id:             trade.id,
@@ -298,9 +362,13 @@ function _handleLowPremiumTSL(trade, ltp) {
         ltp,
         sl:             trade.sl,
         tslActivated:   trade.tslActivated,
+        avgPrice:       trade.avgPrice ?? null,
+        lotCount:       trade.lotCount ?? 1,
         unrealizedPnl:  Math.round(unrealizedPnl * 100) / 100,
     });
 }
+
+// ── Pattern trade TSL monitoring ─────────────────────────────────────────────
 
 /**
  * Handles TSL trailing for standard pattern-based BUY trades.
@@ -385,15 +453,12 @@ function _handlePatternTSL(trade, ltp) {
     });
 }
 
+// ── Main tick loop ───────────────────────────────────────────────────────────
+
 function _checkTrades() {
     if (!isNseOpen()) return;
 
     const openTrades = tradeStore.getOpenTrades();
-    if (openTrades.length === 0) {
-        // Still check for new low-premium entries even when no trades are open
-        _checkLowPremiumEntry();
-        return;
-    }
 
     // Monitor all open trades
     for (const trade of openTrades) {

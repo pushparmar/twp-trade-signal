@@ -25,14 +25,19 @@ let _config = {
   minRR: 1.5,            // minimum reward:risk ratio
 
   // ── Low Premium Scalper strategy ────────────────────────────────────────────
-  // Buys any subscribed option at ≤ lpEntryMax, targets lpTarget.
-  // No pattern required — pure premium expansion play.
+  // Buys any subscribed option in the lpEntryMin–lpEntryMax range.
+  // Averages down once when price drops lpAvgDownPct from entry.
+  // Max lpMaxPositions concurrent LP trades at any time.
   lowPremiumEnabled: false,  // off by default; enable via UI config panel
-  lpEntryMax: 5,             // BUY if LTP ≤ this value (₹)
+  lpEntryMin: 5,             // BUY only if LTP ≥ this (₹) — avoid dead options
+  lpEntryMax: 10,            // BUY only if LTP ≤ this (₹)
   lpTarget: 15,              // hard exit target (₹)
-  lpTslTrigger: 10,          // activate TSL when LTP reaches this price (₹)
-  lpTslInitialSl: 7,         // SL jumps to this value when TSL first activates (₹)
+  lpTslTrigger: 12,          // activate TSL when LTP reaches this price (₹)
+  lpTslInitialSl: 8,         // SL jumps to this value when TSL first activates (₹)
   lpTslTrailPct: 0.70,       // SL trails at 70% of peak (30% max drawdown from peak)
+  lpAvgDownPct: 0.60,        // avg-down when price drops this % from entry (0.60 = 60%)
+  lpAvgDownSlPct: 0.50,      // after avg-down: SL = avgDownPrice × this (e.g. 0.50 = 50% of avg-down price)
+  lpMaxPositions: 4,         // max concurrent LP trades (initial + avg-down slots)
 };
 
 // ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────
@@ -121,10 +126,16 @@ function closeTrade(id, exitPrice, exitReason = 'manual') {
   if (!trade || trade.status !== 'OPEN') return null;
 
   const lotSize = trade.lotSize || 1;
-  const qty = trade.quantity || 1;
+  const qty     = trade.quantity || 1;
+
+  // For LP avg-down trades: use lotCount (total lots after averaging) and
+  // avgPrice (weighted average entry) so PnL is accurate.
+  const totalLots    = trade.lotCount ?? qty;
+  const effectiveEntry = trade.avgPrice ?? trade.entryPrice;
+
   const pnl = trade.action === 'BUY'
-    ? (exitPrice - trade.entryPrice) * qty * lotSize
-    : (trade.entryPrice - exitPrice) * qty * lotSize;
+    ? (exitPrice - effectiveEntry) * totalLots * lotSize
+    : (effectiveEntry - exitPrice) * totalLots * lotSize;
 
   trade.status = 'CLOSED';
   trade.exitPrice = exitPrice;
@@ -139,7 +150,8 @@ function closeTrade(id, exitPrice, exitReason = 'manual') {
 function updateTrade(id, fields) {
   const trade = _trades.find(t => t.id === id);
   if (!trade || trade.status !== 'OPEN') return null;
-  const allowed = ['sl', 'peakPrice', 'tslActivated'];
+  // avgPrice / lotCount / avgDownCount / avgDownAt — updated on LP avg-down
+  const allowed = ['sl', 'peakPrice', 'tslActivated', 'avgPrice', 'lotCount', 'avgDownCount', 'avgDownAt'];
   for (const k of allowed) {
     if (fields[k] !== undefined) trade[k] = fields[k];
   }

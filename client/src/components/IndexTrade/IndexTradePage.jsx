@@ -172,6 +172,11 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
               const ltp = tick?.ltp ?? t.entryPrice;
               const unrealizedPnl = tick?.unrealizedPnl ?? 0;
               const isTsl = tick?.tslActivated || t.tslActivated;
+              const isLp = t.strategyType === 'low-premium';
+              // Live avg price from tick (updated after avg-down), fall back to trade field
+              const displayAvg = tick?.avgPrice ?? t.avgPrice ?? null;
+              const displayLots = tick?.lotCount ?? t.lotCount ?? 1;
+              const hasAvgdDown = isLp && (t.avgDownCount ?? 0) > 0;
 
               return (
                 <tr key={t.id}>
@@ -188,12 +193,26 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                     </span>
                   </td>
                   <td>
-                    {t.strategyType === 'low-premium'
-                      ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
+                    {isLp
+                      ? (
+                        <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                          <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>
+                            💰 LP {displayLots > 1 ? `×${displayLots}` : ''}
+                          </span>
+                          {hasAvgdDown && displayAvg != null && (
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>avg ₹{fmtPrice(displayAvg)}</span>
+                          )}
+                        </span>
+                      )
                       : (t.patternLabel || t.patternId)}
                   </td>
                   <td>{t.tfLabel}</td>
-                  <td>{fmtPrice(t.entryPrice)}</td>
+                  <td>
+                    {fmtPrice(t.entryPrice)}
+                    {hasAvgdDown && displayAvg != null && (
+                      <div style={{ fontSize: 10, color: '#fab005' }}>avg ₹{fmtPrice(displayAvg)}</div>
+                    )}
+                  </td>
                   <td style={{ fontWeight: 500 }}>{fmtPrice(ltp)}</td>
                   <td style={{
                     fontWeight: 600,
@@ -203,7 +222,7 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                   </td>
                   <td>{fmtPrice(tick?.sl ?? t.sl)}</td>
                   <td>{fmtPrice(t.target)}</td>
-                  <td>{isTsl ? '🔒' : '—'}</td>
+                  <td>{isTsl ? '🔒' : isLp && !isTsl && (t.avgDownAt != null) ? '⏳' : '—'}</td>
                   <td>
                     <button
                       className="btn btn-sm btn-danger"
@@ -505,11 +524,11 @@ function OptionChainIndex({ indexName, data }) {
  * Config panel for the Low Premium Scalper strategy.
  *
  * Strategy recap:
- *   • BUY any subscribed option whose LTP ≤ lpEntryMax (e.g., ₹5)
- *   • Hard target: lpTarget (e.g., ₹15)
- *   • Initial SL: ₹0.5 (near-zero — accept full premium loss before TSL kicks in)
- *   • TSL activates when LTP hits lpTslTrigger (e.g., ₹10) → SL jumps to lpTslInitialSl (₹7)
- *   • TSL trails at lpTslTrailPct × peakPrice (e.g., 70% → 30% drawdown allowed from peak)
+ *   • BUY any subscribed option in [lpEntryMin, lpEntryMax] range (e.g. ₹5–₹10)
+ *   • Avg-down ONCE when price drops lpAvgDownPct (60%) from entry
+ *     e.g. enter ₹10 → avg trigger = ₹4 → avgPrice = ₹7, lots = 2, SL = ₹4 × lpAvgDownSlPct
+ *   • Max lpMaxPositions concurrent LP trades
+ *   • TSL activates at lpTslTrigger → SL jumps to lpTslInitialSl, then trails at lpTslTrailPct × peak
  */
 function LowPremiumConfig({ config, onUpdate }) {
   const [open, setOpen] = useState(false);
@@ -518,12 +537,22 @@ function LowPremiumConfig({ config, onUpdate }) {
 
   const lp = {
     lowPremiumEnabled: config.lowPremiumEnabled ?? false,
-    lpEntryMax:        config.lpEntryMax        ?? 5,
+    lpEntryMin:        config.lpEntryMin        ?? 5,
+    lpEntryMax:        config.lpEntryMax        ?? 10,
     lpTarget:          config.lpTarget          ?? 15,
-    lpTslTrigger:      config.lpTslTrigger      ?? 10,
-    lpTslInitialSl:    config.lpTslInitialSl    ?? 7,
+    lpTslTrigger:      config.lpTslTrigger      ?? 12,
+    lpTslInitialSl:    config.lpTslInitialSl    ?? 8,
     lpTslTrailPct:     config.lpTslTrailPct     ?? 0.70,
+    lpAvgDownPct:      config.lpAvgDownPct      ?? 0.60,
+    lpAvgDownSlPct:    config.lpAvgDownSlPct    ?? 0.50,
+    lpMaxPositions:    config.lpMaxPositions    ?? 4,
   };
+
+  // Derived example values shown in the summary strip
+  const exEntry    = lp.lpEntryMax;
+  const exAvgAt    = +(exEntry * (1 - lp.lpAvgDownPct)).toFixed(2);
+  const exAvgPrice = +((exEntry + exAvgAt) / 2).toFixed(2);
+  const exSl       = +(exAvgAt * lp.lpAvgDownSlPct).toFixed(2);
 
   function handleField(key, raw) {
     const val = key === 'lowPremiumEnabled' ? raw : parseFloat(raw);
@@ -546,19 +575,19 @@ function LowPremiumConfig({ config, onUpdate }) {
           }}>
             {lp.lowPremiumEnabled ? 'ENABLED' : 'OFF'}
           </span>
+          {lp.lowPremiumEnabled && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              ₹{lp.lpEntryMin}–₹{lp.lpEntryMax} · max {lp.lpMaxPositions} positions
+            </span>
+          )}
         </span>
         <span style={{ fontSize: 12 }}>{open ? '▼' : '▶'}</span>
       </h3>
 
       {open && (
         <div style={{ marginTop: 8 }}>
-          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 }}>
-            Buys any subscribed option at ≤ ₹{lp.lpEntryMax}. No pattern required.
-            TSL activates at ₹{lp.lpTslTrigger} → SL = ₹{lp.lpTslInitialSl}, then trails at {Math.round(lp.lpTslTrailPct * 100)}% of peak.
-          </p>
-
-          {/* Enable toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+          {/* Master toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
             <label style={{ fontSize: 13, fontWeight: 500 }}>
               <input
                 type="checkbox"
@@ -570,27 +599,60 @@ function LowPremiumConfig({ config, onUpdate }) {
             </label>
           </div>
 
-          {/* Parameter grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
-            <LpField label="Entry Max (₹)" hint="BUY if LTP ≤ this"
+          {/* ── Entry ── */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Entry
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <LpField label="Entry Min (₹)" hint="Skip options below this price"
+              value={lp.lpEntryMin} onChange={v => handleField('lpEntryMin', v)} />
+            <LpField label="Entry Max (₹)" hint="Skip options above this price"
               value={lp.lpEntryMax} onChange={v => handleField('lpEntryMax', v)} />
-            <LpField label="Hard Target (₹)" hint="Exit at this price"
+            <LpField label="Hard Target (₹)" hint="Close the full position at this price"
               value={lp.lpTarget} onChange={v => handleField('lpTarget', v)} />
-            <LpField label="TSL Trigger (₹)" hint="Activate TSL when LTP hits this"
+            <LpField label="Max Positions" hint="Max concurrent LP trades (all tokens combined)"
+              value={lp.lpMaxPositions} step="1" onChange={v => handleField('lpMaxPositions', v)} />
+          </div>
+
+          {/* ── Avg-Down ── */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Avg-Down (1× per position)
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <LpField label="Drop % trigger" hint="Avg-down when price drops this % from entry (0.60 = 60%)"
+              value={lp.lpAvgDownPct} step="0.05" onChange={v => handleField('lpAvgDownPct', v)} />
+            <LpField label="Post-Avg SL factor" hint="SL = avg-down price × this  (e.g. 0.50 = half of avg-down price)"
+              value={lp.lpAvgDownSlPct} step="0.05" onChange={v => handleField('lpAvgDownSlPct', v)} />
+          </div>
+
+          {/* ── TSL ── */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Trailing Stop Loss
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
+            <LpField label="TSL Trigger (₹)" hint="Activate TSL when LTP reaches this"
               value={lp.lpTslTrigger} onChange={v => handleField('lpTslTrigger', v)} />
-            <LpField label="TSL Initial SL (₹)" hint="SL jumps here on activation"
+            <LpField label="TSL Initial SL (₹)" hint="SL jumps to this on activation"
               value={lp.lpTslInitialSl} onChange={v => handleField('lpTslInitialSl', v)} />
-            <LpField label="Trail % of Peak" hint="SL = this × peak (e.g., 0.70 = 30% drawdown)"
+            <LpField label="Trail % of Peak" hint="SL = this × peak price (0.70 = 30% drawdown)"
               value={lp.lpTslTrailPct} step="0.05" onChange={v => handleField('lpTslTrailPct', v)} />
           </div>
 
-          {/* Visual example of trail */}
-          <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-            <strong style={{ color: 'var(--text-primary)' }}>Example with current settings:</strong>
-            {' '}Entry ₹{lp.lpEntryMax} → TSL activates @₹{lp.lpTslTrigger} → SL=₹{lp.lpTslInitialSl}
-            {' '}→ peak ₹{lp.lpTslTrigger + 1} → SL=₹{((lp.lpTslTrigger + 1) * lp.lpTslTrailPct).toFixed(2)}
-            {' '}→ peak ₹{lp.lpTslTrigger + 3} → SL=₹{((lp.lpTslTrigger + 3) * lp.lpTslTrailPct).toFixed(2)}
-            {' '}→ target ₹{lp.lpTarget}
+          {/* Visual walkthrough */}
+          <div style={{ padding: '10px 12px', background: 'var(--bg-secondary)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 2 }}>
+            <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: 2 }}>
+              Example with current settings (entry at max ₹{exEntry}):
+            </strong>
+            📥 Enter @₹{exEntry} — SL=₹0.5 (full-loss guard)
+            <br />
+            📉 Price falls to ₹{exAvgAt} ({Math.round(lp.lpAvgDownPct * 100)}% drop)
+            {' '}→ ➕ Avg-Down: 2nd lot @₹{exAvgAt}
+            {' '}→ avgPrice=₹{exAvgPrice}, lots=2, SL=₹{exSl}
+            <br />
+            📈 Recovery to ₹{lp.lpTslTrigger}
+            {' '}→ 🔒 TSL on: SL=₹{lp.lpTslInitialSl}
+            {' '}→ peak ₹{lp.lpTslTrigger + 2} → SL=₹{((lp.lpTslTrigger + 2) * lp.lpTslTrailPct).toFixed(2)}
+            {' '}→ 🎯 Target ₹{lp.lpTarget}
           </div>
         </div>
       )}
