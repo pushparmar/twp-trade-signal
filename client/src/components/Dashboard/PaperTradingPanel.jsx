@@ -233,7 +233,7 @@ function BalanceCard({ balance }) {
 // ── Live open trade row ───────────────────────────────────────────────────────
 // Subscribes to the tick for this trade's token so LTP and unrealized P&L
 // update every second without re-rendering the whole panel.
-function OpenTradeRow({ trade, onClose }) {
+function OpenTradeRow({ trade, onClose, hidePattern }) {
     const tradeTick = useAppStore(s => s.tradeTicks[trade.id]);
     const tick = useAppStore(s => s.ticks[trade.token]);
 
@@ -345,7 +345,7 @@ function OpenTradeRow({ trade, onClose }) {
                         {trade.symbol}
                     </span>
                 </span>
-                {trade.patternLabel && (
+                {!hidePattern && trade.patternLabel && (
                     <span className="td-sym-pattern" title={trade.patternId ?? trade.patternLabel}>
                         {trade.patternLabel}
                     </span>
@@ -805,6 +805,19 @@ export default function PaperTradingPanel() {
     const todayIst = toIstDateStr(Date.now());
     const [collapsedDates, setCollapsedDates] = useState(new Set());
 
+    // Privacy toggle — hide pattern/signal names when sharing screen.
+    // Persisted in localStorage so the preference survives page refresh.
+    const [hidePattern, setHidePattern] = useState(() => {
+        try { return localStorage.getItem('pt_hidePattern') === 'true'; } catch { return false; }
+    });
+    function toggleHidePattern() {
+        setHidePattern(prev => {
+            const next = !prev;
+            try { localStorage.setItem('pt_hidePattern', String(next)); } catch {}
+            return next;
+        });
+    }
+
     function toggleDate(dateStr) {
         setCollapsedDates(prev => {
             const next = new Set(prev);
@@ -1060,9 +1073,18 @@ export default function PaperTradingPanel() {
             {/* Active trades — grouped by timeframe, live LTP and unrealized P&L per row */}
             {openTrades.length > 0 && (
                 <div className="dash-section">
-                    <h3 className="section-title">
-                        Active Trades <span className="count-badge">{openTrades.length}</span>
-                    </h3>
+                    <div className="section-header">
+                        <h3 className="section-title">
+                            Active Trades <span className="count-badge">{openTrades.length}</span>
+                        </h3>
+                        <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={toggleHidePattern}
+                            title={hidePattern ? 'Show signal names' : 'Hide signal names (privacy mode)'}
+                        >
+                            {hidePattern ? '👁 Show signals' : '🙈 Hide signals'}
+                        </button>
+                    </div>
                     <div className="kite-table-wrap">
                         <table className="kite-table">
                             <thead>
@@ -1119,6 +1141,7 @@ export default function PaperTradingPanel() {
                                         key={t.id}
                                         trade={t}
                                         onClose={(t, ltp) => setClosingTrade({ trade: t, ltp })}
+                                        hidePattern={hidePattern}
                                     />
                                 ))}
                             </tbody>
@@ -1135,6 +1158,13 @@ export default function PaperTradingPanel() {
                             Today's Trades <span className="count-badge">{dateGroups.reduce((s, g) => s + g.trades.length, 0)}</span>
                         </h3>
 
+                        <button
+                            className="btn btn-ghost btn-sm"
+                            onClick={toggleHidePattern}
+                            title={hidePattern ? 'Show signal names' : 'Hide signal names (privacy mode)'}
+                        >
+                            {hidePattern ? '👁 Show signals' : '🙈 Hide signals'}
+                        </button>
                         <button
                             className="btn btn-ghost btn-sm"
                             onClick={handleExportCSV}
@@ -1273,7 +1303,7 @@ export default function PaperTradingPanel() {
                                                                 )}
                                                                 {t.symbol}
                                                             </span>
-                                                            {t.patternLabel && (
+                                                            {!hidePattern && t.patternLabel && (
                                                                 <span
                                                                     className="td-sym-pattern"
                                                                     title={t.patternId ?? t.patternLabel}
@@ -1427,6 +1457,19 @@ function OrderHistoryPanel() {
         return toIstDateStr(d.getTime());
     })();
 
+    // Reads the same localStorage key as PaperTradingPanel so both panels
+    // stay in sync without prop-drilling through the component tree.
+    const [hidePattern, setHidePattern] = useState(() => {
+        try { return localStorage.getItem('pt_hidePattern') === 'true'; } catch { return false; }
+    });
+    function toggleHidePattern() {
+        setHidePattern(prev => {
+            const next = !prev;
+            try { localStorage.setItem('pt_hidePattern', String(next)); } catch {}
+            return next;
+        });
+    }
+
     const [selectedDate, setSelectedDate] = useState(yesterdayStr);
     const [trades, setTrades] = useState(null); // null = not fetched yet
     const [loading, setLoading] = useState(false);
@@ -1496,6 +1539,13 @@ function OrderHistoryPanel() {
             {/* ── Header ── */}
             <div className="section-header">
                 <h3 className="section-title">📅 Order History</h3>
+                <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={toggleHidePattern}
+                    title={hidePattern ? 'Show signal names' : 'Hide signal names (privacy mode)'}
+                >
+                    {hidePattern ? '👁 Show signals' : '🙈 Hide signals'}
+                </button>
                 <div className="oh-controls">
                     <button
                         className="btn btn-ghost btn-sm oh-nav-btn"
@@ -1625,7 +1675,7 @@ function OrderHistoryPanel() {
                                             )}
                                             {t.symbol}
                                         </span>
-                                        {t.patternLabel && (
+                                        {!hidePattern && t.patternLabel && (
                                             <span className="td-sym-pattern" title={t.patternId ?? t.patternLabel}>
                                                 {t.patternLabel}
                                             </span>
