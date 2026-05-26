@@ -38,6 +38,93 @@ function fmtDate(ts) {
   return new Date(ts + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+// ── CSV Export ──────────────────────────────────────────────────────────────
+
+/**
+ * Serialise a cell value for CSV output.
+ * Wraps in double-quotes if the value contains commas, quotes, or newlines.
+ */
+function _csvCell(value) {
+  const s = String(value ?? '');
+  return s.includes(',') || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+/**
+ * Build and trigger a CSV download for the supplied closed trades array.
+ * Pure client-side — no server round-trip required.
+ *
+ * Columns:
+ *   Date · Time · Index · Symbol · Strike · Type · Action
+ *   Strategy · Pattern · TF
+ *   Entry · AvgEntry (LP only) · Exit · Lots · LotSize
+ *   PnL · ExitReason · RR · InitialSL · Target
+ */
+function exportToCSV(trades) {
+  if (!trades || trades.length === 0) return;
+
+  const HEADERS = [
+    'Date', 'Time', 'Index', 'Symbol', 'Strike', 'Type',
+    'Action', 'Strategy', 'Pattern', 'TF',
+    'Entry', 'AvgEntry', 'Exit', 'Lots', 'LotSize',
+    'PnL', 'ExitReason', 'RR', 'InitialSL', 'Target',
+  ];
+
+  const rows = trades
+    // Most-recent first in the file
+    .slice()
+    .sort((a, b) => (b.closedTs || 0) - (a.closedTs || 0))
+    .map(t => {
+      const dateStr = t.closedTs
+        ? new Date(t.closedTs + IST_OFFSET_MS).toISOString().slice(0, 10)
+        : '';
+      const timeStr = t.closedTs
+        ? new Date(t.closedTs).toLocaleTimeString('en-IN', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+          })
+        : '';
+
+      const isLp   = t.strategyType === 'low-premium';
+      const lots   = t.lotCount ?? t.quantity ?? 1;
+      const symbol = `${t.strike ?? ''} ${t.optionType ?? ''}`.trim();
+
+      return [
+        dateStr,
+        timeStr,
+        t.index        ?? '',
+        symbol,
+        t.strike       ?? '',
+        t.optionType   ?? '',
+        t.action       ?? '',
+        isLp ? 'Low Premium' : 'Pattern',
+        isLp ? 'LP Scalper' : (t.patternLabel || t.patternId || ''),
+        t.tfLabel      ?? '',
+        t.entryPrice   ?? '',
+        // AvgEntry: only meaningful after an avg-down; blank for pattern trades
+        isLp && t.avgPrice != null ? t.avgPrice : '',
+        t.exitPrice    ?? '',
+        lots,
+        t.lotSize      ?? 1,
+        t.pnl          ?? '',
+        t.exitReason   ?? '',
+        t.rrRatio      ?? '',
+        t.initialSl    ?? '',
+        t.target       ?? '',
+      ].map(_csvCell).join(',');
+    });
+
+  const csv  = [HEADERS.join(','), ...rows].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+
+  const anchor    = document.createElement('a');
+  anchor.href     = url;
+  anchor.download = `index-trades-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
 function StatusBar({ status, config, onToggle, onRefreshStrikes, sseConnected }) {
@@ -244,39 +331,69 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
 
 // ── Order History ───────────────────────────────────────────────────────────
 
-function OrderHistory({ trades }) {
+/**
+ * @param {object[]} trades       - Today's closed trades (for the table display)
+ * @param {object[]} allTrades    - Full closed trade history (for CSV export)
+ */
+function OrderHistory({ trades, allTrades }) {
   const [expanded, setExpanded] = useState(true);
 
   if (trades.length === 0) {
     return (
       <div className="settings-group">
-        <h3>Today's Closed Trades</h3>
+        <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Today&apos;s Closed Trades</span>
+          {allTrades && allTrades.length > 0 && (
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={() => exportToCSV(allTrades)}
+              style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
+              title={`Export all ${allTrades.length} closed trades to CSV`}
+            >
+              ⬇ Export CSV
+            </button>
+          )}
+        </h3>
         <p className="diag-hint">No closed trades today</p>
       </div>
     );
   }
 
   const todayPnl = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-  const wins = trades.filter(t => t.pnl > 0).length;
+  const wins   = trades.filter(t => t.pnl > 0).length;
   const losses = trades.filter(t => t.pnl <= 0).length;
 
   return (
     <div className="settings-group">
       <h3
-        style={{ cursor: 'pointer' }}
+        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
         onClick={() => setExpanded(prev => !prev)}
       >
-        Today's Closed Trades ({trades.length})
-        <span style={{
-          marginLeft: 12, fontSize: 13, fontWeight: 600,
-          color: todayPnl >= 0 ? '#51cf66' : '#ff6b6b',
-        }}>
-          {fmtPnl(todayPnl)}
+        {/* Left side: title + today's stats */}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+          <span>Today&apos;s Closed Trades ({trades.length})</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: todayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
+            {fmtPnl(todayPnl)}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+            W:{wins} L:{losses}
+          </span>
         </span>
-        <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 8 }}>
-          W:{wins} L:{losses}
+
+        {/* Right side: export button + collapse chevron */}
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          {allTrades && allTrades.length > 0 && (
+            <button
+              className="btn btn-sm btn-secondary"
+              onClick={(e) => { e.stopPropagation(); exportToCSV(allTrades); }}
+              style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
+              title={`Export all ${allTrades.length} closed trades to CSV`}
+            >
+              ⬇ Export CSV
+            </button>
+          )}
+          <span style={{ fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
         </span>
-        <span style={{ float: 'right', fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
       </h3>
       {expanded && (
         <div style={{ overflowX: 'auto' }}>
@@ -699,7 +816,7 @@ function LpField({ label, hint, value, onChange, step = '0.5' }) {
 
 export default function IndexTradePage() {
   const {
-    openTrades, todayClosed,
+    openTrades, closedTrades, todayClosed,
     tradeTicks, optionChain, sseConnected, status, config, pnl, alerts,
     updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes,
   } = useIndexTrade();
@@ -726,7 +843,7 @@ export default function IndexTradePage() {
         <PnlSummary pnl={pnl} />
         <LowPremiumConfig config={config} onUpdate={updateConfig} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
-        <OrderHistory trades={todayClosed} />
+        <OrderHistory trades={todayClosed} allTrades={closedTrades} />
         <OptionChainTable optionChain={optionChain} onRefresh={fetchOptionChain} />
         <AlertFeed alerts={alerts} />
       </div>
