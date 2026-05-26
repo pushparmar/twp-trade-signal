@@ -48,6 +48,7 @@ const { isAnyMarketOpen, isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../uti
 const { getFrontMonthFutures } = require('./macroAnalysis');
 const db                  = require('../db');
 const alertBus            = require('./alertBus');
+const signalScorer        = require('./signalScorer');
 
 // Lazy require to avoid circular dependency (tradeWatcher → store ← backgroundScanner)
 function _tradeWatcher() { return require('./tradeWatcher'); }
@@ -444,13 +445,26 @@ async function _runScanForInterval(interval) {
 
       let result;
       try {
-        result = patternDef.run(candles, patternDef.defaultOpts);
+        // F11: Pass interval so _naturalTarget lookback scales with TF
+        result = patternDef.run(candles, { ...patternDef.defaultOpts, interval });
       } catch (err) {
         console.warn(`[BgScanner] pattern.run failed (${patternId}) ${label}:${interval} —`, err.message);
         continue;
       }
 
       if (!result?.matched || !result.signal) continue;
+
+      // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
+      const qCfg = store.getQualityScoreConfig();
+      const { qualityScore, setupGrade, scoreBreakdown } = qCfg.enabled
+        ? signalScorer.compute(inst.instrumentToken, candles, result, interval, qCfg, patternId)
+        : { qualityScore: null, setupGrade: null, scoreBreakdown: null };
+
+      // Scan gate: skip if quality too low — NOT marked in dedup so it can re-fire
+      if (qCfg.enabled && qCfg.scanGateEnabled && qualityScore !== null && qualityScore < qCfg.minQualityScore) {
+        console.log(`[BgScanner] ⏭ Quality: ${inst.tradingsymbol} ${patternId} (${tfLabel}) score=${qualityScore} (${setupGrade}) < min ${qCfg.minQualityScore}`);
+        continue;
+      }
 
       // Dedup: at most one alert per (stock, interval, pattern, direction) per IST day
       const dedupKey = `bg:${inst.instrumentToken}:${interval}:${patternId}:${result.signal}`;
@@ -499,6 +513,14 @@ async function _runScanForInterval(interval) {
         // Keep confluenceTfs/confluenceCount for Telegram message builder compat
         confluenceTfs:   alignedTfs,
         confluenceCount: alignedTfs.length + 1,
+        // Quality score (0–10)
+        qualityScore,
+        setupGrade,
+        scoreBreakdown,
+        // R12: Trailing anchor suggestion for TSL
+        trailingAnchor:  result.trailingAnchor ?? null,
+        // R13: Normalized score for cross-pattern comparison
+        normalizedScore: result.score != null ? +(result.score / (patternRegistry.get(patternId)?.maxScore ?? 5)).toFixed(2) : null,
         ts:              Date.now(),
       };
 
@@ -515,7 +537,8 @@ async function _runScanForInterval(interval) {
 
       const volTag = result.volumeConfirmed ? ' 📈vol' : '';
       const mtfTag = alignedTfs.length      ? ` ⚡MTF(${alignedTfs.join('+')})` : '';
-      console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}`);
+      const gradeTag = setupGrade ? ` 🏅${setupGrade}(${qualityScore}/10)` : '';
+      console.log(`[BgScanner] ${result.signal === 'bullish' ? '🟢' : '🔴'} ${patternId} — ${label} (${tfLabel})${volTag}${mtfTag}${gradeTag}`);
 
       // Collect Telegram candidate — keep highest score per signal for this instrument
       const score = result.score ?? 0;
@@ -538,6 +561,12 @@ async function _runScanForInterval(interval) {
       for (const [signal, best] of tgBestBySignal) {
         // Pattern config gate — skip Telegram if alert is disabled for this pattern+interval
         if (!store.isPatternEnabled(best.alertPayload.patternId, interval, 'alert')) continue;
+
+        // Quality score alert gate — block Telegram when quality too low
+        const qCfgTg = store.getQualityScoreConfig();
+        if (qCfgTg.enabled && qCfgTg.alertGateEnabled && best.alertPayload.qualityScore != null) {
+          if (best.alertPayload.qualityScore < qCfgTg.minQualityScore) continue;
+        }
 
         // Score dedup — skip if same TF + same signal already sent with equal/higher score today.
         // Each TF fires independently — 15m alerts are NOT suppressed by a prior 1h alert.

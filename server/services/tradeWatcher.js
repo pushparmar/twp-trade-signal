@@ -51,17 +51,59 @@ function _maybeTrail(trade, ltp, settings) {
   const profit = trade.action === 'BUY'
     ? ltp - entry
     : entry - ltp;
-  if (profit < settings.tslTriggerR * riskPerUnit) return false;
+
+  // F5: Pattern-specific TSL trigger — trend patterns (kumo-breakout, cloud-support,
+  // kumo-bounce) need 1.5R before trailing so the trade has room to develop.
+  // Bounce patterns (kijun-bounce, kijun-retest) use the default 1.0R.
+  // Reversion patterns (tk-reversion) use 0.5R since the target is close.
+  // The per-trade tslTriggerR is set at order-placement time; falls back to settings.
+  const triggerR = trade.tslTriggerR ?? settings.tslTriggerR;
+  if (profit < triggerR * riskPerUnit) return false;
 
   const prevPeak = trade.peakPrice ?? entry;
   const newPeak  = trade.action === 'BUY'
     ? Math.max(prevPeak, ltp)
     : Math.min(prevPeak, ltp);
 
-  const trailGap    = settings.tslDistanceR * riskPerUnit;
-  const candidateSl = trade.action === 'BUY'
+  // F10: MCX instruments have wider intraday swings than NSE equities.
+  // A 0.5R trail distance gets stopped out on normal MCX noise.
+  // Enforce a minimum 1.0R trail distance for MCX trades.
+  const isMcx       = String(trade.exchange ?? '').toUpperCase() === 'MCX';
+  const minDistR    = isMcx ? 1.0 : settings.tslDistanceR;
+  const trailDistR  = Math.max(settings.tslDistanceR, minDistR);
+  const trailGap    = trailDistR * riskPerUnit;
+  let candidateSl   = trade.action === 'BUY'
     ? newPeak - trailGap
     : newPeak + trailGap;
+
+  // F4: Incorporate trailingAnchor (Tenkan for trend, Kijun for bounce) as a
+  // TSL floor.  The anchor is the structural level the trade should not fall
+  // below — if the R-based trail is below the anchor, use the anchor instead.
+  // This prevents the trail from drifting too far from the current Ichimoku
+  // structure while still allowing the R-based trail to take over when the
+  // trend extends beyond the anchor.
+  if (trade.trailingAnchor != null && trade.tslActivated) {
+    const anchorBuf = riskPerUnit * 0.15;  // small buffer below anchor
+    const anchorSl  = trade.action === 'BUY'
+      ? trade.trailingAnchor - anchorBuf
+      : trade.trailingAnchor + anchorBuf;
+    // Use whichever is more protective (closer to price)
+    if (trade.action === 'BUY'  && anchorSl > candidateSl) candidateSl = anchorSl;
+    if (trade.action === 'SELL' && anchorSl < candidateSl) candidateSl = anchorSl;
+  }
+
+  // F8: Breakeven lock — once the trade has reached 2R profit, the SL must
+  // never go below the entry price.  This guarantees at minimum a scratch trade
+  // after a strong initial move, even if the trail calculation would otherwise
+  // place the stop below entry on a deep pullback.
+  const currentR = profit / riskPerUnit;
+  const BREAKEVEN_LOCK_R = 2.0;
+  if (currentR >= BREAKEVEN_LOCK_R || (trade.peakR ?? 0) >= BREAKEVEN_LOCK_R) {
+    const entryFloor = trade.action === 'BUY'
+      ? Math.max(candidateSl, entry)
+      : Math.min(candidateSl, entry);
+    candidateSl = entryFloor;
+  }
 
   const shouldMove = trade.action === 'BUY'
     ? candidateSl > (trade.sl ?? -Infinity)
@@ -70,9 +112,12 @@ function _maybeTrail(trade, ltp, settings) {
 
   const newSl = Math.round(candidateSl * 100) / 100;
   const wasArmed = trade.tslActivated;
-  store.updatePaperTrade(trade.id, { sl: newSl, peakPrice: newPeak, tslActivated: true });
+  // Track peak R-multiple reached for breakeven lock persistence
+  const peakR = Math.max(trade.peakR ?? 0, currentR);
+  store.updatePaperTrade(trade.id, { sl: newSl, peakPrice: newPeak, peakR, tslActivated: true });
   trade.sl           = newSl;
   trade.peakPrice    = newPeak;
+  trade.peakR        = peakR;
   trade.tslActivated = true;
 
   db.tradeRepo.upsertTrade(trade);
@@ -273,11 +318,20 @@ function onTick(token, lastPrice) {
  * @param {number} candleClosePrice Close price of the just-completed 15m candle
  */
 function onCandleClose(token, interval, candleClosePrice) {
-  if (interval !== '15minute' || _slBreachMap.size === 0) return;
+  if (_slBreachMap.size === 0) return;
 
   const numToken    = Number(token);
+  // F6: Match the trade's own TF instead of hardcoding '15minute'.
+  // Each trade stores its entry interval (e.g. '15minute', '60minute', '4h', 'day').
+  // SL confirmation should happen on the same TF the signal was taken on — a
+  // daily trade should not exit on a 15m candle close, and a 15m trade should
+  // not wait for a daily close.  Falls back to '15minute' when the trade has
+  // no interval recorded (legacy trades).
   const pendingTrades = store.getPaperTrades().filter(
-    (t) => t.status === 'OPEN' && Number(t.token) === numToken && _slBreachMap.has(t.id),
+    (t) => t.status === 'OPEN' &&
+           Number(t.token) === numToken &&
+           _slBreachMap.has(t.id) &&
+           (t.interval ?? '15minute') === interval,
   );
 
   for (const trade of pendingTrades) {

@@ -1,5 +1,5 @@
 const express = require('express');
-const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken, getPatternConfig, setPatternConfig } = require('../store');
+const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken, getPatternConfig, setPatternConfig, getQualityScoreConfig, setQualityScoreConfig } = require('../store');
 const patternRegistry = require('../services/patternRegistry');
 
 const router = express.Router();
@@ -69,6 +69,23 @@ router.post('/pattern-config', (req, res) => {
   }
   const saved = setPatternConfig(updates);
   res.json({ config: saved });
+});
+
+// ── Quality Score Config ────────────────────────────────────────────────────
+// GET  /api/settings/quality-score → current quality score config
+// POST /api/settings/quality-score → update quality score config
+
+router.get('/quality-score', (_req, res) => {
+  res.json(getQualityScoreConfig());
+});
+
+router.post('/quality-score', (req, res) => {
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object') {
+    return res.status(400).json({ error: 'Body must be an object of config fields' });
+  }
+  const saved = setQualityScoreConfig(updates);
+  res.json(saved);
 });
 
 module.exports = router;

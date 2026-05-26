@@ -307,11 +307,185 @@ export default function SettingsPanel() {
                     )}
                 </div>
 
+                {/* Quality Score Config */}
+                <QualityScoreConfigPanel />
+
                 {/* Pattern Config */}
                 <PatternConfigPanel />
             </div>
         </div>
     );
+}
+
+// ── Quality Score Config Panel ───────────────────────────────────────────────
+
+const SCORE_FACTORS = [
+  { label: 'Price vs Cloud',    max: '+2', desc: 'Price above (bull) or below (bear) cloud' },
+  { label: 'Cloud Expanding',   max: '+2', desc: 'Cloud width growing >5% vs 5 bars ago' },
+  { label: 'Chikou Free Space', max: '+2', desc: 'No obstruction at chikou plot point' },
+  { label: 'HTF Aligned',       max: '+2', desc: 'Cloud position on higher timeframe agrees' },
+  { label: 'Kijun Angle',       max: '+1', desc: 'Kijun slope >0.1% in signal direction' },
+  { label: 'RSI Ideal Zone',    max: '+1', desc: 'RSI within configured bull/bear range' },
+  { label: 'Volume',            max: '+1', desc: 'Volume ratio ≥ 1.2× average' },
+];
+
+function QualityScoreConfigPanel() {
+  const [cfg, setCfg]       = useState(null);
+  const [draft, setDraft]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [open, setOpen]     = useState(false);
+
+  useEffect(() => {
+    api.get('/settings/quality-score')
+      .then(r => { setCfg(r.data); setDraft(r.data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const hasChanges = JSON.stringify(draft) !== JSON.stringify(cfg);
+
+  async function save() {
+    setSaving(true);
+    try {
+      const r = await api.post('/settings/quality-score', draft);
+      setCfg(r.data);
+      setDraft(r.data);
+    } catch (err) {
+      console.error('Failed to save quality score config:', err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function reset() { setDraft(cfg); }
+
+  function update(field, value) {
+    setDraft(prev => ({ ...prev, [field]: value }));
+  }
+
+  if (loading || !draft) return null;
+
+  const badgeColor = draft.enabled ? '#51cf66' : '#868e96';
+  const badgeLabel = draft.enabled ? 'ON' : 'OFF';
+
+  return (
+    <div style={{ marginTop: 20, border: '1px solid #343a40', borderRadius: 8, overflow: 'hidden' }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 14px', cursor: 'pointer', background: '#25262b',
+        }}
+      >
+        <span style={{ fontWeight: 600, fontSize: 14 }}>
+          🏅 Quality Score Filter
+          <span style={{
+            marginLeft: 8, fontSize: 11, padding: '2px 8px', borderRadius: 10,
+            background: badgeColor, color: '#fff',
+          }}>{badgeLabel}</span>
+        </span>
+        <span style={{ fontSize: 12, color: '#868e96' }}>{open ? '▼' : '▶'}</span>
+      </div>
+
+      {open && (
+        <div style={{ padding: '12px 14px', background: '#1a1b1e' }}>
+          {/* Master toggle */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={draft.enabled} onChange={e => update('enabled', e.target.checked)} />
+            <span style={{ fontSize: 13 }}>Enable Quality Score Filter</span>
+          </label>
+
+          {/* Gate toggles */}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            {[
+              { key: 'scanGateEnabled',  label: '📡 Scan Gate' },
+              { key: 'alertGateEnabled', label: '📱 Alert Gate' },
+              { key: 'orderGateEnabled', label: '📦 Order Gate' },
+            ].map(({ key, label }) => (
+              <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+                <input type="checkbox" checked={draft[key]} onChange={e => update(key, e.target.checked)} />
+                {label}
+              </label>
+            ))}
+          </div>
+
+          {/* Numeric fields */}
+          <div style={{ display: 'flex', gap: 16, marginBottom: 12, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 12 }}>
+              Min Score (skip below):
+              <input
+                type="number" min={0} max={10} step={1}
+                value={draft.minQualityScore}
+                onChange={e => update('minQualityScore', parseInt(e.target.value, 10) || 0)}
+                style={{ width: 50, marginLeft: 6, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 6px' }}
+              />
+            </label>
+            <label style={{ fontSize: 12 }}>
+              A-Setup threshold:
+              <input
+                type="number" min={0} max={10} step={1}
+                value={draft.aSetupMinScore}
+                onChange={e => update('aSetupMinScore', parseInt(e.target.value, 10) || 0)}
+                style={{ width: 50, marginLeft: 6, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 6px' }}
+              />
+            </label>
+          </div>
+
+          {/* RSI ranges */}
+          <div style={{ fontSize: 12, marginBottom: 12 }}>
+            <span style={{ color: '#868e96' }}>RSI Ideal Zones:</span>
+            <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
+              <span>Bull: {' '}
+                <input type="number" value={draft.rsiBullishMin} onChange={e => update('rsiBullishMin', +e.target.value)}
+                  style={{ width: 40, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 4px' }}
+                />–<input type="number" value={draft.rsiBullishMax} onChange={e => update('rsiBullishMax', +e.target.value)}
+                  style={{ width: 40, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 4px' }}
+                />
+              </span>
+              <span>Bear: {' '}
+                <input type="number" value={draft.rsiBearishMin} onChange={e => update('rsiBearishMin', +e.target.value)}
+                  style={{ width: 40, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 4px' }}
+                />–<input type="number" value={draft.rsiBearishMax} onChange={e => update('rsiBearishMax', +e.target.value)}
+                  style={{ width: 40, background: '#2c2e33', border: '1px solid #495057', borderRadius: 4, color: '#fff', padding: '2px 4px' }}
+                />
+              </span>
+            </div>
+          </div>
+
+          {/* Scoring reference */}
+          <details style={{ fontSize: 11, color: '#868e96', marginBottom: 12 }}>
+            <summary style={{ cursor: 'pointer' }}>Scoring Reference (7 factors, max 10)</summary>
+            <table style={{ width: '100%', marginTop: 6, borderCollapse: 'collapse' }}>
+              <tbody>
+                {SCORE_FACTORS.map(f => (
+                  <tr key={f.label} style={{ borderBottom: '1px solid #2c2e33' }}>
+                    <td style={{ padding: '3px 6px', color: '#dee2e6' }}>{f.label}</td>
+                    <td style={{ padding: '3px 6px', color: '#51cf66', textAlign: 'center' }}>{f.max}</td>
+                    <td style={{ padding: '3px 6px' }}>{f.desc}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+
+          {/* Save / Reset */}
+          {hasChanges && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={save} disabled={saving}
+                style={{ padding: '4px 14px', borderRadius: 4, border: 'none', background: '#228be6', color: '#fff', cursor: 'pointer', fontSize: 12 }}>
+                {saving ? 'Saving...' : 'Save'}
+              </button>
+              <button onClick={reset}
+                style={{ padding: '4px 14px', borderRadius: 4, border: '1px solid #495057', background: 'transparent', color: '#ced4da', cursor: 'pointer', fontSize: 12 }}>
+                Reset
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── TF label map ────────────────────────────────────────────────────────────

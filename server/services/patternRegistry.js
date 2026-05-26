@@ -20,7 +20,7 @@ const {
   getKumoBreakoutTwist, getKumoBreakout, getKumoBaseEntry, getKumoTwist,
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
   getKijunLevel, getCloudSupport, getVolumeContext, getATR, getRSI,
-  getCloudExit, getKijunRetest, getTKReversion,
+  getCloudExit, getKijunRetest, getTKReversion, getSenkouCross,
 } = require('./ichimoku');
 
 // Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
@@ -44,10 +44,17 @@ const SL_ANCHOR_BUFFER_ATR = 0.15;    // 0.15 × ATR14 (used when ATR available)
 const KIJUN_SL_BUFFER_PCT = 0.006;   // 0.6% of the Kijun level
 const KIJUN_SL_BUFFER_ATR = 0.40;    // 0.40 × ATR14
 
-// Natural-target search window — how many recent bars to scan for swing high/low.
-// 30 bars is enough to catch the most recent meaningful structure on any TF
-// without reaching back to stale levels from a previous trend.
+// F11: Natural-target lookback scales with timeframe.  Higher TFs pack more
+// price action per bar, so fewer bars are needed to find meaningful structure.
+// 15m=30 bars (7.5h), 1h=20 bars (20h ≈ 3 days), daily=15 bars (3 weeks).
+// Default (unknown TF) = 30 for backward compat.
 const NATURAL_TARGET_LOOKBACK = 30;
+const TF_LOOKBACK = {
+  '15minute': 30,
+  '60minute': 20,
+  '4h':       18,
+  'day':      15,
+};
 
 /**
  * Find a natural resistance (bullish) or support (bearish) level the trade
@@ -65,13 +72,14 @@ const NATURAL_TARGET_LOOKBACK = 30;
  * @param {number}   entry    typically the pattern's close price
  * @returns {number|null}
  */
-function _naturalTarget(candles, signal, entry) {
-  if (!Array.isArray(candles) || candles.length < NATURAL_TARGET_LOOKBACK + 2) return null;
+function _naturalTarget(candles, signal, entry, interval) {
+  const lookback = TF_LOOKBACK[interval] ?? NATURAL_TARGET_LOOKBACK;
+  if (!Array.isArray(candles) || candles.length < lookback + 2) return null;
 
   // Exclude the current bar so live ticks during pattern formation don't pin
   // the swing to the entry itself.
   const end   = candles.length - 1;
-  const start = Math.max(0, end - NATURAL_TARGET_LOOKBACK);
+  const start = Math.max(0, end - lookback);
 
   if (signal === 'bullish') {
     let hi = -Infinity;
@@ -129,7 +137,7 @@ function _naturalTarget(candles, signal, entry) {
  *   atr: number|null, targetSource: 'fixed'|'swing'|null
  * }}
  */
-function computeSLTarget(patternId, signal, result, candles) {
+function computeSLTarget(patternId, signal, result, candles, interval) {
   const { close, cloudBottom, cloudTop, kijun, kijunValue } = result;
   if (!close || !signal) return { sl: null, target: null, atr: null, targetSource: null };
 
@@ -177,8 +185,12 @@ function computeSLTarget(patternId, signal, result, candles) {
 
   // Fallback when no natural level was found
   if (sl == null) {
-    const pctSl     = close * 0.005;
-    const slDistance = atrFloor != null ? Math.max(pctSl, atrFloor) : pctSl;
+    // R11: kumo-base-entry needs a wider fallback (1% or 1×ATR) because cloud-entry
+    // trades inherently have more volatility than surface-level patterns.
+    const isBaseEntry = patternId === 'kumo-base-entry';
+    const pctSl       = close * (isBaseEntry ? 0.01 : 0.005);
+    const atrFallback = atr != null ? (isBaseEntry ? atr : atrFloor) : null;
+    const slDistance   = atrFallback != null ? Math.max(pctSl, atrFallback) : pctSl;
     sl = signal === 'bullish' ? close - slDistance : close + slDistance;
   }
 
@@ -186,26 +198,52 @@ function computeSLTarget(patternId, signal, result, candles) {
   if (signal === 'bullish' && sl >= close) sl = close * 0.995;
   if (signal === 'bearish' && sl <= close) sl = close * 1.005;
 
-  // ATR floor — widen SL if it's tighter than 0.5×ATR
+  // F3: ATR floor — widen SL if it's tighter than 0.5×ATR.
+  // Widen from the SL anchor (not from close) so the stop stays anchored to
+  // the structural level and simply gets pushed a bit further beyond it.
   if (atrFloor != null) {
     const naturalDist = Math.abs(close - sl);
     if (naturalDist < atrFloor) {
-      sl = signal === 'bullish' ? close - atrFloor : close + atrFloor;
+      const deficit = atrFloor - naturalDist;
+      sl = signal === 'bullish' ? sl - deficit : sl + deficit;
     }
   }
 
-  // ── Target — option A: max(2×risk, recentSwing) in the favourable direction ─
+  // F9: Reversal patterns (cloud-exit) default to 1.5:1 instead of 2:1.
+  // Cloud exits are trend-reversal trades — the price has to traverse the cloud
+  // (strong resistance) so the probability of a full 2:1 payoff is lower.
+  const isReversal     = patternId === 'cloud-exit';
+  const targetMultiple = isReversal ? 1.5 : 2;
+
+  // ── Target — max(N×risk, recentSwing, ichimokuLevel) in the favourable direction
   const risk        = Math.abs(close - sl);
-  const fixedTarget = signal === 'bullish' ? close + 2 * risk : close - 2 * risk;
+  const fixedTarget = signal === 'bullish' ? close + targetMultiple * risk : close - targetMultiple * risk;
 
   let target       = fixedTarget;
   let targetSource = 'fixed';
-  const swing      = candles ? _naturalTarget(candles, signal, close) : null;
+
+  // F7: Ichimoku-based target candidates for cloud-penetration patterns.
+  // For kumo-base-entry and kumo-breakout, the opposite cloud edge (the side
+  // price is heading toward) is a natural structural target — it's where
+  // supply/demand will next resist the move.
+  if ((patternId === 'kumo-base-entry' || patternId === 'kumo-breakout') && cloudTop != null && cloudBottom != null) {
+    const ichTarget = signal === 'bullish' ? cloudTop : cloudBottom;
+    // Only use if the Ichimoku target is further than the fixed target
+    if (signal === 'bullish' && ichTarget > target) {
+      target       = ichTarget;
+      targetSource = 'ichimoku';
+    } else if (signal === 'bearish' && ichTarget < target) {
+      target       = ichTarget;
+      targetSource = 'ichimoku';
+    }
+  }
+
+  const swing = candles ? _naturalTarget(candles, signal, close, interval) : null;
   if (swing != null) {
-    if (signal === 'bullish' && swing > fixedTarget) {
+    if (signal === 'bullish' && swing > target) {
       target       = swing;
       targetSource = 'swing';
-    } else if (signal === 'bearish' && swing < fixedTarget) {
+    } else if (signal === 'bearish' && swing < target) {
       target       = swing;
       targetSource = 'swing';
     }
@@ -266,6 +304,7 @@ const PATTERNS = {
     id:          'kumo-breakout',
     label:       'Kumo Breakout',
     description: 'Price broke above or below the cloud within the last N bars and has not re-entered it.',
+    maxScore:    5,
     // lookback:3 — breakout must have occurred within the last 3 closed candles.
     // lookback:1 (the crossover on the EXACT current candle) combined with TK alignment
     // as a hard filter produced near-zero matches in production.  A 3-bar window
@@ -277,8 +316,21 @@ const PATTERNS = {
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+
+      // R2: Volume gate — breakout without volume is a false breakout ~60% of the time
+      const volFields = _volumeFields(candles);
+      if (volFields.volumeRatio != null && volFields.volumeRatio < 1.0) return { matched: false };
+
+      // P6: Body-size filter — a breakout with a tiny body (doji) is unreliable
+      const lastCandle = candles[candles.length - 1];
+      const bodySize   = Math.abs(lastCandle.close - lastCandle.open);
+      const rangeSize  = lastCandle.high - lastCandle.low;
+      if (rangeSize > 0 && bodySize / rangeSize < 0.4) return { matched: false };
+
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      // R12: Trailing anchor = Tenkan line (fast line tracks trend)
+      const trailingAnchor = result.tenkan ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ...volFields, ..._rsiFields(candles) };
     },
   },
 
@@ -286,21 +338,36 @@ const PATTERNS = {
     id:          'kumo-bounce',
     label:       'Kumo Bounce',
     description: 'Price pulled back to the cloud edge from outside and reversed on the current candle. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below.',
+    maxScore:    5,
     defaultOpts: { lookback: 1, tolerance: 0.005 },
 
     run(candles, opts = {}) {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+
+      // R3: Wick-penetration requirement — a true bounce shows a wick INTO the cloud
+      // Bullish: low should have dipped to/below cloudTop; Bearish: high should have reached cloudBottom
+      if (result.signal === 'bullish' && result.cloudTop != null) {
+        const lastCandle = candles[candles.length - 1];
+        if (lastCandle.low > result.cloudTop) return { matched: false }; // wick never touched cloud
+      }
+      if (result.signal === 'bearish' && result.cloudBottom != null) {
+        const lastCandle = candles[candles.length - 1];
+        if (lastCandle.high < result.cloudBottom) return { matched: false }; // wick never touched cloud
+      }
+
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      const trailingAnchor = result.tenkan ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
   'cloud-support': {
     id:          'cloud-support',
     label:       'Cloud Support / Resistance',
-    description: 'Price is currently above (bullish) or below (bearish) the cloud, cloud color agrees, and price has held that position for 3–5 consecutive bars. Score 0–5 includes TK order, Chikou, and duration.',
+    description: 'Price is above (bullish) or below (bearish) the cloud with a recent pullback toward the cloud edge as entry trigger. Score 0–5 includes TK order, Chikou, and duration.',
+    maxScore:    5,
     defaultOpts: { minBars: 3, maxBars: 5 },
 
     run(candles, opts = {}) {
@@ -310,8 +377,12 @@ const PATTERNS = {
       if (!_tkAligned(result)) return { matched: false };
       if (result.consecutiveBars > maxBars) return { matched: false };
       if (result.score < 3) return { matched: false };
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+      // P5: Require an entry trigger — a recent pullback toward the cloud edge.
+      // Without this, cloud-support fires on every bar where a trend is in place.
+      if (!result.hasEntryTrigger) return { matched: false };
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      const trailingAnchor = result.tenkan ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -319,24 +390,28 @@ const PATTERNS = {
     id:          'kumo-base-entry',
     label:       'Kumo Base Entry',
     description: 'Price consolidated in a tight base just outside a fat cloud, then freshly entered the cloud from the near edge. Fat cloud = strong resistance to traverse (meaningful move expected). SL anchors below the base low (bullish) or above the base high (bearish).',
+    maxScore:    5,
     defaultOpts: {
       consLookback:     10,
       consRatio:        2.5,
       minConsBars:      3,
       posThreshold:     0.4,
       entryLookback:    3,
-      minCloudWidthPct: 0.01,
+      // R5: Lower minCloudWidthPct — 0.5% is more appropriate.
+      // Original 1% was too loose for intraday (1m, 5m) where clouds flicker.
+      minCloudWidthPct: 0.005,
       minCloudWidthAtr: 1.0,
     },
 
     run(candles, opts = {}) {
       const result = getKumoBaseEntry(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      const trailingAnchor = result.tenkan ?? null;
       return {
         matched: true,
         ...result,
-        sl, target, atr, targetSource,
+        sl, target, atr, targetSource, trailingAnchor,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };
@@ -347,14 +422,27 @@ const PATTERNS = {
     id:          'kijun-bounce',
     label:       'Kijun Support / Resistance',
     description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, close must not break through.',
+    maxScore:    4,
     defaultOpts: { lookback: 3, tolerance: 0.003 },
 
     run(candles, opts = {}) {
       const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+
+      // P7: Cloud position hard filter — kijun bounce against the cloud is counter-trend.
+      // Bullish bounce requires price above cloud; bearish requires below cloud.
+      // Allow 'inside' cloud (transitional) but reject wrong-side bounces.
+      if (result.signal === 'bullish' && result.cloudPosition === 'below') return { matched: false };
+      if (result.signal === 'bearish' && result.cloudPosition === 'above') return { matched: false };
+
+      // R6: Kijun slope direction check — a falling Kijun on bullish bounce means
+      // the baseline is weakening, which fights momentum.
+      if (result.kijunSlopeOk === false) return { matched: false };
+
+      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      const trailingAnchor = result.kijun ?? result.kijunValue ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -362,14 +450,19 @@ const PATTERNS = {
     id:          'cloud-exit',
     label:       'Kumo Crossover',
     description: 'Price was on one side of the cloud for a long run and has crossed through to the other side for the first time — trend reversal signal.',
+    maxScore:    5,
     defaultOpts: { lookback: 5, minRunBars: 5, scanBars: 40 },
 
     run(candles, opts = {}) {
       const result = getCloudExit(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.matched) return { matched: false };
 
+      // R7: Volume check on exit candle — cloud exit on low volume fails ~50% of the time
+      const volFields = _volumeFields(candles);
+      if (volFields.volumeRatio != null && volFields.volumeRatio < 1.0) return { matched: false };
+
       // Use computeSLTarget for target, then override SL to the exit edge
-      const { target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles);
+      const { target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
 
       // SL = the cloud edge price just crossed + buffer
       // (going back into the cloud = reversal failed)
@@ -380,10 +473,31 @@ const PATTERNS = {
         const atrBuf = atrVal > 0 ? SL_ANCHOR_BUFFER_ATR * atrVal : 0;
         const buf    = Math.max(pctBuf, atrBuf);
         sl = result.signal === 'bearish' ? sl + buf : sl - buf;
-        sl = Math.round(sl * 100) / 100;
       }
 
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+      // F1: ATR floor — cloud-exit was missing this; thin clouds produce tight stops
+      const close = result.close;
+      if (sl != null && atr != null && close) {
+        const atrFloor    = MIN_SL_ATR_MULT * atr;
+        const naturalDist = Math.abs(close - sl);
+        if (naturalDist < atrFloor) {
+          // F3: Widen from the anchor (exitEdge), not from close
+          const anchor    = result.exitEdge ?? sl;
+          const deficit   = atrFloor - Math.abs(close - anchor);
+          sl = result.signal === 'bearish'
+            ? anchor + Math.abs(close - anchor) + deficit
+            : anchor - Math.abs(anchor - close) - deficit;
+        }
+      }
+      // Safety: SL must sit on the correct side
+      if (sl != null && close) {
+        if (result.signal === 'bullish' && sl >= close) sl = close * 0.995;
+        if (result.signal === 'bearish' && sl <= close) sl = close * 1.005;
+      }
+      sl = sl != null ? Math.round(sl * 100) / 100 : null;
+
+      const trailingAnchor = result.tenkan ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ...volFields, ..._rsiFields(candles) };
     },
   },
 
@@ -391,14 +505,16 @@ const PATTERNS = {
     id:          'kijun-retest',
     label:       'Kijun Retest',
     description: 'After a kumo crossover, price pulls back to retest the Kijun-sen — wick touches Kijun but close stays on the trend side. Confirms Kijun as new support/resistance.',
+    maxScore:    5,
     defaultOpts: { lookback: 3, crossoverScan: 20, tolerance: 0.003 },
 
     run(candles, opts = {}) {
       const result = getKijunRetest(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.matched) return { matched: false };
       // SL = Kijun itself (if price closes through it, the retest failed)
-      const { sl, target, atr, targetSource } = computeSLTarget('kijun-bounce', result.signal, result, candles);
-      return { matched: true, ...result, sl, target, atr, targetSource, ..._volumeFields(candles), ..._rsiFields(candles) };
+      const { sl, target, atr, targetSource } = computeSLTarget('kijun-bounce', result.signal, result, candles, opts.interval);
+      const trailingAnchor = result.kijun ?? result.kijunValue ?? null;
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -406,11 +522,18 @@ const PATTERNS = {
     id:          'tk-reversion',
     label:       'TK Reversion',
     description: 'After a fast move widened the Tenkan–Kijun spread, price crosses Tenkan in the direction of Kijun — mean reversion toward Kijun or cloud.',
+    maxScore:    5,
     defaultOpts: { lookback: 3, minSpreadPct: 0.5, spreadLookback: 10 },
 
     run(candles, opts = {}) {
       const result = getTKReversion(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.matched) return { matched: false };
+
+      // R8: Only allow trades moving TOWARD Kijun from the extended side.
+      // Bearish reversion while below cloud = fighting the primary trend for a small
+      // TK spread contraction. Only allow inside-cloud or toward-cloud reversions.
+      if (result.signal === 'bearish' && result.cloudPosition === 'below') return { matched: false };
+      if (result.signal === 'bullish' && result.cloudPosition === 'above') return { matched: false };
 
       // Target = Kijun (the reversion destination)
       // SL = recent swing beyond Tenkan (the wrong-side extreme)
@@ -442,6 +565,19 @@ const PATTERNS = {
           sl = signal === 'bullish' ? close - atrFloor : close + atrFloor;
         }
       }
+
+      // F2: ATR ceiling — reversion trades are short-lived mean-reversion plays.
+      // A swing-high SL wider than 2.5×ATR means the move was too extended and
+      // the risk:reward is no longer viable.  Cap the SL distance to keep risk
+      // proportional to the instrument's normal volatility.
+      const TK_REV_MAX_SL_ATR = 2.5;
+      if (atr != null) {
+        const maxSlDist = TK_REV_MAX_SL_ATR * atr;
+        if (Math.abs(close - sl) > maxSlDist) {
+          sl = signal === 'bullish' ? close - maxSlDist : close + maxSlDist;
+        }
+      }
+
       sl = Math.round(sl * 100) / 100;
 
       // Target = closer of Kijun or cloud edge (first obstacle in reversion direction)
@@ -479,12 +615,54 @@ const PATTERNS = {
       }
       target = Math.round(target * 100) / 100;
 
+      const trailingAnchor = result.tenkan ?? null;
       return {
         matched: true,
         ...result,
         sl, target,
         atr: atr != null ? Math.round(atr * 100) / 100 : null,
-        targetSource,
+        targetSource, trailingAnchor,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
+    },
+  },
+
+  'kumo-senkou-cross': {
+    id:          'kumo-senkou-cross',
+    label:       'Senkou Cross Confirmation',
+    description: 'Cloud color changed (Senkou A/B cross) within the last 5 bars while price was already outside the cloud — triple confirmation: current trend, future cloud just aligned, momentum agrees.',
+    maxScore:    5,
+    // lookback:5 — the twist must be fresh. A 5-bar-old twist on a 1h chart is
+    // 5 hours old; on a 4h chart it's 20 hours. Both are still "fresh" structurally.
+    // minCloudWidthPct:0.003 — 0.3% minimum cloud width to skip razor-thin twist noise.
+    defaultOpts: { lookback: 5, minCloudWidthPct: 0.003 },
+
+    run(candles, opts = {}) {
+      const result = getSenkouCross(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+
+      // Minimum score of 2 — twist alone (score 1) is not enough.
+      // We require at least one additional factor: fat cloud, TK alignment,
+      // Kijun slope, or price vs Kijun.  This eliminates marginal thin-cloud
+      // twists in choppy markets.
+      if (result.score < 2) return { matched: false };
+
+      // TK alignment hard filter — same as all other active patterns.
+      // A twist on a misaligned TK means the fast line is fighting the signal.
+      if (!_tkAligned(result)) return { matched: false };
+
+      const { sl, target, atr, targetSource } = computeSLTarget(
+        this.id, result.signal, result, candles, opts.interval,
+      );
+
+      // Trailing anchor = Tenkan (fast line; cloud is too far below to trail on)
+      const trailingAnchor = result.tenkan ?? null;
+
+      return {
+        matched: true,
+        ...result,
+        sl, target, atr, targetSource, trailingAnchor,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };
@@ -575,11 +753,13 @@ const PATTERNS = {
  * serialise and send to the client for the dropdown.
  */
 function list() {
-  return Object.values(PATTERNS).map(({ id, label, description, defaultOpts }) => ({
+  return Object.values(PATTERNS).map(({ id, label, description, defaultOpts, maxScore }) => ({
     id,
     label,
     description,
     defaultOpts,
+    // R13: maxScore enables normalized cross-pattern comparison: score/maxScore
+    maxScore: maxScore ?? 5,
   }));
 }
 
