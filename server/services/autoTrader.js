@@ -39,9 +39,11 @@ const { getSignals: ichimokuGetSignals, to4H } = require('./ichimoku');
 
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
-// "token:interval:patternId:signal" → IST date string (YYYY-MM-DD)
-// Prevents the same setup from re-firing within the same trading day.
-const _dedup = new Map();
+// Tokens currently being processed (async LTP fetch in flight).
+// Prevents a race where two alerts arrive simultaneously and both pass
+// the no-stacking check before either has created a trade.
+// Cleared immediately after the trade is placed (or skipped).
+const _processing = new Set(); // numToken
 
 // ── MTF alert cache ──────────────────────────────────────────────────────────
 // Stores the most recent alert per (token, signal, interval) for today.
@@ -54,10 +56,6 @@ const TF_RANK = { '1d': 4, 'day': 4, '4h': 3, '1h': 2, '60minute': 2, '15m': 1, 
 function _labelToInterval(tfLabel) {
   const map = { '15m': '15minute', '1h': '60minute', '4h': '4h', '1d': 'day' };
   return map[tfLabel] ?? tfLabel;
-}
-
-function _istDateStr() {
-  return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 // ── Market bias gate (NIFTY multi-TF consensus) ─────────────────────────────
@@ -363,31 +361,28 @@ async function _onAlert(alert, source) {
     }
   }
 
-  // ── 3. Dedup — once per (token, interval, signal) per IST day ───────────
-  // patternId is intentionally excluded from the key: if two different patterns
-  // both fire on the same stock+TF+direction (e.g. kumo-breakout + kijun-bounce
-  // on the same 15m bullish bar), only the FIRST one places an order.
-  const today    = _istDateStr();
-  const dedupKey = `${numToken}:${interval}:${signal}`;
-  const lastFired = _dedup.get(dedupKey);
-  if (lastFired && lastFired === today) {
-    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel} ${signal}) — already traded this direction today`);
-    return;
-  }
-
-  // ── 4. No stacking — block if OPEN or PENDING trade exists on same TF ───
-  // PENDING orders count too: a triggered-entry order that hasn't filled yet
-  // still represents an open position intention for this (token, interval).
+  // ── 3. No stacking — block if ANY open/pending trade exists for this token
+  // Same stock cannot have two simultaneous positions regardless of timeframe.
+  // Re-entry is allowed naturally once the trade closes (SL / target / manual).
   const alreadyActive = store.getPaperTrades().some(
     (t) =>
       (t.status === 'OPEN' || t.status === 'PENDING') &&
-      Number(t.token) === numToken &&
-      t.interval === interval,
+      Number(t.token) === numToken,
   );
   if (alreadyActive) {
-    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open/pending trade already exists on this TF`);
+    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open/pending trade already exists for this stock`);
     return;
   }
+
+  // ── 4. Race guard — claim the slot before async LTP fetch ───────────────
+  // Prevents two alerts arriving in the same millisecond from both passing
+  // the no-stacking check before either has created a trade.
+  // Slot is always released below (trade placed or skipped).
+  if (_processing.has(numToken)) {
+    console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — concurrent signal ignored`);
+    return;
+  }
+  _processing.add(numToken);
 
   // ── 4.5 MTF confluence — use the largest timeframe's SL/target/entry ─────
   let usedEntry  = entry;
@@ -451,6 +446,7 @@ async function _onAlert(alert, source) {
       `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) [${tradeExchange}] — ` +
       `skipped: profit≈₹${potential} < minProfit ₹${settings.minProfit}`,
     );
+    _processing.delete(numToken);
     return;
   }
 
@@ -493,6 +489,7 @@ async function _onAlert(alert, source) {
       `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — ` +
       `skipped: could not fetch live price, refusing to enter at stale close ₹${patternClose}`,
     );
+    _processing.delete(numToken);
     return;
   }
 
@@ -513,6 +510,7 @@ async function _onAlert(alert, source) {
       `[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) [${tradeExchange}] — ` +
       `skipped: profit≈₹${potential} < minProfit ₹${settings.minProfit}`,
     );
+    _processing.delete(numToken);
     return;
   }
 
@@ -527,13 +525,11 @@ async function _onAlert(alert, source) {
       `[AutoTrader] ⏭  ${alert.label ?? token} — insufficient balance ` +
       `(need ₹${_round2(cost)}, have ₹${_round2(balance.available)})`,
     );
+    _processing.delete(numToken);
     return;
   }
 
-  // ── 8. Claim the dedup slot ───────────────────────────────────────────────
-  _dedup.set(dedupKey, today);
-
-  // ── 9. Build trade object ─────────────────────────────────────────────────
+  // ── 8. Build trade object ─────────────────────────────────────────────────
   // status = PENDING when price has gapped; OPEN for direct entry.
   // A PENDING trade activates in tradeWatcher when price returns to triggerPrice.
   const tradeStatus  = hasGap ? 'PENDING' : 'OPEN';
@@ -595,6 +591,10 @@ async function _onAlert(alert, source) {
   };
 
   // ── 10. Persist + broadcast ───────────────────────────────────────────────
+  // Release the race-guard slot — trade is now in the store, so the
+  // no-stacking check will block any concurrent duplicates from here on.
+  _processing.delete(numToken);
+
   store.addPaperTrade(trade);
   broadcast('paper_trade', trade);
   broadcast('paper_balance', store.getPaperBalance());
@@ -662,10 +662,9 @@ function stop() {
  * Useful after a manual reset so alerts can re-fire immediately.
  */
 function clearDedup() {
-  const count = _dedup.size;
-  _dedup.clear();
+  _processing.clear();
   _alertCache.clear();
-  return count;
+  return 0;
 }
 
 module.exports = { start, stop, clearDedup };

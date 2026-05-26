@@ -21,8 +21,9 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 // ── State ───────────────────────────────────────────────────────────────────
 
 let _tickTimer = null;
-// Dedup: prevent stacking — one open trade per (token, interval)
-const _openKeys = new Set(); // "token:interval"
+// Dedup: one open trade per token — same strike can't be entered again
+// from a different timeframe or pattern while a trade is already open.
+const _openKeys = new Set(); // token (Number)
 
 // ── Signal handler (called by scanner) ──────────────────────────────────────
 
@@ -34,8 +35,8 @@ function onSignal(signal) {
   const { token, interval, close, sl, target, signal: direction } = signal;
   if (!close || !sl || !target || !token || !direction) return;
 
-  // No stacking: one open trade per token:interval
-  const stackKey = `${token}:${interval}`;
+  // No stacking: one open trade per token (across all patterns + timeframes)
+  const stackKey = Number(token);
   if (_openKeys.has(stackKey)) return;
 
   // R:R check
@@ -162,8 +163,7 @@ function _checkTrades() {
     if (exitPrice && exitReason) {
       const closedTrade = tradeStore.closeTrade(trade.id, exitPrice, exitReason);
       if (closedTrade) {
-        const stackKey = `${trade.token}:${trade.interval}`;
-        _openKeys.delete(stackKey);
+        _openKeys.delete(Number(trade.token));
 
         console.log(
           `[IdxOrder] ${exitReason === 'target' ? '🎯' : '🛑'} ` +
@@ -193,10 +193,10 @@ function _checkTrades() {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 function start() {
-  // Rebuild _openKeys from existing open trades
+  // Rebuild _openKeys from existing open trades (survives server restart)
   const openTrades = tradeStore.getOpenTrades();
   for (const t of openTrades) {
-    _openKeys.add(`${t.token}:${t.interval}`);
+    _openKeys.add(Number(t.token));
   }
 
   _tickTimer = setInterval(_checkTrades, TICK_POLL_MS);
