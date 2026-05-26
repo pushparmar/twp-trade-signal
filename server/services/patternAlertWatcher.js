@@ -179,6 +179,11 @@ async function _runAndAlert(token, interval, candles) {
   const tfLabel = TF_LABEL[interval] || interval;
 
   for (const { id: patternId, label: patternLabel } of patternRegistry.list()) {
+    // ── Config gate: respect Settings UI — skip if scan disabled ─────────
+    // Same check as backgroundScanner.js line 441. Without this, disabling
+    // a pattern+interval in the UI had no effect on patternAlertWatcher.
+    if (!store.isPatternEnabled(patternId, interval, 'scan')) continue;
+
     const pattern = patternRegistry.get(patternId);
 
     let result;
@@ -245,11 +250,11 @@ async function _runAndAlert(token, interval, candles) {
     const kind = (Number(token) === 256265 || Number(token) === 260105) ? 'index' : 'macro';
     const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind });
 
-    // Gate Telegram on chatId + exchange hours:
+    // Gate Telegram on chatId + exchange hours + alert channel config:
     //   MCX (Crude/Gold/Silver) → isMcxOpen()  [09:00–23:30 IST]
     //   NSE / VIX / CDS         → isNseOpen()  [09:00–15:30 IST]
     // SSE broadcast below always fires so the Scanner UI stays live.
-    if (chatId) {
+    if (chatId && store.isPatternEnabled(patternId, interval, 'alert')) {
       const mktOpen = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
       if (mktOpen) {
         try {
