@@ -80,6 +80,11 @@ router.get('/option-chain', (_req, res) => {
   res.json(strikeManager.getOptionChain());
 });
 
+// GET /api/index-trade/alerts — recent scan alerts (survives page refresh)
+router.get('/alerts', (_req, res) => {
+  res.json(scanner.getAlertHistory());
+});
+
 // POST /api/index-trade/clear-dedup
 router.post('/clear-dedup', (_req, res) => {
   scanner.clearDedup();

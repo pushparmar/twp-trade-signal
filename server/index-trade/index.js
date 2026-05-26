@@ -12,11 +12,12 @@
  *   // on shutdown: indexTrade.stop();
  */
 
-const router        = require('./routes');
-const strikeManager = require('./strikeManager');
-const scanner       = require('./scanner');
-const orderManager  = require('./orderManager');
-const tradeStore    = require('./tradeStore');
+const router            = require('./routes');
+const strikeManager     = require('./strikeManager');
+const scanner           = require('./scanner');
+const orderManager      = require('./orderManager');
+const priceBroadcaster  = require('./priceBroadcaster');
+const tradeStore        = require('./tradeStore');
 
 async function start() {
   // Create MongoDB indexes + restore open trades
@@ -24,14 +25,16 @@ async function start() {
   await tradeStore.restore();
 
   // Start sub-modules
-  strikeManager.start();   // resolves ATM strikes, subscribes ticker tokens
-  scanner.start();         // polls for candle closes, runs patterns
-  orderManager.start();    // monitors SL/Target/TSL per-tick
+  strikeManager.start();    // resolves ATM strikes, subscribes ticker tokens
+  scanner.start();          // polls for candle closes, runs 3 patterns on 1m/5m/15m
+  orderManager.start();     // monitors SL/Target/TSL per-tick, places paper orders
+  priceBroadcaster.start(); // pushes option chain prices via SSE every 3s
 
   console.log('[IndexTrade] Module started');
 }
 
 function stop() {
+  priceBroadcaster.stop();
   orderManager.stop();
   scanner.stop();
   strikeManager.stop();

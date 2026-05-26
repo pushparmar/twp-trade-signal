@@ -40,7 +40,7 @@ function fmtDate(ts) {
 
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
-function StatusBar({ status, config, onToggle, onRefreshStrikes }) {
+function StatusBar({ status, config, onToggle, onRefreshStrikes, sseConnected }) {
   const [refreshing, setRefreshing] = useState(false);
 
   if (!status) return <div className="settings-group"><p className="diag-hint">Loading status…</p></div>;
@@ -72,6 +72,12 @@ function StatusBar({ status, config, onToggle, onRefreshStrikes }) {
               {scannerStats.tokenCount} instruments · {scannerStats.matchCount} matches
             </span>
           )}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
+            color: sseConnected ? '#51cf66' : '#ff6b6b' }}>
+            <span style={{ width: 7, height: 7, borderRadius: '50%',
+              background: sseConnected ? '#51cf66' : '#ff6b6b', display: 'inline-block' }} />
+            {sseConnected ? 'Live' : 'Reconnecting…'}
+          </span>
           {!hasStrikes && (
             <span style={{ fontSize: 12, color: '#ff6b6b' }}>
               ⚠ No strikes — Kite session may have expired
@@ -490,7 +496,7 @@ function OptionChainIndex({ indexName, data }) {
 export default function IndexTradePage() {
   const {
     openTrades, todayClosed,
-    tradeTicks, optionChain, status, config, pnl, alerts,
+    tradeTicks, optionChain, sseConnected, status, config, pnl, alerts,
     updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes,
   } = useIndexTrade();
 
@@ -512,7 +518,7 @@ export default function IndexTradePage() {
       </div>
 
       <div className="settings-panel">
-        <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} />
+        <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} />

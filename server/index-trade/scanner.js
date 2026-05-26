@@ -29,6 +29,8 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 const _lastCandleCount = new Map(); // "token:interval" → candle count
 const _dedup = new Map();           // "token:interval:patternId:signal" → IST date string
+const _alertHistory = [];           // last 100 alerts in-memory for page refresh
+const MAX_HISTORY = 100;
 let _pollTimer = null;
 let _scanCount = 0;
 let _matchCount = 0;
@@ -112,6 +114,10 @@ function _scan(token, interval) {
         `entry=${result.close} sl=${result.sl} target=${result.target}`,
       );
 
+      // Store in history so page refresh can fetch missed alerts
+      _alertHistory.unshift(signalPayload);
+      if (_alertHistory.length > MAX_HISTORY) _alertHistory.length = MAX_HISTORY;
+
       // Broadcast to UI
       broadcast('idx_scan_alert', signalPayload);
 
@@ -192,4 +198,8 @@ function clearDedup() {
   _lastCandleCount.clear();
 }
 
-module.exports = { start, stop, getStats, clearDedup };
+function getAlertHistory() {
+  return _alertHistory;
+}
+
+module.exports = { start, stop, getStats, clearDedup, getAlertHistory };
