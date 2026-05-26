@@ -158,6 +158,17 @@ function _checkLowPremiumEntry() {
     const config = tradeStore.getConfig();
     if (!config.enabled || !config.lowPremiumEnabled) return;
 
+    // Sanity check: target must be strictly above the entry range.
+    // If an old/corrupt MongoDB config has lpTarget ≤ lpEntryMax, every "target"
+    // exit would produce a negative PnL — block all entries until the user fixes it.
+    if (config.lpTarget <= config.lpEntryMax) {
+        console.warn(
+            `[IdxOrder] ⚠ LP config invalid: lpTarget (${config.lpTarget}) ≤ lpEntryMax (${config.lpEntryMax})` +
+            ` — LP entries blocked until config is corrected`,
+        );
+        return;
+    }
+
     // Count currently open LP positions — cap at lpMaxPositions
     const openLpCount = tradeStore.getOpenTrades()
         .filter(t => t.strategyType === 'low-premium').length;
@@ -316,7 +327,12 @@ function _handleLowPremiumTSL(trade, ltp) {
 
     // ── TSL Phase 2: trail SL upward as peak rises ─────────────────────────
     if (trade.tslActivated) {
-        const trailedSl = Math.round(trade.peakPrice * config.lpTslTrailPct * 100) / 100;
+        // Cap at (target - 0.01) so that a high trail% can never push SL above
+        // target — which would cause a TSL exit at a price below entry (negative PnL).
+        const trailedSl = Math.min(
+            Math.round(trade.peakPrice * config.lpTslTrailPct * 100) / 100,
+            trade.target - 0.01,
+        );
         if (trailedSl > trade.sl) {
             tradeStore.updateTrade(trade.id, { sl: trailedSl });
             trade.sl = trailedSl;

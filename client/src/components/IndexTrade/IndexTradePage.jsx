@@ -599,6 +599,21 @@ function LowPremiumConfig({ config, onUpdate }) {
             </label>
           </div>
 
+          {/* Config sanity warning — shown when target ≤ entry max */}
+          {lp.lpTarget <= lp.lpEntryMax && (
+            <div style={{
+              padding: '8px 12px', marginBottom: 16,
+              background: 'rgba(255, 107, 107, 0.12)',
+              border: '1px solid rgba(255, 107, 107, 0.4)',
+              borderRadius: 6, fontSize: 11, color: '#ff6b6b',
+            }}>
+              ⚠️ <strong>Invalid config:</strong> Hard Target (₹{lp.lpTarget}) must be
+              strictly above Entry Max (₹{lp.lpEntryMax}). LP entries are{' '}
+              <strong>blocked</strong> until this is corrected — otherwise target hits
+              produce negative PnL.
+            </div>
+          )}
+
           {/* ── Entry ── */}
           <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             Entry
