@@ -193,6 +193,7 @@ app.listen(PORT, async () => {
     // MongoDB is source of truth — overrides config.json so the pattern
     // enable/disable settings survive Railway redeploys.
     await store.loadPatternConfigFromMongo();
+    await store.loadQualityScoreConfigFromMongo();
 
     // ── Backfill: any trades already in memory but not yet in MongoDB ───────
     // Covers the race where a trade was placed during the brief window

@@ -27,6 +27,7 @@ const patternAlertMessage = require('./patternAlertMessage');
 const { isNseOpen, isMcxOpen, IST_OFFSET_MS } = require('../utils/marketHours');
 const db             = require('../db');
 const alertBus       = require('./alertBus');
+const signalScorer   = require('./signalScorer');
 
 // Lazy-required to keep the same circular-dep pattern used in macroWatcher.
 const { getFrontMonthFutures } = require('./macroAnalysis');
@@ -188,7 +189,8 @@ async function _runAndAlert(token, interval, candles) {
 
     let result;
     try {
-      result = pattern.run(candles, pattern.defaultOpts);
+      // F11: Pass interval so _naturalTarget lookback scales with TF
+      result = pattern.run(candles, { ...pattern.defaultOpts, interval });
     } catch {
       continue; // bad candle data — skip silently
     }
@@ -200,6 +202,18 @@ async function _runAndAlert(token, interval, candles) {
       // the alert to re-fire on the next candle, producing a Telegram
       // message every 15 min. The dedup resets at midnight IST so a
       // genuine new setup on the next trading day always fires correctly.
+      continue;
+    }
+
+    // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
+    const qCfg = store.getQualityScoreConfig();
+    const { qualityScore, setupGrade, scoreBreakdown } = qCfg.enabled
+      ? signalScorer.compute(token, candles, result, interval, qCfg, patternId)
+      : { qualityScore: null, setupGrade: null, scoreBreakdown: null };
+
+    // Scan gate: skip if quality too low — NOT marked in dedup
+    if (qCfg.enabled && qCfg.scanGateEnabled && qualityScore !== null && qualityScore < qCfg.minQualityScore) {
+      console.log(`[PatternAlert] ⏭ Quality: ${label} ${patternId} (${tfLabel}) score=${qualityScore} (${setupGrade}) < min ${qCfg.minQualityScore}`);
       continue;
     }
 
@@ -236,6 +250,14 @@ async function _runAndAlert(token, interval, candles) {
       alignedTfs:      [],
       confluenceTfs:   [],
       confluenceCount: 1,
+      // Quality score (0–10)
+      qualityScore,
+      setupGrade,
+      scoreBreakdown,
+      // R12: Trailing anchor suggestion for TSL
+      trailingAnchor:  result.trailingAnchor ?? null,
+      // R13: Normalized score for cross-pattern comparison
+      normalizedScore: result.score != null ? +(result.score / (patternRegistry.get(patternId)?.maxScore ?? 5)).toFixed(2) : null,
       ts:              Date.now(),
     };
 
@@ -250,11 +272,15 @@ async function _runAndAlert(token, interval, candles) {
     const kind = (Number(token) === 256265 || Number(token) === 260105) ? 'index' : 'macro';
     const text = patternAlertMessage.build({ label, tfLabel, patternLabel, result, kind });
 
+    // Quality score alert gate — block Telegram when quality too low
+    const qualityAlertBlocked = qCfg.enabled && qCfg.alertGateEnabled
+      && qualityScore !== null && qualityScore < qCfg.minQualityScore;
+
     // Gate Telegram on chatId + exchange hours + alert channel config:
     //   MCX (Crude/Gold/Silver) → isMcxOpen()  [09:00–23:30 IST]
     //   NSE / VIX / CDS         → isNseOpen()  [09:00–15:30 IST]
     // SSE broadcast below always fires so the Scanner UI stays live.
-    if (chatId && store.isPatternEnabled(patternId, interval, 'alert')) {
+    if (chatId && !qualityAlertBlocked && store.isPatternEnabled(patternId, interval, 'alert')) {
       const mktOpen = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
       if (mktOpen) {
         try {

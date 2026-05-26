@@ -497,6 +497,60 @@ function setTradeKiteOrderIds(id, fields) {
     _saveTrades();
 }
 
+// ── Quality Score Config (persisted) ─────────────────────────────────────────
+// Controls the 0–10 quality score gate for scan/alert/order channels.
+
+const QUALITY_SCORE_DEFAULTS = {
+    enabled:          false,   // master toggle
+    minQualityScore:  5,       // <5 = skip (C setup)
+    aSetupMinScore:   7,       // ≥7 = A setup
+    scanGateEnabled:  true,    // gate SSE scan feed
+    alertGateEnabled: true,    // gate Telegram alerts
+    orderGateEnabled: true,    // gate auto-trader orders
+    // RSI ideal zone ranges (reused by signalScorer factor 5)
+    rsiBullishMin:    50,
+    rsiBullishMax:    65,
+    rsiBearishMin:    35,
+    rsiBearishMax:    50,
+};
+
+function getQualityScoreConfig() {
+    const config = readConfig();
+    return { ...QUALITY_SCORE_DEFAULTS, ...(config.qualityScore ?? {}) };
+}
+
+function setQualityScoreConfig(updates) {
+    const config = readConfig();
+    config.qualityScore = { ...getQualityScoreConfig(), ...updates };
+    writeConfig(config);
+    // Persist to MongoDB so config survives Railway redeploys
+    try {
+        const db = require('./db');
+        if (db.settingsRepo) {
+            db.settingsRepo.set('qualityScore', config.qualityScore).catch(() => {});
+        }
+    } catch { /* DB not initialized yet — skip */ }
+    return config.qualityScore;
+}
+
+async function loadQualityScoreConfigFromMongo() {
+    try {
+        const db = require('./db');
+        const mongoConfig = await db.settingsRepo.get('qualityScore');
+        if (mongoConfig && typeof mongoConfig === 'object') {
+            const config = readConfig();
+            config.qualityScore = mongoConfig;
+            writeConfig(config);
+            console.log('[store] Loaded qualityScore config from MongoDB');
+            return true;
+        }
+        return false;
+    } catch (err) {
+        console.warn('[store] loadQualityScoreConfigFromMongo failed:', err.message);
+        return false;
+    }
+}
+
 module.exports = {
     getConfig,
     setAccessToken,
@@ -533,5 +587,8 @@ module.exports = {
     getPatternConfig,
     setPatternConfig,
     isPatternEnabled,
-    loadPatternConfigFromMongo
+    loadPatternConfigFromMongo,
+    getQualityScoreConfig,
+    setQualityScoreConfig,
+    loadQualityScoreConfigFromMongo,
 };

@@ -1138,6 +1138,16 @@ function getKijunLevel(candles, { lookback = 3, tolerance = 0.003 } = {}) {
   const signal       = currentlyAbove ? 'bullish' : 'bearish';
   const cloudPosition = _cloudPos(last);
 
+  // ── Kijun slope direction (R6) ────────────────────────────────────────────
+  // Flat or rising Kijun for bullish = ideal. Falling Kijun on bullish bounce
+  // means baseline is weakening — trade is fighting momentum.
+  const KIJUN_SLOPE_LB = 5;
+  const kijunPrevIdx   = Math.max(0, n - 1 - KIJUN_SLOPE_LB);
+  const kijunPrev      = results[kijunPrevIdx].kijun;
+  const kijunSlopeOk   = kijunPrev != null
+    ? (signal === 'bullish' ? last.kijun >= kijunPrev : last.kijun <= kijunPrev)
+    : true; // fail-open when data unavailable
+
   // Score: extra confirming conditions at the current bar.
   const price26ago = n >= 27 ? candles[n - 1 - 26].close : null;
   function _score() {
@@ -1176,6 +1186,7 @@ function getKijunLevel(candles, { lookback = 3, tolerance = 0.003 } = {}) {
         crossType:     'Kijun Level',
         strength:      _crossStrength('bullish', cloudPosition),
         cloudPosition,
+        kijunSlopeOk,
         score:         _score(),
         close:         last.close,
         kijunValue:    round(last.kijun),
@@ -1198,6 +1209,7 @@ function getKijunLevel(candles, { lookback = 3, tolerance = 0.003 } = {}) {
         crossType:     'Kijun Level',
         strength:      _crossStrength('bearish', cloudPosition),
         cloudPosition,
+        kijunSlopeOk,
         score:         _score(),
         close:         last.close,
         kijunValue:    round(last.kijun),
@@ -1336,6 +1348,28 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
     }
   }
 
+  // ── Entry trigger check ───────────────────────────────────────────────────
+  // Cloud-support is a trend condition, not a standalone entry event.
+  // Require a pullback toward the cloud edge in the last 3 bars to confirm
+  // "something happened NOW":
+  //   Bullish: at least one of the last 3 bars' low touched or dipped toward cloudTop
+  //   Bearish: at least one of the last 3 bars' high reached toward cloudBottom
+  // "Near" = within 0.5% of the cloud edge.
+  const ENTRY_LOOKBACK = 3;
+  let hasEntryTrigger = false;
+  for (let k = 0; k < ENTRY_LOOKBACK && (n - 1 - k) >= 0; k++) {
+    const bar = results[n - 1 - k];
+    if (bar.cloudTop == null || bar.cloudBottom == null) continue;
+    const nearPct = 0.005;
+    if (isBullish) {
+      // Low dipped near the cloud top (support test)
+      if (bar.low <= bar.cloudTop * (1 + nearPct)) hasEntryTrigger = true;
+    } else {
+      // High reached near the cloud bottom (resistance test)
+      if (bar.high >= bar.cloudBottom * (1 - nearPct)) hasEntryTrigger = true;
+    }
+  }
+
   // Cloud color should agree: green (senkouA > senkouB) for bullish, red for bearish
   const cloudColorAgrees = isBullish
     ? (last.senkouA != null && last.senkouB != null && last.senkouA > last.senkouB)
@@ -1351,6 +1385,20 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
   const chikouAgrees = chikouIdx >= 0
     ? (isBullish ? last.close > results[chikouIdx].close : last.close < results[chikouIdx].close)
     : false;
+
+  // ── Flat Senkou B detection (R1) ──────────────────────────────────────────
+  // Flat Senkou B = price magnet zone. When Senkou B hasn't moved for 5+ bars,
+  // the cloud edge is a strong attractor level.
+  let flatSenkouB = false;
+  if (n >= 6 && last.senkouB != null) {
+    flatSenkouB = true;
+    for (let f = n - 2; f >= n - 6 && f >= 0; f--) {
+      if (results[f].senkouB == null || Math.abs(results[f].senkouB - last.senkouB) > 0.01) {
+        flatSenkouB = false;
+        break;
+      }
+    }
+  }
 
   // Build score
   let score = 1; // price is above/below cloud (already confirmed)
@@ -1371,6 +1419,8 @@ function getCloudSupport(candles, { minBars = 3 } = {}) {
     cloudThickness,
     cloudPosition: isBullish ? 'above' : 'below',
     strength:      _crossStrength(signal, isBullish ? 'above' : 'below'),
+    hasEntryTrigger,
+    flatSenkouB,
     close:         last.close,
     cloudTop:      last.cloudTop  != null ? round(last.cloudTop)    : null,
     cloudBottom:   last.cloudBottom != null ? round(last.cloudBottom) : null,
@@ -2282,8 +2332,8 @@ function getTKReversion(candles, opts = {}) {
     if (bodyRatio >= 0.5) score++;
 
     // Cloud agreement: reversion toward cloud adds conviction
-    if (signal === 'bearish' && curr.aboveCloud) score = Math.min(score + 0, 5); // already above, room to fall
-    if (signal === 'bullish' && curr.belowCloud) score = Math.min(score + 0, 5);
+    if (signal === 'bearish' && curr.aboveCloud) score = Math.min(score + 1, 5); // above cloud, room to fall
+    if (signal === 'bullish' && curr.belowCloud) score = Math.min(score + 1, 5); // below cloud, room to rise
 
     score = Math.min(score, 5);
     const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
@@ -2314,6 +2364,172 @@ function getTKReversion(candles, opts = {}) {
   return null;
 }
 
+// ── Senkou Span Cross Confirmation ────────────────────────────────────────────
+
+/**
+ * Senkou Span Cross — the cloud color changes (Senkou A crosses Senkou B)
+ * within the last `lookback` bars WHILE price was ALREADY outside the cloud
+ * on the SAME side as the twist, and has not re-entered the cloud since.
+ *
+ * ── Why this is high-conviction ───────────────────────────────────────────────
+ * Three simultaneous Ichimoku confirmations:
+ *   1. CURRENT cloud:  price is above (bullish) / below (bearish) the cloud
+ *   2. FUTURE cloud:   just turned to agree with the trade direction
+ *                      (Senkou A/B cross = cloud 26 bars ahead now aligned)
+ *   3. MOMENTUM:       TK aligned + Kijun slope in signal direction
+ *
+ * Unlike kumo-breakout (price just crossed the cloud) or kumo-bounce (price
+ * tested the cloud edge), this fires when the CLOUD ITSELF catches up to
+ * confirm a move that price has already committed to.  Japanese institutional
+ * Ichimoku traders watch this as the highest structural confirmation signal.
+ *
+ * ── Conditions ────────────────────────────────────────────────────────────────
+ *   1. Senkou A/B cross occurred within last `lookback` bars (default 5)
+ *   2. Twist direction matches signal (bullish: A > B after being A < B)
+ *   3. Price is OUTSIDE the cloud on the SAME side at the current bar
+ *   4. Price has NOT re-entered the cloud at any bar since the twist
+ *   5. Cloud width ≥ minCloudWidthPct × close (filters noisy thin-cloud twists)
+ *
+ * ── Score (0–5) ───────────────────────────────────────────────────────────────
+ *   +1  twist found + price on correct side  (base)
+ *   +1  cloud width ≥ 0.5% of close  (meaningful structural barrier)
+ *   +1  TK aligned (Tenkan > Kijun for bullish, vice versa for bearish)
+ *   +1  Kijun sloping in signal direction over last 5 bars
+ *   +1  price on correct side of Kijun
+ *
+ * @param {object[]} candles
+ * @param {object}   [opts]
+ * @param {number}   [opts.lookback=5]            — max bars back to find the twist
+ * @param {number}   [opts.minCloudWidthPct=0.003] — min cloud width as fraction of close
+ * @returns {object|null}
+ */
+function getSenkouCross(candles, { lookback = 5, minCloudWidthPct = 0.003 } = {}) {
+  // Need at least 78 bars so senkouB is valid at the last position
+  // (senkouB at index n−1 requires bar n−1−26 = n−27 to have i ≥ 51)
+  if (!candles || candles.length < 78) return null;
+
+  const series = calculate(candles);
+  const n      = series.length;
+  const last   = series[n - 1];
+
+  if (!last) return null;
+
+  // Build the null-result shape used when the pattern doesn't fire
+  const _miss = (extra = {}) => ({
+    signal:       null,
+    twistBarsAgo: null,
+    close:        last.close,
+    cloudTop:     last.cloudTop    ?? null,
+    cloudBottom:  last.cloudBottom ?? null,
+    senkouA:      last.senkouA     ?? null,
+    senkouB:      last.senkouB     ?? null,
+    tenkan:       last.tenkan      ?? null,
+    kijun:        last.kijun       ?? null,
+    ...extra,
+  });
+
+  if (last.senkouA == null || last.senkouB == null) return _miss();
+  if (last.cloudTop == null || last.cloudBottom == null) return _miss();
+
+  // ── 1. Find most recent Senkou A/B cross within lookback ──────────────────
+  let twistBarsAgo = null;
+  let twistSignal  = null;
+
+  for (let offset = 1; offset <= lookback; offset++) {
+    const idx  = n - 1 - offset;
+    const idxP = idx - 1;
+    if (idxP < 0) break;
+
+    const cur  = series[idx];
+    const prev = series[idxP];
+    if (!cur || !prev) continue;
+    if (cur.senkouA  == null || cur.senkouB  == null) continue;
+    if (prev.senkouA == null || prev.senkouB == null) continue;
+
+    const prevBullish = prev.senkouA > prev.senkouB;
+    const curBullish  = cur.senkouA  > cur.senkouB;
+
+    if (!prevBullish && curBullish)  { twistSignal = 'bullish'; twistBarsAgo = offset; break; }
+    if (prevBullish  && !curBullish) { twistSignal = 'bearish'; twistBarsAgo = offset; break; }
+  }
+
+  if (!twistSignal) return _miss();
+
+  // ── 2. Price must be OUTSIDE the cloud on the SAME side as the twist ──────
+  const priceOnTwistSide = twistSignal === 'bullish' ? last.aboveCloud : last.belowCloud;
+  if (!priceOnTwistSide) return _miss({ twistBarsAgo });
+
+  // ── 3. Price must NOT have re-entered the cloud since the twist ────────────
+  // If price dipped into the cloud after the twist the setup is structurally
+  // broken — the cloud no longer acts as clean support/resistance.
+  for (let offset = 0; offset < twistBarsAgo; offset++) {
+    const checkIdx = n - 1 - offset;
+    if (checkIdx < 0) break;
+    const bar = series[checkIdx];
+    if (bar && bar.inCloud) return _miss({ twistBarsAgo }); // cloud re-entry = invalidated
+  }
+
+  // ── 4. Cloud width filter ─────────────────────────────────────────────────
+  const cloudWidth    = last.cloudTop - last.cloudBottom;
+  const cloudWidthPct = last.close > 0 ? cloudWidth / last.close : 0;
+  if (cloudWidthPct < minCloudWidthPct) return _miss({ twistBarsAgo });
+
+  // ── 5. Score ──────────────────────────────────────────────────────────────
+  let score = 1; // base: twist found + price on correct side
+
+  // +1 fat cloud (≥ 0.5% of close)
+  if (cloudWidthPct >= 0.005) score++;
+
+  // +1 TK aligned in signal direction
+  const tkAligned = last.tenkan != null && last.kijun != null && (
+    twistSignal === 'bullish' ? last.tenkan > last.kijun : last.tenkan < last.kijun
+  );
+  if (tkAligned) score++;
+
+  // +1 Kijun sloping in signal direction over last 5 bars
+  const KIJUN_LB  = 5;
+  const kijunPrev = series[Math.max(0, n - 1 - KIJUN_LB)]?.kijun ?? null;
+  const kijunNow  = last.kijun;
+  let   kijunSloping = false;
+  if (kijunPrev != null && kijunNow != null) {
+    kijunSloping = twistSignal === 'bullish'
+      ? kijunNow > kijunPrev
+      : kijunNow < kijunPrev;
+    if (kijunSloping) score++;
+  }
+
+  // +1 price on correct side of Kijun
+  let priceVsKijun = null;
+  if (last.kijun != null) {
+    priceVsKijun = last.close > last.kijun ? 'above' : 'below';
+    const kijunCorrect = priceVsKijun === (twistSignal === 'bullish' ? 'above' : 'below');
+    if (kijunCorrect) score++;
+  }
+
+  // ── 6. Cloud position label for downstream use ───────────────────────────
+  const cloudPosition = last.aboveCloud ? 'above' : last.belowCloud ? 'below' : 'inside';
+
+  return {
+    signal:        twistSignal,
+    matched:       true,
+    score:         Math.min(5, score),
+    twistBarsAgo,
+    cloudWidth:    Math.round(cloudWidth    * 100) / 100,
+    cloudWidthPct: Math.round(cloudWidthPct * 10000) / 100, // e.g. 0.72 means 0.72%
+    close:         last.close,
+    cloudTop:      last.cloudTop,
+    cloudBottom:   last.cloudBottom,
+    senkouA:       last.senkouA,
+    senkouB:       last.senkouB,
+    tenkan:        last.tenkan,
+    kijun:         last.kijun,
+    tkAligned,
+    kijunSloping,
+    priceVsKijun,
+    cloudPosition,
+  };
+}
+
 module.exports = {
   calculate,
   snapshot,
@@ -2339,4 +2555,5 @@ module.exports = {
   getCloudExit,
   getKijunRetest,
   getTKReversion,
+  getSenkouCross,
 };

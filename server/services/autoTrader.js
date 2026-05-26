@@ -37,6 +37,26 @@ const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 const candleStore     = require('./candleStore');
 const { getSignals: ichimokuGetSignals, to4H } = require('./ichimoku');
 
+// ── F5: Pattern-specific TSL trigger R-values ────────────────────────────────
+// Trend patterns (breakout, support, bounce) need 1.5R room before trailing
+// so the trade can develop.  Bounce/retest patterns already have confirmation
+// so the standard 1.0R works.  Reversion trades target a short move so a
+// tight 0.5R trigger locks in gains early.
+const PATTERN_TSL_TRIGGER = {
+  'kumo-breakout':      1.5,
+  'kumo-bounce':        1.5,
+  'cloud-support':      1.5,
+  'kumo-base-entry':    1.5,
+  'kumo-senkou-cross':  1.5,  // trend-continuation: give the trade room to develop
+  'kijun-bounce':       1.0,
+  'kijun-retest':       1.0,
+  'cloud-exit':         1.0,
+  'tk-reversion':       0.5,
+};
+function _patternTslTriggerR(patternId) {
+  return PATTERN_TSL_TRIGGER[patternId] ?? null; // null = use settings.tslTriggerR
+}
+
 // ── Dedup ─────────────────────────────────────────────────────────────────────
 
 // Tokens currently being processed (async LTP fetch in flight).
@@ -229,6 +249,29 @@ async function _onAlert(alert, source) {
 
   // ── 1.1  Pattern config gate — skip if order disabled for this pattern+interval
   if (!store.isPatternEnabled(alert.patternId, alert.interval, 'order')) return;
+
+  // ── 1.2  Quality score order gate — skip if quality too low
+  const qCfg = store.getQualityScoreConfig();
+  if (qCfg.enabled && qCfg.orderGateEnabled && alert.qualityScore != null) {
+    if (alert.qualityScore < qCfg.minQualityScore) {
+      console.log(
+        `[AutoTrader] ⏭  Quality gate: ${alert.label ?? alert.token} (${alert.tfLabel})` +
+        ` score=${alert.qualityScore} (${alert.setupGrade}) < min ${qCfg.minQualityScore} — skipped`,
+      );
+      return;
+    }
+  }
+
+  // ── 1.3  R10: Cloud-support requires quality 8+ for auto-trade
+  if (alert.patternId === 'cloud-support' && qCfg.enabled && alert.qualityScore != null) {
+    if (alert.qualityScore < 8) {
+      console.log(
+        `[AutoTrader] ⏭  cloud-support quality: ${alert.label ?? alert.token} (${alert.tfLabel})` +
+        ` score=${alert.qualityScore} < 8 — requires higher conviction for auto-trade`,
+      );
+      return;
+    }
+  }
 
   // ── 2. Required fields ───────────────────────────────────────────────────
   const entry    = alert.close;
@@ -566,6 +609,12 @@ async function _onAlert(alert, source) {
     // TSL state
     tslActivated:    false,
     peakPrice:       shareEntry,
+    // F4: trailingAnchor — Ichimoku structural level (Tenkan or Kijun) used as
+    // TSL floor so the trail doesn't drift below the current Ichimoku structure.
+    trailingAnchor:  alert.trailingAnchor ?? null,
+    // F5: Pattern-specific TSL trigger — trend patterns need more room (1.5R),
+    // bounce patterns use default (1.0R), reversion snaps tighter (0.5R).
+    tslTriggerR:     _patternTslTriggerR(patternId),
     pnl:             null,
     closedTs:        null,
     // Pattern context
