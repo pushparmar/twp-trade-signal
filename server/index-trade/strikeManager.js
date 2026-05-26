@@ -20,12 +20,19 @@ const INDICES = ['NIFTY', 'SENSEX'];
 const STRIKE_RANGE = 5;          // ATM ± 5
 const REFRESH_MS   = 5 * 60_000; // refresh every 5 minutes
 const SEED_INTERVALS = ['minute', '5minute', '15minute'];
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Morning reset fires at 9:20 IST — opening price has settled by then
+const MORNING_RESET_HOUR_IST   = 9;
+const MORNING_RESET_MINUTE_IST = 20;
 
 // ── State ───────────────────────────────────────────────────────────────────
 
 // { NIFTY: { atmStrike, ltp, instruments: Map<token, instrumentInfo> }, ... }
 const _subscriptions = new Map();
-let _refreshTimer = null;
+let _refreshTimer     = null;
+let _morningTimer     = null; // fires daily at 9:20 IST
+let _lastMorningReset = null; // IST date string of last reset e.g. '2026-05-26'
 let _allTokens = new Set(); // all currently subscribed tokens
 
 // ── Core logic ──────────────────────────────────────────────────────────────
@@ -132,15 +139,93 @@ async function _refresh() {
   }
 }
 
+/**
+ * Full morning reset — clears all existing subscriptions so ATM is
+ * re-resolved from scratch against today's opening price.
+ * Called once per trading day at 9:20 IST.
+ */
+async function _morningReset() {
+  const nowIST   = new Date(Date.now() + IST_OFFSET_MS);
+  const todayStr = nowIST.toISOString().slice(0, 10);
+  const dayOfWeek = nowIST.getDay(); // 0=Sun, 6=Sat
+
+  // Skip weekends and repeat calls on same day
+  if (dayOfWeek === 0 || dayOfWeek === 6) return;
+  if (_lastMorningReset === todayStr) return;
+  _lastMorningReset = todayStr;
+
+  console.log(`[IdxStrike] Morning reset ${todayStr} — clearing subscriptions and re-resolving ATM from opening price`);
+
+  // Unsubscribe all existing tokens first so _refreshIndex treats everything as new
+  const oldTokens = [..._allTokens];
+  if (oldTokens.length > 0) {
+    try { kiteTicker.unsubscribe(oldTokens); } catch { /* ignore */ }
+  }
+  _allTokens.clear();
+  _subscriptions.clear();
+
+  // Re-resolve from fresh opening LTP
+  if (!instrumentCache.isLoaded()) return;
+  for (const index of INDICES) {
+    await _refreshIndex(index);
+  }
+
+  // Also clear scanner dedup so patterns fire fresh on the new day
+  try {
+    const scanner = require('./scanner');
+    scanner.clearDedup();
+    console.log('[IdxStrike] Scanner dedup cleared for new trading day');
+  } catch { /* scanner may not be started yet */ }
+}
+
+/**
+ * Returns milliseconds until the next 9:20 IST on a weekday.
+ */
+function _msUntilMorningReset() {
+  const nowIST    = new Date(Date.now() + IST_OFFSET_MS);
+  const target    = new Date(nowIST);
+  target.setHours(MORNING_RESET_HOUR_IST, MORNING_RESET_MINUTE_IST, 0, 0);
+
+  // If we're already past 9:20 today, schedule for tomorrow
+  if (nowIST >= target) target.setDate(target.getDate() + 1);
+
+  // Skip to Monday if target falls on weekend
+  const day = target.getDay();
+  if (day === 0) target.setDate(target.getDate() + 1); // Sun → Mon
+  if (day === 6) target.setDate(target.getDate() + 2); // Sat → Mon
+
+  // Convert back: target is in IST, subtract offset to get UTC ms from now
+  const targetUtcMs = target.getTime() - IST_OFFSET_MS;
+  return Math.max(0, targetUtcMs - Date.now());
+}
+
+function _scheduleMorningReset() {
+  const msUntil = _msUntilMorningReset();
+  const hh = Math.floor(msUntil / 3_600_000);
+  const mm = Math.floor((msUntil % 3_600_000) / 60_000);
+  console.log(`[IdxStrike] Morning reset scheduled in ${hh}h ${mm}m (9:20 IST)`);
+
+  _morningTimer = setTimeout(() => {
+    _morningReset().catch(err => console.warn('[IdxStrike] Morning reset failed:', err.message));
+    // Re-schedule for the next day
+    _scheduleMorningReset();
+  }, msUntil);
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 function start() {
   // Initial refresh
   _refresh().catch(err => console.warn('[IdxStrike] Initial refresh failed:', err.message));
-  // Periodic refresh
+
+  // Periodic ATM shift refresh every 5 min
   _refreshTimer = setInterval(() => {
     _refresh().catch(err => console.warn('[IdxStrike] Refresh failed:', err.message));
   }, REFRESH_MS);
+
+  // Daily 9:20 IST morning reset — re-resolves ATM from opening price
+  _scheduleMorningReset();
+
   console.log('[IdxStrike] Strike manager started');
 }
 
@@ -148,6 +233,10 @@ function stop() {
   if (_refreshTimer) {
     clearInterval(_refreshTimer);
     _refreshTimer = null;
+  }
+  if (_morningTimer) {
+    clearTimeout(_morningTimer);
+    _morningTimer = null;
   }
   // Unsubscribe all tokens
   const tokens = [..._allTokens];
@@ -284,4 +373,4 @@ function getOptionChain() {
   return result;
 }
 
-module.exports = { start, stop, getStatus, getInstrumentByToken, getAllTokens, isOurToken, getOptionChain };
+module.exports = { start, stop, refresh: _refresh, getStatus, getInstrumentByToken, getAllTokens, isOurToken, getOptionChain };

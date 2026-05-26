@@ -80,6 +80,15 @@ export default function useIndexTrade() {
     } catch { /* ignore */ }
   }, [fetchPnl]);
 
+  const refreshStrikes = useCallback(async () => {
+    try {
+      await api.post('/index-trade/refresh-strikes');
+      // Reload status + option chain after strikes re-subscribe
+      fetchStatus();
+      fetchOptionChain();
+    } catch { /* ignore */ }
+  }, [fetchStatus, fetchOptionChain]);
+
   // ── SSE subscription ───────────────────────────────────────────────────
 
   useEffect(() => {
@@ -152,6 +161,6 @@ export default function useIndexTrade() {
     tradeTicks, optionChain,
     status, config, pnl, alerts,
     fetchTrades, fetchStatus, fetchConfig, fetchPnl, fetchOptionChain,
-    updateConfig, manualClose, clearTrades,
+    updateConfig, manualClose, clearTrades, refreshStrikes,
   };
 }

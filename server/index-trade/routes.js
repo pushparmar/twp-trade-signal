@@ -86,4 +86,14 @@ router.post('/clear-dedup', (_req, res) => {
   res.json({ ok: true });
 });
 
+// POST /api/index-trade/refresh-strikes — manually re-resolve ATM strikes + re-subscribe tokens
+router.post('/refresh-strikes', async (_req, res) => {
+  try {
+    await strikeManager.refresh();
+    res.json({ ok: true, subscriptions: strikeManager.getStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

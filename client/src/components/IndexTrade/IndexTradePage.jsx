@@ -40,16 +40,25 @@ function fmtDate(ts) {
 
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
-function StatusBar({ status, config, onToggle }) {
+function StatusBar({ status, config, onToggle, onRefreshStrikes }) {
+  const [refreshing, setRefreshing] = useState(false);
+
   if (!status) return <div className="settings-group"><p className="diag-hint">Loading status…</p></div>;
 
   const subs = status.subscriptions || {};
   const scannerStats = status.scanner || {};
+  const hasStrikes = Object.keys(subs).length > 0;
+
+  async function handleRefreshStrikes() {
+    setRefreshing(true);
+    await onRefreshStrikes();
+    setRefreshing(false);
+  }
 
   return (
     <div className="settings-group" style={{ padding: '12px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <div
             className={`conn-status-btn ${config?.enabled ? 'conn-status-btn--green' : 'conn-status-btn--red'}`}
             style={{ cursor: 'pointer' }}
@@ -63,13 +72,26 @@ function StatusBar({ status, config, onToggle }) {
               {scannerStats.tokenCount} instruments · {scannerStats.matchCount} matches
             </span>
           )}
+          {!hasStrikes && (
+            <span style={{ fontSize: 12, color: '#ff6b6b' }}>
+              ⚠ No strikes — Kite session may have expired
+            </span>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 16, fontSize: 12 }}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
           {Object.entries(subs).map(([index, data]) => (
             <span key={index} style={{ color: 'var(--text-muted)' }}>
               <strong>{index}</strong> ATM {data.atmStrike} · {data.tokenCount} strikes
             </span>
           ))}
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={handleRefreshStrikes}
+            disabled={refreshing}
+            style={{ fontSize: 11, padding: '2px 8px' }}
+          >
+            {refreshing ? '…' : '↻ Refresh Strikes'}
+          </button>
         </div>
       </div>
     </div>
@@ -469,7 +491,7 @@ export default function IndexTradePage() {
   const {
     openTrades, todayClosed,
     tradeTicks, optionChain, status, config, pnl, alerts,
-    updateConfig, manualClose, fetchStatus, fetchOptionChain,
+    updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes,
   } = useIndexTrade();
 
   function handleToggle() {
@@ -490,7 +512,7 @@ export default function IndexTradePage() {
       </div>
 
       <div className="settings-panel">
-        <StatusBar status={status} config={config} onToggle={handleToggle} />
+        <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} />
         <PnlSummary pnl={pnl} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} />

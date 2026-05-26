@@ -52,7 +52,13 @@ function onSignal(signal) {
   const inst = strikeManager.getInstrumentByToken(token);
   if (!inst) return;
 
-  const action = direction === 'bullish' ? 'BUY' : 'SELL';
+  // Index options — only BUY side. No selling options (requires margin/lot money).
+  // Bullish signal → BUY CE | Bearish signal → BUY PE
+  // Skip if the option type doesn't match the signal direction
+  if (direction === 'bullish' && inst.optionType !== 'CE') return;
+  if (direction === 'bearish' && inst.optionType !== 'PE') return;
+
+  const action = 'BUY'; // always BUY — never sell options
   const lotSize = inst.lotSize || 1;
   const quantity = config.lotQuantity || 1;
 
@@ -113,58 +119,45 @@ function _checkTrades() {
     const ltp = _getCurrentPrice(trade.token);
     if (!ltp) continue;
 
-    const isBuy = trade.action === 'BUY';
+    // All index option trades are BUY-only
+    const riskPerUnit = Math.abs(trade.entryPrice - trade.initialSl);
 
     // ── TSL: Trailing Stop Loss ─────────────────────────────────────────
-    if (config.tslEnabled) {
-      const riskPerUnit = Math.abs(trade.entryPrice - trade.initialSl);
-      if (riskPerUnit > 0) {
-        const unrealizedR = isBuy
-          ? (ltp - trade.entryPrice) / riskPerUnit
-          : (trade.entryPrice - ltp) / riskPerUnit;
+    if (config.tslEnabled && riskPerUnit > 0) {
+      const unrealizedR = (ltp - trade.entryPrice) / riskPerUnit;
 
-        // Update peak
-        const currentPeak = trade.peakPrice || trade.entryPrice;
-        const newPeak = isBuy ? Math.max(currentPeak, ltp) : Math.min(currentPeak, ltp);
-        if (newPeak !== currentPeak) {
-          tradeStore.updateTrade(trade.id, { peakPrice: newPeak });
-          trade.peakPrice = newPeak;
-        }
+      // Track peak (highest price reached)
+      const currentPeak = trade.peakPrice || trade.entryPrice;
+      const newPeak = Math.max(currentPeak, ltp);
+      if (newPeak !== currentPeak) {
+        tradeStore.updateTrade(trade.id, { peakPrice: newPeak });
+        trade.peakPrice = newPeak;
+      }
 
-        // Activate TSL when profit >= triggerR × risk
-        if (!trade.tslActivated && unrealizedR >= config.tslTriggerR) {
-          tradeStore.updateTrade(trade.id, { tslActivated: true });
-          trade.tslActivated = true;
-          console.log(`[IdxOrder] 🔒 TSL activated: ${trade.symbol} @${ltp} (${unrealizedR.toFixed(2)}R)`);
-        }
+      // Activate TSL when profit >= triggerR × risk
+      if (!trade.tslActivated && unrealizedR >= config.tslTriggerR) {
+        tradeStore.updateTrade(trade.id, { tslActivated: true });
+        trade.tslActivated = true;
+        console.log(`[IdxOrder] 🔒 TSL activated: ${trade.symbol} @${ltp} (${unrealizedR.toFixed(2)}R)`);
+      }
 
-        // Trail SL
-        if (trade.tslActivated) {
-          const trailDistance = config.tslDistanceR * riskPerUnit;
-          const trailedSl = isBuy
-            ? trade.peakPrice - trailDistance
-            : trade.peakPrice + trailDistance;
-          const currentSl = trade.sl;
-          const shouldUpdate = isBuy ? trailedSl > currentSl : trailedSl < currentSl;
-          if (shouldUpdate) {
-            tradeStore.updateTrade(trade.id, { sl: Math.round(trailedSl * 100) / 100 });
-            trade.sl = Math.round(trailedSl * 100) / 100;
-          }
+      // Trail SL upward only (BUY)
+      if (trade.tslActivated) {
+        const trailedSl = trade.peakPrice - (config.tslDistanceR * riskPerUnit);
+        if (trailedSl > trade.sl) {
+          tradeStore.updateTrade(trade.id, { sl: Math.round(trailedSl * 100) / 100 });
+          trade.sl = Math.round(trailedSl * 100) / 100;
         }
       }
     }
 
-    // ── Check exit conditions ───────────────────────────────────────────
+    // ── Check exit conditions (always BUY — options only) ──────────────
     let exitPrice = null;
     let exitReason = null;
 
-    if (isBuy) {
-      if (ltp <= trade.sl)     { exitPrice = trade.sl;     exitReason = trade.tslActivated ? 'tsl' : 'sl'; }
-      if (ltp >= trade.target) { exitPrice = trade.target;  exitReason = 'target'; }
-    } else {
-      if (ltp >= trade.sl)     { exitPrice = trade.sl;     exitReason = trade.tslActivated ? 'tsl' : 'sl'; }
-      if (ltp <= trade.target) { exitPrice = trade.target;  exitReason = 'target'; }
-    }
+    // BUY: exit when price drops to SL or rises to target
+    if (ltp <= trade.sl)     { exitPrice = trade.sl;     exitReason = trade.tslActivated ? 'tsl' : 'sl'; }
+    if (ltp >= trade.target) { exitPrice = trade.target;  exitReason = 'target'; }
 
     if (exitPrice && exitReason) {
       const closedTrade = tradeStore.closeTrade(trade.id, exitPrice, exitReason);
@@ -180,12 +173,10 @@ function _checkTrades() {
         broadcast('idx_trade_update', closedTrade);
       }
     } else {
-      // Broadcast live PnL update
+      // Broadcast live PnL update (BUY: profit when ltp > entry)
       const lotSize = trade.lotSize || 1;
       const qty = trade.quantity || 1;
-      const unrealizedPnl = isBuy
-        ? (ltp - trade.entryPrice) * qty * lotSize
-        : (trade.entryPrice - ltp) * qty * lotSize;
+      const unrealizedPnl = (ltp - trade.entryPrice) * qty * lotSize;
 
       broadcast('idx_trade_tick', {
         id: trade.id,
