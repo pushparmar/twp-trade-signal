@@ -12,6 +12,7 @@ const candleStore     = require('../services/candleStore');
 const patternRegistry = require('../services/patternRegistry');
 const { broadcast }   = require('../sseHub');
 const { isNseOpen }   = require('../utils/marketHours');
+const { getRSI }      = require('../services/ichimoku');
 
 const strikeManager = require('./strikeManager');
 const orderManager  = require('./orderManager');
@@ -69,6 +70,10 @@ function _scan(token, interval) {
   const inst = strikeManager.getInstrumentByToken(token);
   if (!inst) return;
 
+  // ── RSI — computed once per token:interval, shared across all patterns ───
+  const rsi14Raw = getRSI(candles, 14);
+  const rsi14    = rsi14Raw != null ? +rsi14Raw.toFixed(1) : null;
+
   for (const patternId of PATTERN_IDS) {
     const pattern = patternRegistry.get(patternId);
     if (!pattern) continue;
@@ -77,6 +82,23 @@ function _scan(token, interval) {
       const result = pattern.run(candles);
       if (!result || !result.matched) continue;
       if (!result.sl || !result.target || !result.close) continue;
+
+      // ── RSI scan/alert gate ────────────────────────────────────────────────
+      // Applied BEFORE dedup so a signal that fails RSI is not marked as seen —
+      // it will be reconsidered next candle if RSI moves into range.
+      const cfg = tradeStore.getConfig();
+      if (cfg.rsiFilterEnabled && cfg.rsiFilterScan && rsi14 != null) {
+        const isBullish = result.signal === 'bullish';
+        const rsiMin    = isBullish ? cfg.rsiBullishMin : cfg.rsiBearishMin;
+        const rsiMax    = isBullish ? cfg.rsiBullishMax : cfg.rsiBearishMax;
+        if (rsi14 < rsiMin || rsi14 > rsiMax) {
+          console.log(
+            `[IdxScanner] ⏭ RSI filter (scan): ${inst.tradingsymbol} ${interval} ` +
+            `RSI=${rsi14} outside [${rsiMin}–${rsiMax}] for ${result.signal} — skipped`,
+          );
+          continue;
+        }
+      }
 
       // Dedup — same pattern/signal/token/interval once per day
       if (_isDuplicate(token, interval, patternId, result.signal)) continue;
@@ -105,12 +127,13 @@ function _scan(token, interval) {
         target: result.target,
         atr: result.atr,
         targetSource: result.targetSource,
+        rsi14,   // included so order gate can read it without recomputing
         ts: Date.now(),
       };
 
       console.log(
         `[IdxScanner] ✅ ${inst.index} ${inst.tradingsymbol} ${tfLabel} ` +
-        `${patternId} ${result.signal} score=${result.score} ` +
+        `${patternId} ${result.signal} score=${result.score} RSI=${rsi14 ?? '—'} ` +
         `entry=${result.close} sl=${result.sl} target=${result.target}`,
       );
 

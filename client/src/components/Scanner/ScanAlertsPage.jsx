@@ -256,6 +256,21 @@ function ScanRow({ alert, onSelect, onBuy }) {
       <td className="scan-cell scan-cell--score">
         <ScoreDots score={alert.score} signal={alert.signal} patternId={alert.patternId} />
         <RRBadge entry={alert.close} sl={alert.sl} target={alert.target} targetSource={alert.targetSource} />
+        {alert.rsi14 != null && (
+          <span
+            style={{
+              display: 'inline-block', marginLeft: 4,
+              fontSize: 10, padding: '1px 4px', borderRadius: 3,
+              background: 'var(--bg-secondary)',
+              color: alert.rsi14 >= 50 ? '#51cf66' : '#ff6b6b',
+              border: '1px solid var(--border)',
+              whiteSpace: 'nowrap',
+            }}
+            title={`RSI(14) = ${alert.rsi14}`}
+          >
+            RSI {alert.rsi14}
+          </span>
+        )}
       </td>
       <td className="scan-cell scan-cell--price">{alert.close != null ? fmt(alert.close) : '—'}</td>
       <td className="scan-cell scan-cell--time">{relativeTime(alert.ts)}</td>
@@ -710,6 +725,7 @@ function FilterBar({
   dedup, onDedup,
   volOnly, onVolOnly, mtfOnly, onMtfOnly, minRR, onMinRR,
   exchange, onExchange,
+  rsiMin, onRsiMin, rsiMax, onRsiMax,
 }) {
   const SIGNALS    = ['all', 'bullish', 'bearish'];
   const INTERVALS  = ['all', '15minute', '60minute', '4h', 'day'];
@@ -811,6 +827,50 @@ function FilterBar({
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
+      </div>
+
+      {/* RSI range filter */}
+      <div className="scan-filter-group">
+        <span className="scan-filter-label">RSI</span>
+        <input
+          type="number"
+          min={0} max={100} step={1}
+          placeholder="Min"
+          value={rsiMin}
+          onChange={e => onRsiMin(e.target.value)}
+          style={{
+            width: 52, padding: '3px 5px', fontSize: 12,
+            background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+            border: `1px solid ${rsiMin !== '' ? '#4dabf7' : 'var(--border)'}`,
+            borderRadius: 4,
+          }}
+          title="Minimum RSI (14) — leave blank for no lower bound"
+        />
+        <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>–</span>
+        <input
+          type="number"
+          min={0} max={100} step={1}
+          placeholder="Max"
+          value={rsiMax}
+          onChange={e => onRsiMax(e.target.value)}
+          style={{
+            width: 52, padding: '3px 5px', fontSize: 12,
+            background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+            border: `1px solid ${rsiMax !== '' ? '#4dabf7' : 'var(--border)'}`,
+            borderRadius: 4,
+          }}
+          title="Maximum RSI (14) — leave blank for no upper bound"
+        />
+        {(rsiMin !== '' || rsiMax !== '') && (
+          <button
+            className="scan-filter-btn"
+            onClick={() => { onRsiMin(''); onRsiMax(''); }}
+            title="Clear RSI filter"
+            style={{ padding: '2px 6px', fontSize: 11 }}
+          >
+            ✕
+          </button>
+        )}
       </div>
 
       {/* Best-per-symbol dedup toggle */}
@@ -1302,6 +1362,9 @@ export default function ScanAlertsPage() {
   const [volOnly,        setVolOnly]        = useState(false);
   const [mtfOnly,        setMtfOnly]        = useState(false);
   const [minRR,          setMinRR]          = useState(0);
+  // RSI range filter — '' means no bound set
+  const [rsiMin,         setRsiMin]         = useState('');
+  const [rsiMax,         setRsiMax]         = useState('');
   // Exchange filter — 'all' | 'NSE' | 'MCX'.  UI-only: looks at alert.exchange
   // first and falls back to a label regex (CRUDE / GOLD / SILVER / etc. = MCX).
   const [exchangeFilter, setExchangeFilter] = useState('all');
@@ -1401,6 +1464,8 @@ export default function ScanAlertsPage() {
         alignedTfs:      m.alignedTfs     ?? [],
         confluenceTfs:   m.alignedTfs     ?? m.confluenceTfs ?? [],
         confluenceCount: (m.alignedTfs?.length ?? 0) + 1,
+        // Indicators
+        rsi14:           m.rsi14          ?? null,
         ts:              now,
         source:          'screener',
       });
@@ -1441,6 +1506,14 @@ export default function ScanAlertsPage() {
         const rr = Math.abs(a.target - a.close) / risk;
         if (rr < minRR)                                               return false;
       }
+      // RSI range filter — skip alert if rsi14 is outside the entered bounds
+      const lo = rsiMin !== '' ? Number(rsiMin) : null;
+      const hi = rsiMax !== '' ? Number(rsiMax) : null;
+      if (lo !== null || hi !== null) {
+        if (a.rsi14 == null)          return false; // no RSI data — hide when filter active
+        if (lo !== null && a.rsi14 < lo) return false;
+        if (hi !== null && a.rsi14 > hi) return false;
+      }
       return true;
     });
 
@@ -1464,7 +1537,7 @@ export default function ScanAlertsPage() {
     });
 
     return list;
-  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort, volOnly, mtfOnly, minRR, exchangeFilter]);
+  }, [scanAlerts, signalFilter, intervalFilter, patternFilter, dedup, sort, volOnly, mtfOnly, minRR, exchangeFilter, rsiMin, rsiMax]);
 
   // Modal: alert currently being shown in the chart popup (null = closed)
   const [chartAlert, setChartAlert] = useState(null);
@@ -1600,6 +1673,8 @@ export default function ScanAlertsPage() {
         mtfOnly={mtfOnly}         onMtfOnly={setMtfOnly}
         minRR={minRR}             onMinRR={setMinRR}
         exchange={exchangeFilter} onExchange={setExchangeFilter}
+        rsiMin={rsiMin}           onRsiMin={setRsiMin}
+        rsiMax={rsiMax}           onRsiMax={setRsiMax}
       />
 
       {/* Paper trades are shown exclusively on the Dashboard tab */}

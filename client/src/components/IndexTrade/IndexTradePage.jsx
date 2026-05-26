@@ -482,6 +482,11 @@ function AlertFeed({ alerts }) {
             <span style={{ color: 'var(--text-muted)' }}>{a.patternLabel}</span>
             <span style={{ color: 'var(--text-muted)' }}>{a.tfLabel}</span>
             <span>@{fmtPrice(a.close)}</span>
+            {a.rsi14 != null && (
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                RSI <strong style={{ color: 'var(--text-primary)' }}>{a.rsi14}</strong>
+              </span>
+            )}
             <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
               {fmtTime(a.ts)}
             </span>
@@ -792,6 +797,177 @@ function LowPremiumConfig({ config, onUpdate }) {
   );
 }
 
+// ── RSI Filter Config ────────────────────────────────────────────────────────
+
+function RsiFilterConfig({ config, onUpdate }) {
+  const [open, setOpen] = useState(false);
+
+  if (!config) return null;
+
+  const c = {
+    rsiFilterEnabled: config.rsiFilterEnabled ?? false,
+    rsiFilterScan:    config.rsiFilterScan    ?? true,
+    rsiFilterOrder:   config.rsiFilterOrder   ?? true,
+    rsiBullishMin:    config.rsiBullishMin     ?? 50,
+    rsiBullishMax:    config.rsiBullishMax     ?? 65,
+    rsiBearishMin:    config.rsiBearishMin     ?? 35,
+    rsiBearishMax:    config.rsiBearishMax     ?? 50,
+  };
+
+  function handleToggle(key) {
+    onUpdate({ [key]: !c[key] });
+  }
+
+  function handleNum(key, raw) {
+    const val = parseFloat(raw);
+    if (!isNaN(val)) onUpdate({ [key]: val });
+  }
+
+  // Visual indicator for which gates are active
+  const activeParts = [];
+  if (c.rsiFilterEnabled) {
+    if (c.rsiFilterScan)  activeParts.push('scan');
+    if (c.rsiFilterOrder) activeParts.push('order');
+  }
+  const gateLabel = activeParts.length > 0 ? activeParts.join(' + ') : null;
+
+  return (
+    <div className="settings-group">
+      <h3
+        style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          📊 RSI Filter
+          <span style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 4,
+            background: c.rsiFilterEnabled ? '#51cf6622' : '#ff6b6b22',
+            color: c.rsiFilterEnabled ? '#51cf66' : '#ff6b6b',
+          }}>
+            {c.rsiFilterEnabled ? 'ON' : 'OFF'}
+          </span>
+          {c.rsiFilterEnabled && gateLabel && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              gates: {gateLabel}
+            </span>
+          )}
+          {c.rsiFilterEnabled && (
+            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+              · long {c.rsiBullishMin}–{c.rsiBullishMax} / short {c.rsiBearishMin}–{c.rsiBearishMax}
+            </span>
+          )}
+        </span>
+        <span style={{ fontSize: 12 }}>{open ? '▼' : '▶'}</span>
+      </h3>
+
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          {/* Master toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={c.rsiFilterEnabled}
+                onChange={() => handleToggle('rsiFilterEnabled')}
+                style={{ marginRight: 6 }}
+              />
+              Enable RSI Filter
+            </label>
+          </div>
+
+          {/* Gate toggles — only meaningful when master is on */}
+          <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Apply to
+          </div>
+          <div style={{ display: 'flex', gap: 20, marginBottom: 16, opacity: c.rsiFilterEnabled ? 1 : 0.4 }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={c.rsiFilterScan}
+                disabled={!c.rsiFilterEnabled}
+                onChange={() => handleToggle('rsiFilterScan')}
+              />
+              <span>
+                <strong>Scan / Alert</strong>
+                <span style={{ color: 'var(--text-muted)', marginLeft: 4, fontSize: 11 }}>
+                  — hides signal from feed &amp; history
+                </span>
+              </span>
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={c.rsiFilterOrder}
+                disabled={!c.rsiFilterEnabled}
+                onChange={() => handleToggle('rsiFilterOrder')}
+              />
+              <span>
+                <strong>Order Execution</strong>
+                <span style={{ color: 'var(--text-muted)', marginLeft: 4, fontSize: 11 }}>
+                  — blocks pattern trades &amp; LP entries
+                </span>
+              </span>
+            </label>
+          </div>
+
+          {/* RSI range inputs */}
+          <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Long (Bullish / BUY)
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+            gap: 12, marginBottom: 16,
+          }}>
+            <LpField label="RSI Min" hint="RSI must be ≥ this to qualify"
+              value={c.rsiBullishMin} step="1" onChange={v => handleNum('rsiBullishMin', v)} />
+            <LpField label="RSI Max" hint="RSI must be ≤ this to qualify"
+              value={c.rsiBullishMax} step="1" onChange={v => handleNum('rsiBullishMax', v)} />
+          </div>
+
+          <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Short (Bearish — reserved for future use)
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+            gap: 12, marginBottom: 16, opacity: 0.55,
+          }}>
+            <LpField label="RSI Min" hint="RSI must be ≥ this to qualify"
+              value={c.rsiBearishMin} step="1" onChange={v => handleNum('rsiBearishMin', v)} />
+            <LpField label="RSI Max" hint="RSI must be ≤ this to qualify"
+              value={c.rsiBearishMax} step="1" onChange={v => handleNum('rsiBearishMax', v)} />
+          </div>
+
+          {/* Context note */}
+          <div style={{
+            padding: '8px 12px', background: 'var(--bg-secondary)',
+            borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7,
+          }}>
+            <strong style={{ color: 'var(--text-primary)' }}>How it works:</strong>
+            <br />
+            📊 <strong>Scan gate</strong> — RSI is checked on the <em>same candle</em> the pattern fired on.
+            Signals that fail are not stored in history or broadcast to the feed.
+            They are also <em>not</em> dedup-marked, so if RSI moves into range on the next candle, the signal can still fire.
+            <br />
+            ⚡ <strong>Order gate</strong> — Checked independently at execution time.
+            Useful when you want to see all signals but only trade momentum-confirmed ones.
+            <br />
+            💰 <strong>LP entries</strong> — RSI is computed from 5-minute candles of each option token.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LpField({ label, hint, value, onChange, step = '0.5' }) {
   return (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -842,6 +1018,7 @@ export default function IndexTradePage() {
         <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
         <LowPremiumConfig config={config} onUpdate={updateConfig} />
+        <RsiFilterConfig config={config} onUpdate={updateConfig} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} allTrades={closedTrades} />
         <OptionChainTable optionChain={optionChain} onRefresh={fetchOptionChain} />

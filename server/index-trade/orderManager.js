@@ -20,6 +20,7 @@
 const candleStore    = require('../services/candleStore');
 const { broadcast }  = require('../sseHub');
 const { isNseOpen }  = require('../utils/marketHours');
+const { getRSI }     = require('../services/ichimoku');
 
 const tradeStore     = require('./tradeStore');
 const strikeManager  = require('./strikeManager');
@@ -65,6 +66,25 @@ function onSignal(signal) {
     if (!close || !sl || !target || !token || !direction) return;
 
     if (!ORDER_INTERVALS.includes(interval)) return;
+
+    // ── RSI order gate ────────────────────────────────────────────────────────
+    // signal.rsi14 is pre-computed by scanner.js — no candle re-read needed.
+    // Only blocks execution; the signal is already in the feed at this point.
+    if (config.rsiFilterEnabled && config.rsiFilterOrder) {
+      const rsiVal = signal.rsi14;
+      if (rsiVal != null) {
+        // We only place BUY orders — always check bullish RSI window
+        const rsiMin = config.rsiBullishMin;
+        const rsiMax = config.rsiBullishMax;
+        if (rsiVal < rsiMin || rsiVal > rsiMax) {
+          console.log(
+            `[IdxOrder] ⏭ RSI filter (order): ${signal.symbol} ${signal.tfLabel} ` +
+            `RSI=${rsiVal} outside [${rsiMin}–${rsiMax}] — order skipped`,
+          );
+          return;
+        }
+      }
+    }
 
     // Sanity check — for a BUY: target must be above entry, SL must be below entry.
     // If the pattern returned inverted levels, skip rather than place a bad trade.
@@ -191,6 +211,24 @@ function _checkLowPremiumEntry() {
 
         // Must be in the [lpEntryMin, lpEntryMax] window
         if (!ltp || ltp < config.lpEntryMin || ltp > config.lpEntryMax) continue;
+
+        // ── RSI order gate for LP entries ─────────────────────────────────────
+        // Uses 5-minute candles — a reasonable resolution for momentum context.
+        // If candles aren't available yet (< 15 bars), the gate is skipped.
+        if (config.rsiFilterEnabled && config.rsiFilterOrder) {
+          const lpCandles = candleStore.getCandlesSync(numToken, '5minute');
+          if (lpCandles && lpCandles.length >= 15) {
+            const lpRsi = getRSI(lpCandles, 14);
+            if (lpRsi != null) {
+              const rsiMin = config.rsiBullishMin;
+              const rsiMax = config.rsiBullishMax;
+              if (lpRsi < rsiMin || lpRsi > rsiMax) {
+                // No console log here — this runs every tick per token; would flood logs
+                continue;
+              }
+            }
+          }
+        }
 
         const inst = strikeManager.getInstrumentByToken(numToken);
         if (!inst) continue;

@@ -24,6 +24,19 @@ let _config = {
   tslDistanceR: 0.5,     // trail 0.5× risk behind peak
   minRR: 1.5,            // minimum reward:risk ratio
 
+  // ── RSI Filter ───────────────────────────────────────────────────────────────
+  // When enabled, signals/trades whose RSI falls outside the configured window
+  // are skipped at the chosen gate(s).
+  //   rsiFilterScan  — blocks the signal from appearing in the feed & alert history
+  //   rsiFilterOrder — blocks order placement (pattern trades + LP entries)
+  rsiFilterEnabled:  false,
+  rsiFilterScan:     true,   // gate: scan history + SSE broadcast
+  rsiFilterOrder:    true,   // gate: order execution
+  rsiBullishMin:     50,     // BUY: RSI must be ≥ this
+  rsiBullishMax:     65,     // BUY: RSI must be ≤ this
+  rsiBearishMin:     35,     // SELL (future): RSI must be ≥ this
+  rsiBearishMax:     50,     // SELL (future): RSI must be ≤ this
+
   // ── Low Premium Scalper strategy ────────────────────────────────────────────
   // Buys any subscribed option in the lpEntryMin–lpEntryMax range.
   // Averages down once when price drops lpAvgDownPct from entry.
