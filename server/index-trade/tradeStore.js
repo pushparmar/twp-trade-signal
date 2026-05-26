@@ -23,6 +23,16 @@ let _config = {
   tslTriggerR: 1.0,      // activate TSL at 1× risk profit
   tslDistanceR: 0.5,     // trail 0.5× risk behind peak
   minRR: 1.5,            // minimum reward:risk ratio
+
+  // ── Low Premium Scalper strategy ────────────────────────────────────────────
+  // Buys any subscribed option at ≤ lpEntryMax, targets lpTarget.
+  // No pattern required — pure premium expansion play.
+  lowPremiumEnabled: false,  // off by default; enable via UI config panel
+  lpEntryMax: 5,             // BUY if LTP ≤ this value (₹)
+  lpTarget: 15,              // hard exit target (₹)
+  lpTslTrigger: 10,          // activate TSL when LTP reaches this price (₹)
+  lpTslInitialSl: 7,         // SL jumps to this value when TSL first activates (₹)
+  lpTslTrailPct: 0.70,       // SL trails at 70% of peak (30% max drawdown from peak)
 };
 
 // ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────

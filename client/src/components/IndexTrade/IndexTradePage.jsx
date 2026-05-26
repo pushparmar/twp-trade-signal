@@ -187,7 +187,11 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                       {t.action}
                     </span>
                   </td>
-                  <td>{t.patternLabel || t.patternId}</td>
+                  <td>
+                    {t.strategyType === 'low-premium'
+                      ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
+                      : (t.patternLabel || t.patternId)}
+                  </td>
                   <td>{t.tfLabel}</td>
                   <td>{fmtPrice(t.entryPrice)}</td>
                   <td style={{ fontWeight: 500 }}>{fmtPrice(ltp)}</td>
@@ -283,7 +287,11 @@ function OrderHistory({ trades }) {
                       {t.action}
                     </span>
                   </td>
-                  <td>{t.patternLabel || t.patternId}</td>
+                  <td>
+                    {t.strategyType === 'low-premium'
+                      ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
+                      : (t.patternLabel || t.patternId)}
+                  </td>
                   <td>{t.tfLabel}</td>
                   <td>{fmtPrice(t.entryPrice)}</td>
                   <td>{fmtPrice(t.exitPrice)}</td>
@@ -491,6 +499,125 @@ function OptionChainIndex({ indexName, data }) {
   );
 }
 
+// ── Low Premium Scalper Config ──────────────────────────────────────────────
+
+/**
+ * Config panel for the Low Premium Scalper strategy.
+ *
+ * Strategy recap:
+ *   • BUY any subscribed option whose LTP ≤ lpEntryMax (e.g., ₹5)
+ *   • Hard target: lpTarget (e.g., ₹15)
+ *   • Initial SL: ₹0.5 (near-zero — accept full premium loss before TSL kicks in)
+ *   • TSL activates when LTP hits lpTslTrigger (e.g., ₹10) → SL jumps to lpTslInitialSl (₹7)
+ *   • TSL trails at lpTslTrailPct × peakPrice (e.g., 70% → 30% drawdown allowed from peak)
+ */
+function LowPremiumConfig({ config, onUpdate }) {
+  const [open, setOpen] = useState(false);
+
+  if (!config) return null;
+
+  const lp = {
+    lowPremiumEnabled: config.lowPremiumEnabled ?? false,
+    lpEntryMax:        config.lpEntryMax        ?? 5,
+    lpTarget:          config.lpTarget          ?? 15,
+    lpTslTrigger:      config.lpTslTrigger      ?? 10,
+    lpTslInitialSl:    config.lpTslInitialSl    ?? 7,
+    lpTslTrailPct:     config.lpTslTrailPct     ?? 0.70,
+  };
+
+  function handleField(key, raw) {
+    const val = key === 'lowPremiumEnabled' ? raw : parseFloat(raw);
+    if (key !== 'lowPremiumEnabled' && isNaN(val)) return;
+    onUpdate({ [key]: val });
+  }
+
+  return (
+    <div className="settings-group">
+      <h3
+        style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          💰 Low Premium Scalper
+          <span style={{
+            fontSize: 10, padding: '2px 6px', borderRadius: 4,
+            background: lp.lowPremiumEnabled ? '#51cf6622' : '#ff6b6b22',
+            color: lp.lowPremiumEnabled ? '#51cf66' : '#ff6b6b',
+          }}>
+            {lp.lowPremiumEnabled ? 'ENABLED' : 'OFF'}
+          </span>
+        </span>
+        <span style={{ fontSize: 12 }}>{open ? '▼' : '▶'}</span>
+      </h3>
+
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 }}>
+            Buys any subscribed option at ≤ ₹{lp.lpEntryMax}. No pattern required.
+            TSL activates at ₹{lp.lpTslTrigger} → SL = ₹{lp.lpTslInitialSl}, then trails at {Math.round(lp.lpTslTrailPct * 100)}% of peak.
+          </p>
+
+          {/* Enable toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={lp.lowPremiumEnabled}
+                onChange={e => handleField('lowPremiumEnabled', e.target.checked)}
+                style={{ marginRight: 6 }}
+              />
+              Enable Low Premium Scalper
+            </label>
+          </div>
+
+          {/* Parameter grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 12 }}>
+            <LpField label="Entry Max (₹)" hint="BUY if LTP ≤ this"
+              value={lp.lpEntryMax} onChange={v => handleField('lpEntryMax', v)} />
+            <LpField label="Hard Target (₹)" hint="Exit at this price"
+              value={lp.lpTarget} onChange={v => handleField('lpTarget', v)} />
+            <LpField label="TSL Trigger (₹)" hint="Activate TSL when LTP hits this"
+              value={lp.lpTslTrigger} onChange={v => handleField('lpTslTrigger', v)} />
+            <LpField label="TSL Initial SL (₹)" hint="SL jumps here on activation"
+              value={lp.lpTslInitialSl} onChange={v => handleField('lpTslInitialSl', v)} />
+            <LpField label="Trail % of Peak" hint="SL = this × peak (e.g., 0.70 = 30% drawdown)"
+              value={lp.lpTslTrailPct} step="0.05" onChange={v => handleField('lpTslTrailPct', v)} />
+          </div>
+
+          {/* Visual example of trail */}
+          <div style={{ marginTop: 12, padding: '8px 10px', background: 'var(--bg-secondary)', borderRadius: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+            <strong style={{ color: 'var(--text-primary)' }}>Example with current settings:</strong>
+            {' '}Entry ₹{lp.lpEntryMax} → TSL activates @₹{lp.lpTslTrigger} → SL=₹{lp.lpTslInitialSl}
+            {' '}→ peak ₹{lp.lpTslTrigger + 1} → SL=₹{((lp.lpTslTrigger + 1) * lp.lpTslTrailPct).toFixed(2)}
+            {' '}→ peak ₹{lp.lpTslTrigger + 3} → SL=₹{((lp.lpTslTrigger + 3) * lp.lpTslTrailPct).toFixed(2)}
+            {' '}→ target ₹{lp.lpTarget}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LpField({ label, hint, value, onChange, step = '0.5' }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ fontSize: 11, fontWeight: 500 }}>{label}</span>
+      <input
+        type="number"
+        value={value}
+        step={step}
+        min="0"
+        onChange={e => onChange(e.target.value)}
+        style={{
+          padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)',
+          background: 'var(--bg-primary)', color: 'var(--text-primary)', fontSize: 13, width: '100%',
+        }}
+      />
+      {hint && <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{hint}</span>}
+    </label>
+  );
+}
+
 // ── Main Page ───────────────────────────────────────────────────────────────
 
 export default function IndexTradePage() {
@@ -520,6 +647,7 @@ export default function IndexTradePage() {
       <div className="settings-panel">
         <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
+        <LowPremiumConfig config={config} onUpdate={updateConfig} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} />
         <OptionChainTable optionChain={optionChain} onRefresh={fetchOptionChain} />
