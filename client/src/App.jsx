@@ -11,6 +11,7 @@ import ScanAlertsPage from './components/Scanner/ScanAlertsPage';
 import AnalyticsPage from './components/Analytics/AnalyticsPage';
 import BacktestPage from './components/Backtest/BacktestPage';
 import IndexTradePage from './components/IndexTrade/IndexTradePage';
+import EquityScanPanel from './components/Scanner/EquityScanPanel';
 import ToastContainer from './components/Toast/Toast';
 import LoginPage from './components/Auth/LoginPage';
 import './App.css';
@@ -154,13 +155,14 @@ function useTheme() {
 }
 
 const PAGES = {
-  dashboard: Dashboard,
-  market:    MarketWatch,
-  scanner:      ScanAlertsPage,
+  dashboard:     Dashboard,
+  market:        MarketWatch,
+  scanner:       ScanAlertsPage,
   'index-trade': IndexTradePage,
-  analytics:    AnalyticsPage,
-  backtest:     BacktestPage,
-  settings:     SettingsPanel,
+  analytics:     AnalyticsPage,
+  backtest:      BacktestPage,
+  'equity-scan': EquityScanPanel,
+  settings:      SettingsPanel,
 };
 
 // ── EOD forecast clear ────────────────────────────────────────────────────────

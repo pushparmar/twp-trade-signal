@@ -18,6 +18,7 @@ const scanRouter      = require('./routes/scan');
 const analyticsRouter    = require('./routes/analytics');
 const autoTraderRouter   = require('./routes/autoTrader');
 const backtestRouter     = require('./routes/backtest');
+const equityScanRouter   = require('./routes/equityScan');
 const autoTrader         = require('./services/autoTrader');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
@@ -100,6 +101,7 @@ app.use('/api/scan',      scanRouter);
 app.use('/api/analytics',   analyticsRouter);
 app.use('/api/auto-trader', autoTraderRouter);
 app.use('/api/backtest',    backtestRouter);
+app.use('/api/equity-scan', equityScanRouter);
 app.use('/api/index-trade', indexTrade.router);
 
 app.listen(PORT, async () => {

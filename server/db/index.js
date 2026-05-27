@@ -20,6 +20,7 @@ const alertRepo          = require('./repositories/alertRepo');
 const tradeRepo          = require('./repositories/tradeRepo');
 const signalOutcomeRepo  = require('./repositories/signalOutcomeRepo');
 const settingsRepo       = require('./repositories/settingsRepo');
+const equityScanRepo     = require('./repositories/equityScanRepo');
 
 /**
  * Connect to MongoDB and bootstrap collection indexes.
@@ -39,6 +40,7 @@ async function init() {
     tradeRepo.createIndexes(),
     signalOutcomeRepo.createIndexes(),
     settingsRepo.createIndexes(),
+    equityScanRepo.createIndexes(),
   ]);
 
   return true;
@@ -51,4 +53,4 @@ async function close() {
   await mongo.close();
 }
 
-module.exports = { init, close, alertRepo, tradeRepo, signalOutcomeRepo, settingsRepo };
+module.exports = { init, close, alertRepo, tradeRepo, signalOutcomeRepo, settingsRepo, equityScanRepo };

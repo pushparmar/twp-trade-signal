@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
 import IchimokuChart from "./IchimokuChart";
+import EquityScanPanel from "../Scanner/EquityScanPanel";
 
 // ── Format helper ──────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -1260,15 +1261,7 @@ export default function MarketWatch() {
 
             {/* ── Detail content ── */}
             {selectedInstrument?.type === "manage" ? (
-                <ManageStocksPanel
-                    watchlist={watchlist}
-                    onAdd={handleAdd}
-                    onRemove={handleRemove}
-                    futLoading={futLoading}
-                    onSubscribe={subscribeStockFuture}
-                    onSubscribeMovers={subscribeMovers}
-                    onClearAll={unsubscribeAllFutures}
-                />
+                <EquityScanPanel inline />
             ) : selectedInstrument ? (
                 <InstrumentDetail token={detailToken} label={detailLabel} sublabel={detailSublabel} />
             ) : (

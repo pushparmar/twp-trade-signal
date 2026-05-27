@@ -3596,6 +3596,12 @@ body {
 .scan-empty-icon { opacity: .4; }
 .scan-empty-text { font-size: 14px; max-width: 400px; line-height: 1.6; }
 
+/* Indeterminate progress bar animation for equity scan prefetch phase */
+@keyframes eq-scan-indeterminate {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(350%); }
+}
+
 /* Count badge in header subtitle */
 .scan-count-badge {
   display: inline-block;
