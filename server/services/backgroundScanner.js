@@ -508,6 +508,19 @@ async function _runScanForInterval(interval) {
 
     const label = inst.name || inst.tradingsymbol;
 
+    // ── Ichimoku snapshot — computed ONCE per instrument, shared across all patterns ──
+    // Patterns use inconsistent field names (some return `kijunValue` not `kijun`,
+    // some omit `tenkan` entirely). snapshot() always returns the full last-bar
+    // Ichimoku from calculate(), guaranteeing tenkan/kijun/cloud fields are present.
+    const _ichSnap    = snapshot(candles);
+    const _snapClose  = candles[candles.length - 1]?.close ?? null;
+    const _snapKijun  = _ichSnap?.kijun  ?? null;
+    const _snapTenkan = _ichSnap?.tenkan ?? null;
+    const _snapCloudPos = !_ichSnap ? null
+      : _ichSnap.aboveCloud ? 'above'
+      : _ichSnap.belowCloud ? 'below'
+      : 'in';
+
     // Per-instrument Telegram candidates — keyed by signal.
     // After the pattern loop we pick the highest-score match per signal and
     // apply the MTF gate + TF-priority rules before sending to Telegram.
@@ -532,47 +545,39 @@ async function _runScanForInterval(interval) {
       if (!result?.matched || !result.signal) continue;
 
       // ── TK / Price vs Kijun alignment gate ───────────────────────────────────
-      // Bullish signal: price must be above Kijun AND Tenkan must be above Kijun.
-      // Bearish signal: price must be below Kijun AND Tenkan must be below Kijun.
-      // Fail-open when values are unavailable so data gaps don't silently block alerts.
-      // NOT marked in dedup — if price crosses Kijun later, the alert can re-fire.
-      {
-        const { close: _c, kijun: _k, tenkan: _t } = result;
-        if (_k != null && _t != null && _c != null) {
-          if (result.signal === 'bullish' && !(_c > _k && _t > _k)) {
-            // Price or Tenkan below Kijun — not a valid bullish structure
-            continue;
-          }
-          if (result.signal === 'bearish' && !(_c < _k && _t < _k)) {
-            // Price or Tenkan above Kijun — not a valid bearish structure
-            continue;
-          }
+      // Uses the per-instrument snapshot (not result fields) — reliable across all
+      // patterns regardless of what field names each pattern returns.
+      //
+      // Bullish: Tenkan > Kijun AND (price > Kijun OR price > Tenkan)
+      //          → simplifies to: Tenkan > Kijun AND price > Kijun
+      //            (since Kijun ≤ Tenkan, being above Kijun is the minimum bar)
+      // Bearish: Tenkan < Kijun AND price < Kijun
+      //
+      // tk-reversion is exempt — it deliberately fires from the extended side
+      // (bearish from above Kijun reverting down; bullish from below Kijun reverting up).
+      // NOT marked in dedup — can re-fire once alignment corrects.
+      if (patternId !== 'tk-reversion' && _snapKijun != null && _snapTenkan != null && _snapClose != null) {
+        if (result.signal === 'bullish' && !(_snapTenkan > _snapKijun && _snapClose > _snapKijun)) {
+          continue;
+        }
+        if (result.signal === 'bearish' && !(_snapTenkan < _snapKijun && _snapClose < _snapKijun)) {
+          continue;
         }
       }
 
       // ── Cloud position gate ───────────────────────────────────────────────────
-      // For all patterns EXCEPT tk-reversion:
-      //   Bullish → price must be ABOVE cloud ('above')
-      //   Bearish → price must be BELOW or INSIDE cloud ('below' | 'in')
+      // Uses the per-instrument snapshot cloud position (reliable, not result.cloudPosition
+      // which some patterns omit or compute differently).
       //
-      // tk-reversion is a mean-reversion trade that deliberately starts from the
-      // extended side (bearish fires from ABOVE cloud reverting toward Kijun;
-      // bullish fires from BELOW cloud). Its own R8 filter inside patternRegistry
-      // already enforces the correct cloud side for that pattern, so we skip this
-      // gate for tk-reversion entirely.
-      // Fail-open when cloudPosition is null (data gap).
-      if (patternId !== 'tk-reversion') {
-        const cp = result.cloudPosition; // 'above' | 'in' | 'below' | null
-        if (cp != null) {
-          if (result.signal === 'bullish' && cp === 'below') {
-            // Bullish signal but price below cloud — skip (above or inside allowed)
-            continue;
-          }
-          if (result.signal === 'bearish' && cp === 'above') {
-            // Bearish signal but price above cloud — skip (below or inside allowed)
-            continue;
-          }
-        }
+      // For all patterns EXCEPT tk-reversion:
+      //   Bullish → above or inside cloud  (NOT below)
+      //   Bearish → below or inside cloud  (NOT above)
+      //
+      // tk-reversion is exempt: bearish fires above cloud, bullish fires below cloud.
+      // Its R8 rule in patternRegistry already enforces the correct cloud side.
+      if (patternId !== 'tk-reversion' && _snapCloudPos != null) {
+        if (result.signal === 'bullish' && _snapCloudPos === 'below') continue;
+        if (result.signal === 'bearish' && _snapCloudPos === 'above') continue;
       }
 
       // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle

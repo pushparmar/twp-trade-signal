@@ -179,6 +179,18 @@ async function _runAndAlert(token, interval, candles) {
   const label   = _tokenLabel.get(Number(token)) || `Token ${token}`;
   const tfLabel = TF_LABEL[interval] || interval;
 
+  // ── Ichimoku snapshot — computed ONCE per candle set, shared across all patterns ──
+  // Patterns use inconsistent field names (kijunValue vs kijun, missing tenkan etc.).
+  // snapshot() always returns the full last-bar Ichimoku from calculate().
+  const _ichSnap    = snapshot(candles);
+  const _snapClose  = candles[candles.length - 1]?.close ?? null;
+  const _snapKijun  = _ichSnap?.kijun  ?? null;
+  const _snapTenkan = _ichSnap?.tenkan ?? null;
+  const _snapCloudPos = !_ichSnap ? null
+    : _ichSnap.aboveCloud ? 'above'
+    : _ichSnap.belowCloud ? 'below'
+    : 'in';
+
   for (const { id: patternId, label: patternLabel } of patternRegistry.list()) {
     // ── Config gate: respect Settings UI — skip if scan disabled ─────────
     // Same check as backgroundScanner.js line 441. Without this, disabling
@@ -206,37 +218,34 @@ async function _runAndAlert(token, interval, candles) {
     }
 
     // ── TK / Price vs Kijun alignment gate ───────────────────────────────────
-    // Bullish signal: price must be above Kijun AND Tenkan must be above Kijun.
-    // Bearish signal: price must be below Kijun AND Tenkan must be below Kijun.
-    // Fail-open when values are unavailable so data gaps don't silently block alerts.
-    // NOT marked in dedup — if price crosses Kijun later, the alert can re-fire.
-    {
-      const { close: _c, kijun: _k, tenkan: _t } = result;
-      if (_k != null && _t != null && _c != null) {
-        if (result.signal === 'bullish' && !(_c > _k && _t > _k)) {
-          continue;
-        }
-        if (result.signal === 'bearish' && !(_c < _k && _t < _k)) {
-          continue;
-        }
+    // Uses per-candle snapshot (not result fields) — reliable across all patterns
+    // regardless of inconsistent field names (kijunValue vs kijun, missing tenkan).
+    //
+    // Bullish: Tenkan > Kijun AND price > Kijun
+    // Bearish: Tenkan < Kijun AND price < Kijun
+    //
+    // tk-reversion is exempt — fires from the extended side by design.
+    // NOT marked in dedup — can re-fire once alignment corrects.
+    if (patternId !== 'tk-reversion' && _snapKijun != null && _snapTenkan != null && _snapClose != null) {
+      if (result.signal === 'bullish' && !(_snapTenkan > _snapKijun && _snapClose > _snapKijun)) {
+        continue;
+      }
+      if (result.signal === 'bearish' && !(_snapTenkan < _snapKijun && _snapClose < _snapKijun)) {
+        continue;
       }
     }
 
     // ── Cloud position gate ───────────────────────────────────────────────────
-    // For all patterns EXCEPT tk-reversion:
-    //   Bullish → price must be ABOVE cloud ('above')
-    //   Bearish → price must be BELOW or INSIDE cloud ('below' | 'in')
+    // Uses per-candle snapshot cloud position — reliable, not result.cloudPosition.
     //
-    // tk-reversion is exempt: it intentionally trades from the extended side
-    // (bearish fires above cloud reverting to Kijun). Its R8 rule in
-    // patternRegistry already enforces the correct cloud side for that pattern.
-    // Fail-open when cloudPosition is null.
-    if (patternId !== 'tk-reversion') {
-      const cp = result.cloudPosition; // 'above' | 'in' | 'below' | null
-      if (cp != null) {
-        if (result.signal === 'bullish' && cp === 'below') continue;  // above or inside allowed
-        if (result.signal === 'bearish' && cp === 'above') continue;  // below or inside allowed
-      }
+    // For all patterns EXCEPT tk-reversion:
+    //   Bullish → above or inside cloud  (NOT below)
+    //   Bearish → below or inside cloud  (NOT above)
+    //
+    // tk-reversion is exempt: fires above cloud for bearish, below cloud for bullish.
+    if (patternId !== 'tk-reversion' && _snapCloudPos != null) {
+      if (result.signal === 'bullish' && _snapCloudPos === 'below') continue;
+      if (result.signal === 'bearish' && _snapCloudPos === 'above') continue;
     }
 
     // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
