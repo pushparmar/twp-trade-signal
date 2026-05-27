@@ -801,6 +801,9 @@ export default function PaperTradingPanel() {
     const [dbLoaded, setDbLoaded] = useState(false);
     const [dbLimit, setDbLimit] = useState(200);
 
+    // Pending orders section — collapsed state (starts expanded so orders are visible)
+    const [pendingCollapsed, setPendingCollapsed] = useState(false);
+
     // Which date groups are collapsed — today starts expanded, older dates collapsed.
     const todayIst = toIstDateStr(Date.now());
     const [collapsedDates, setCollapsedDates] = useState(new Set());
@@ -1044,29 +1047,48 @@ export default function PaperTradingPanel() {
             {/* Pending orders — waiting for trigger price to be hit */}
             {pendingTrades.length > 0 && (
                 <div className="dash-section">
-                    <h3 className="section-title">
-                        Pending Orders <span className="count-badge">{pendingTrades.length}</span>
-                    </h3>
-                    <div className="kite-table-wrap">
-                        <table className="kite-table">
-                            <thead>
-                                <tr>
-                                    <th className="mob-hide">Time</th>
-                                    <th>Symbol</th>
-                                    <th className="th-num">Trigger ₹</th>
-                                    <th className="th-num mob-hide">SL</th>
-                                    <th className="th-num mob-hide">Target</th>
-                                    <th className="th-num">Qty</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {pendingTrades.map(t => (
-                                    <PendingOrderRow key={t.id} trade={t} onCancel={handleCancelPending} />
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    {/* Collapsible header — click anywhere to expand / collapse */}
+                    <button
+                        className="closed-date-header"
+                        style={{ borderRadius: 6, marginBottom: pendingCollapsed ? 0 : 8 }}
+                        onClick={() => setPendingCollapsed(c => !c)}
+                        aria-expanded={!pendingCollapsed}
+                        title={pendingCollapsed ? 'Expand pending orders' : 'Collapse pending orders'}
+                    >
+                        <span className="cdh-arrow">{pendingCollapsed ? '▶' : '▼'}</span>
+                        <span className="cdh-date">Pending Orders</span>
+                        <span className="cdh-meta">
+                            <span className="cdh-count">
+                                {pendingTrades.length} order{pendingTrades.length !== 1 ? 's' : ''}
+                            </span>
+                            <span className="count-badge" style={{ marginLeft: 4 }}>
+                                {pendingTrades.length}
+                            </span>
+                        </span>
+                    </button>
+
+                    {!pendingCollapsed && (
+                        <div className="kite-table-wrap">
+                            <table className="kite-table">
+                                <thead>
+                                    <tr>
+                                        <th className="mob-hide">Time</th>
+                                        <th>Symbol</th>
+                                        <th className="th-num">Trigger ₹</th>
+                                        <th className="th-num mob-hide">SL</th>
+                                        <th className="th-num mob-hide">Target</th>
+                                        <th className="th-num">Qty</th>
+                                        <th></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {pendingTrades.map(t => (
+                                        <PendingOrderRow key={t.id} trade={t} onCancel={handleCancelPending} />
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
                 </div>
             )}
 

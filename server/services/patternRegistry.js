@@ -537,7 +537,15 @@ const PATTERNS = {
 
       // Target = Kijun (the reversion destination)
       // SL = recent swing beyond Tenkan (the wrong-side extreme)
-      const { close, signal, kijun } = result;
+      //
+      // Override result.close with the CURRENT bar's close (not the matched bar).
+      // getTKReversion scans up to `lookback=3` past bars — when the cross was
+      // detected on a prior bar (barsAgo > 0), result.close is stale (up to 2-3
+      // candles old). Using a stale entry price causes wrong PnL calculations in
+      // the order manager and incorrect SL/target levels relative to live price.
+      const currentClose = candles[candles.length - 1].close;
+      const { signal, kijun } = result;
+      const close = currentClose;
       const atr = getATR(candles, 14);
       const atrFloor = atr != null ? MIN_SL_ATR_MULT * atr : null;
 

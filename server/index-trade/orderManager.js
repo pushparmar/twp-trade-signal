@@ -44,11 +44,23 @@ const _openKeys = new Set(); // token (Number)
 /**
  * Use the latest 1-minute candle close as a live price proxy.
  * candleStore currentCandle.close is updated on every tick from kiteTicker.
+ *
+ * Falls back to 5-minute candles if 1-minute candles are not yet available
+ * (e.g. during async seeding on startup). Without this fallback, _handlePatternTSL
+ * returns early and broadcasts no idx_trade_tick → UI shows frozen PnL.
  */
 function _getCurrentPrice(token) {
-    const candles = candleStore.getCandlesSync(Number(token), 'minute');
-    if (!candles || candles.length === 0) return null;
-    return candles[candles.length - 1].close;
+    const numToken = Number(token);
+    const minuteCandles = candleStore.getCandlesSync(numToken, 'minute');
+    if (minuteCandles && minuteCandles.length > 0) {
+        return minuteCandles[minuteCandles.length - 1].close;
+    }
+    // Fallback: use 5-minute candles while 1m candles are still seeding
+    const fiveMinCandles = candleStore.getCandlesSync(numToken, '5minute');
+    if (fiveMinCandles && fiveMinCandles.length > 0) {
+        return fiveMinCandles[fiveMinCandles.length - 1].close;
+    }
+    return null;
 }
 
 // ── Signal handler (pattern-based entry) ────────────────────────────────────
@@ -448,11 +460,18 @@ function _handlePatternTSL(trade, ltp) {
             trade.peakPrice = newPeak;
         }
 
+        // Pattern-specific TSL trigger:
+        // tk-reversion targets are close (Kijun / cloud edge ~1-1.5R away), so we
+        // arm the TSL early at 0.5R. All other patterns use the global tslTriggerR.
+        const triggerR = trade.patternId === 'tk-reversion'
+            ? Math.min(0.5, config.tslTriggerR)
+            : config.tslTriggerR;
+
         // Activate TSL when profit >= triggerR × risk
-        if (!trade.tslActivated && unrealizedR >= config.tslTriggerR) {
+        if (!trade.tslActivated && unrealizedR >= triggerR) {
             tradeStore.updateTrade(trade.id, { tslActivated: true });
             trade.tslActivated = true;
-            console.log(`[IdxOrder] 🔒 TSL activated: ${trade.symbol} @${ltp} (${unrealizedR.toFixed(2)}R)`);
+            console.log(`[IdxOrder] 🔒 TSL activated: ${trade.symbol} @${ltp} (${unrealizedR.toFixed(2)}R, trigger=${triggerR}R)`);
         }
 
         // Trail SL upward only (BUY)

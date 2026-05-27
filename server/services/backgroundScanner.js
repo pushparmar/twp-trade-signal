@@ -40,7 +40,7 @@ const patternRegistry     = require('./patternRegistry');
 const telegramNotifier    = require('./telegramNotifier');
 const { broadcast }       = require('../sseHub');
 const store               = require('../store');
-const { to4H, getFutureCloudColor, snapshot, getATR, getRSI } = require('./ichimoku');
+const { to4H, getFutureCloudColor, snapshot, getATR, getRSI, getSignals: ichimokuGetSignals } = require('./ichimoku');
 const patternAlertMessage = require('./patternAlertMessage');
 const instrumentCache     = require('./instrumentCache');
 const foStockRegistry     = require('./foStockRegistry');
@@ -106,6 +106,83 @@ const _biasMap = new Map();
 function _istDateStr() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
+
+// ── Telegram alert gate helpers — mirror autoTrader order gates ───────────────
+// These enforce the same trading-rule filters on Telegram alerts as autoTrader
+// applies to order execution.  A signal that wouldn't get an order shouldn't
+// clutter the Telegram feed either.
+
+const NIFTY_TOKEN_BG = 256265;
+let _bgCachedBias = null; // { slot, bias } — refreshed every 15-minute IST slot
+
+/** Per-TF vote — same logic as autoTrader._tfSignal and the UI OverallSignalCard. */
+function _bgTfSignal(ichi) {
+  if (!ichi) return 'neutral';
+  if (ichi.callBuySignal) return 'bullish';
+  if (ichi.putBuySignal)  return 'bearish';
+  const sigs = [ichi.chikouSignal, ichi.kijunSignal, ichi.cloudSignal, ichi.tenkanSignal];
+  const bull = sigs.filter((s) => s === 'bullish').length;
+  const bear = sigs.filter((s) => s === 'bearish').length;
+  return bull > bear ? 'bullish' : bear > bull ? 'bearish' : 'neutral';
+}
+
+/**
+ * NIFTY multi-TF consensus — exact copy of autoTrader._getMarketBias().
+ * Cached per 15-minute IST slot (refreshes as new candles close intraday).
+ * Returns 'bullish' | 'bearish' | 'neutral'.
+ */
+function _bgGetMarketBias() {
+  const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+  const slot   = nowIST.toISOString().slice(0, 10) + '_'
+    + String(nowIST.getHours()).padStart(2, '0') + ':'
+    + String(Math.floor(nowIST.getMinutes() / 15) * 15).padStart(2, '0');
+
+  if (_bgCachedBias && _bgCachedBias.slot === slot) return _bgCachedBias.bias;
+
+  try {
+    const c15m  = candleStore.getCandlesSync(NIFTY_TOKEN_BG, '15minute');
+    const c1h   = candleStore.getCandlesSync(NIFTY_TOKEN_BG, '60minute');
+    const c1d   = candleStore.getCandlesSync(NIFTY_TOKEN_BG, 'day');
+    const c4h   = c1h && c1h.length >= 52 ? to4H(c1h) : null;
+
+    const s15m  = c15m && c15m.length >= 52 ? ichimokuGetSignals(c15m, '15minute') : null;
+    const s1h   = c1h  && c1h.length  >= 52 ? ichimokuGetSignals(c1h,  '60minute') : null;
+    const s4h   = c4h  && c4h.length  >= 52 ? ichimokuGetSignals(c4h,  '4h')       : null;
+    const s1d   = c1d  && c1d.length  >= 52 ? ichimokuGetSignals(c1d,  'day')      : null;
+
+    const allSigs   = [s15m, s1h, s4h, s1d];
+    const hasCall   = allSigs.some((s) => s?.callBuySignal);
+    const hasPut    = allSigs.some((s) => s?.putBuySignal);
+    const tfVotes   = allSigs.map((s) => _bgTfSignal(s));
+    const bullCount = tfVotes.filter((v) => v === 'bullish').length;
+    const bearCount = tfVotes.filter((v) => v === 'bearish').length;
+
+    let bias = 'neutral';
+    if      (hasCall && !hasPut)    bias = 'bullish';
+    else if (hasPut  && !hasCall)   bias = 'bearish';
+    else if (bullCount > bearCount) bias = 'bullish';
+    else if (bearCount > bullCount) bias = 'bearish';
+
+    _bgCachedBias = { slot, bias };
+    return bias;
+  } catch {
+    return 'neutral';
+  }
+}
+
+// Non-tradeable index tokens — never send Telegram for these
+const _NON_TRADEABLE_TG = new Set([
+  256265,  // NIFTY 50
+  260105,  // BANKNIFTY
+  264969,  // India VIX
+  274441,  // FINNIFTY
+  288009,  // MIDCPNIFTY
+  265,     // BSE SENSEX
+  270857,  // BSE BANKEX
+]);
+
+// MCX symbol prefix hint — same regex as autoTrader
+const _MCX_HINT_RE = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
 
 /**
  * Mark a (token, interval, patternId, signal) combo as fired for today.
@@ -454,6 +531,25 @@ async function _runScanForInterval(interval) {
 
       if (!result?.matched || !result.signal) continue;
 
+      // ── TK / Price vs Kijun alignment gate ───────────────────────────────────
+      // Bullish signal: price must be above Kijun AND Tenkan must be above Kijun.
+      // Bearish signal: price must be below Kijun AND Tenkan must be below Kijun.
+      // Fail-open when values are unavailable so data gaps don't silently block alerts.
+      // NOT marked in dedup — if price crosses Kijun later, the alert can re-fire.
+      {
+        const { close: _c, kijun: _k, tenkan: _t } = result;
+        if (_k != null && _t != null && _c != null) {
+          if (result.signal === 'bullish' && !(_c > _k && _t > _k)) {
+            // Price or Tenkan below Kijun — not a valid bullish structure
+            continue;
+          }
+          if (result.signal === 'bearish' && !(_c < _k && _t < _k)) {
+            // Price or Tenkan above Kijun — not a valid bearish structure
+            continue;
+          }
+        }
+      }
+
       // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
       const qCfg = store.getQualityScoreConfig();
       const { qualityScore, setupGrade, scoreBreakdown } = qCfg.enabled
@@ -567,6 +663,73 @@ async function _runScanForInterval(interval) {
         if (qCfgTg.enabled && qCfgTg.alertGateEnabled && best.alertPayload.qualityScore != null) {
           if (best.alertPayload.qualityScore < qCfgTg.minQualityScore) continue;
         }
+
+        // ── Trading-rule gates — mirror autoTrader order filters ────────────────
+        // These ensure every Telegram alert represents a signal that would also
+        // pass the order execution gates.  No alert for a signal we'd never trade.
+
+        // Gate 1: non-tradeable indices (NIFTY, SENSEX, VIX etc.)
+        if (_NON_TRADEABLE_TG.has(Number(best.alertPayload.token))) continue;
+
+        // Gate 2: MCX — no 15-minute alerts (too noisy; MCX needs ≥ 1h setup)
+        const isMcxAlert = best.alertPayload.exchange === 'MCX'
+          || _MCX_HINT_RE.test(String(label ?? ''));
+        if (isMcxAlert && (interval === '15minute' || best.alertPayload.tfLabel === '15m')) {
+          console.log(`[BgScanner] ⏸ Telegram skipped — ${label} MCX 15m (too noisy)`);
+          continue;
+        }
+
+        // Gate 3: market bias (15m / 1h only) — skip if NIFTY consensus opposes direction
+        if (interval === '15minute' || interval === '60minute') {
+          const bias = _bgGetMarketBias();
+          if (bias === 'bullish' && signal === 'bearish') {
+            console.log(`[BgScanner] ⏸ Telegram skipped — ${label} ${signal} (${best.alertPayload.tfLabel}) NIFTY bias=BULLISH`);
+            continue;
+          }
+          if (bias === 'bearish' && signal === 'bullish') {
+            console.log(`[BgScanner] ⏸ Telegram skipped — ${label} ${signal} (${best.alertPayload.tfLabel}) NIFTY bias=BEARISH`);
+            continue;
+          }
+        }
+
+        // Gate 4: future cloud direction — must agree with signal OR score ≥ 3
+        {
+          const { futureCloudColor, score: alertScore } = best.alertPayload;
+          const expectedCloud = signal === 'bullish' ? 'bullish' : 'bearish';
+          if (futureCloudColor && futureCloudColor !== 'neutral' && futureCloudColor !== expectedCloud) {
+            if ((alertScore ?? 0) < 3) {
+              console.log(`[BgScanner] ⏸ Telegram skipped — ${label} (${best.alertPayload.tfLabel}) future cloud=${futureCloudColor} opposes ${signal}, score=${alertScore ?? 0} < 3`);
+              continue;
+            }
+          }
+        }
+
+        // Gate 5: 15m requires at least one higher-TF alignment (1h / 4h / 1d)
+        if (interval === '15minute' || best.alertPayload.tfLabel === '15m') {
+          const higherTfs  = new Set(['1h', '4h', '1d']);
+          const hasHigherTf = best.alertPayload.alignedTfs?.some((tf) => higherTfs.has(tf));
+          if (!hasHigherTf) {
+            console.log(`[BgScanner] ⏸ Telegram skipped — ${label} 15m ${signal}: no 1h/4h/1d MTF alignment`);
+            continue;
+          }
+        }
+
+        // Gate 6: minimum R:R — same threshold as autoTrader.minRR
+        {
+          const { close: aC, sl: aSl, target: aTgt } = best.alertPayload;
+          if (aC && aSl && aTgt) {
+            const riskPerUnit = Math.abs(aC - aSl);
+            if (riskPerUnit > 0.01) {
+              const rrRatio   = Math.abs(aTgt - aC) / riskPerUnit;
+              const minRR     = store.getAutoTraderSettings().minRR ?? 2.0;
+              if (rrRatio < minRR) {
+                console.log(`[BgScanner] ⏸ Telegram skipped — ${label} (${best.alertPayload.tfLabel}) R:R=${rrRatio.toFixed(2)} < min ${minRR}`);
+                continue;
+              }
+            }
+          }
+        }
+        // ── End trading-rule gates ──────────────────────────────────────────────
 
         // Score dedup — skip if same TF + same signal already sent with equal/higher score today.
         // Each TF fires independently — 15m alerts are NOT suppressed by a prior 1h alert.

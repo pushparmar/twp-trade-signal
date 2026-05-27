@@ -205,6 +205,23 @@ async function _runAndAlert(token, interval, candles) {
       continue;
     }
 
+    // ── TK / Price vs Kijun alignment gate ───────────────────────────────────
+    // Bullish signal: price must be above Kijun AND Tenkan must be above Kijun.
+    // Bearish signal: price must be below Kijun AND Tenkan must be below Kijun.
+    // Fail-open when values are unavailable so data gaps don't silently block alerts.
+    // NOT marked in dedup — if price crosses Kijun later, the alert can re-fire.
+    {
+      const { close: _c, kijun: _k, tenkan: _t } = result;
+      if (_k != null && _t != null && _c != null) {
+        if (result.signal === 'bullish' && !(_c > _k && _t > _k)) {
+          continue;
+        }
+        if (result.signal === 'bearish' && !(_c < _k && _t < _k)) {
+          continue;
+        }
+      }
+    }
+
     // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
     const qCfg = store.getQualityScoreConfig();
     const { qualityScore, setupGrade, scoreBreakdown } = qCfg.enabled

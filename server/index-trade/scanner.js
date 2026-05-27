@@ -1,7 +1,7 @@
 /**
  * scanner.js — Index Trade module
  *
- * Runs 3 Ichimoku patterns (TK Reversion, Kumo Crossover, Kijun Retest)
+ * Runs TK Reversion pattern
  * on subscribed option strikes across minute, 5minute, 15minute timeframes.
  *
  * Uses a lightweight polling approach: every 2 seconds, checks if any
@@ -20,7 +20,7 @@ const tradeStore    = require('./tradeStore');
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-const PATTERN_IDS = ['tk-reversion', 'cloud-exit', 'kijun-retest'];
+const PATTERN_IDS = ['tk-reversion'];
 const INTERVALS   = ['minute', '5minute', '15minute'];
 const POLL_MS     = 2000; // check for new candles every 2 seconds
 
