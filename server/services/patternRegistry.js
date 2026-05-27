@@ -315,22 +315,10 @@ const PATTERNS = {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
-      if (!_tkAligned(result)) return { matched: false };
-
-      // R2: Volume gate — breakout without volume is a false breakout ~60% of the time
-      const volFields = _volumeFields(candles);
-      if (volFields.volumeRatio != null && volFields.volumeRatio < 1.0) return { matched: false };
-
-      // P6: Body-size filter — a breakout with a tiny body (doji) is unreliable
-      const lastCandle = candles[candles.length - 1];
-      const bodySize   = Math.abs(lastCandle.close - lastCandle.open);
-      const rangeSize  = lastCandle.high - lastCandle.low;
-      if (rangeSize > 0 && bodySize / rangeSize < 0.4) return { matched: false };
 
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
-      // R12: Trailing anchor = Tenkan line (fast line tracks trend)
       const trailingAnchor = result.tenkan ?? null;
-      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ...volFields, ..._rsiFields(candles) };
+      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
     },
   },
 
@@ -649,16 +637,6 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getSenkouCross(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
-
-      // Minimum score of 2 — twist alone (score 1) is not enough.
-      // We require at least one additional factor: fat cloud, TK alignment,
-      // Kijun slope, or price vs Kijun.  This eliminates marginal thin-cloud
-      // twists in choppy markets.
-      if (result.score < 2) return { matched: false };
-
-      // TK alignment hard filter — same as all other active patterns.
-      // A twist on a misaligned TK means the fast line is fighting the signal.
-      if (!_tkAligned(result)) return { matched: false };
 
       const { sl, target, atr, targetSource } = computeSLTarget(
         this.id, result.signal, result, candles, opts.interval,
