@@ -550,6 +550,31 @@ async function _runScanForInterval(interval) {
         }
       }
 
+      // ── Cloud position gate ───────────────────────────────────────────────────
+      // For all patterns EXCEPT tk-reversion:
+      //   Bullish → price must be ABOVE cloud ('above')
+      //   Bearish → price must be BELOW or INSIDE cloud ('below' | 'in')
+      //
+      // tk-reversion is a mean-reversion trade that deliberately starts from the
+      // extended side (bearish fires from ABOVE cloud reverting toward Kijun;
+      // bullish fires from BELOW cloud). Its own R8 filter inside patternRegistry
+      // already enforces the correct cloud side for that pattern, so we skip this
+      // gate for tk-reversion entirely.
+      // Fail-open when cloudPosition is null (data gap).
+      if (patternId !== 'tk-reversion') {
+        const cp = result.cloudPosition; // 'above' | 'in' | 'below' | null
+        if (cp != null) {
+          if (result.signal === 'bullish' && cp === 'below') {
+            // Bullish signal but price below cloud — skip (above or inside allowed)
+            continue;
+          }
+          if (result.signal === 'bearish' && cp === 'above') {
+            // Bearish signal but price above cloud — skip (below or inside allowed)
+            continue;
+          }
+        }
+      }
+
       // ── Quality score — computed BEFORE dedup so filtered signals can retry next candle
       const qCfg = store.getQualityScoreConfig();
       const { qualityScore, setupGrade, scoreBreakdown } = qCfg.enabled

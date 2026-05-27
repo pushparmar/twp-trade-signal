@@ -1,6 +1,7 @@
 import { useState } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
+import useLocalState from "../../hooks/useLocalState";
 import PaperTradingPanel from "./PaperTradingPanel";
 
 function fmt(ts) {
@@ -135,7 +136,7 @@ export default function Dashboard() {
     const orders = useAppStore(s => s.orders);
     const kiteConnected = useAppStore(s => s.kiteConnected);
     const testMode = useAppStore(s => s.testMode);
-    const [orderFilter, setOrderFilter] = useState("all"); // 'all' | 'auto' | 'manual'
+    const [orderFilter, setOrderFilter] = useLocalState("dash:orderFilter", "all"); // 'all' | 'auto' | 'manual'
 
     const filteredOrders = orders.filter(o => {
         if (orderFilter === "all") return true;

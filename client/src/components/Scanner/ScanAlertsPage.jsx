@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import useAppStore from '../../store/appStore';
 import api from '../../api';
+import useLocalState from '../../hooks/useLocalState';
 import ScanChartModal from './ScanChartModal';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1355,21 +1356,21 @@ export default function ScanAlertsPage() {
   const testMode               = useAppStore((s) => s.testMode);
   const setTestMode            = useAppStore((s) => s.setTestMode);
 
-  const [signalFilter,   setSignalFilter]   = useState('all');
-  const [intervalFilter, setIntervalFilter] = useState('all');
-  const [patternFilter,  setPatternFilter]  = useState('all');
+  const [signalFilter,   setSignalFilter]   = useLocalState('scan:signalFilter',   'all');
+  const [intervalFilter, setIntervalFilter] = useLocalState('scan:intervalFilter', 'all');
+  const [patternFilter,  setPatternFilter]  = useLocalState('scan:patternFilter',  'all');
   // Quality filters
-  const [volOnly,        setVolOnly]        = useState(false);
-  const [mtfOnly,        setMtfOnly]        = useState(false);
-  const [minRR,          setMinRR]          = useState(0);
+  const [volOnly,        setVolOnly]        = useLocalState('scan:volOnly',  false);
+  const [mtfOnly,        setMtfOnly]        = useLocalState('scan:mtfOnly',  false);
+  const [minRR,          setMinRR]          = useLocalState('scan:minRR',    0);
   // RSI range filter — '' means no bound set
-  const [rsiMin,         setRsiMin]         = useState('');
-  const [rsiMax,         setRsiMax]         = useState('');
+  const [rsiMin,         setRsiMin]         = useLocalState('scan:rsiMin',   '');
+  const [rsiMax,         setRsiMax]         = useLocalState('scan:rsiMax',   '');
   // Exchange filter — 'all' | 'NSE' | 'MCX'.  UI-only: looks at alert.exchange
   // first and falls back to a label regex (CRUDE / GOLD / SILVER / etc. = MCX).
-  const [exchangeFilter, setExchangeFilter] = useState('all');
+  const [exchangeFilter, setExchangeFilter] = useLocalState('scan:exchangeFilter', 'all');
   // Dedup: ON by default — show the single strongest alert per symbol
-  const [dedup, setDedup] = useState(true);
+  const [dedup,          setDedup]          = useLocalState('scan:dedup', true);
 
   // Buy modal state — set to { alert, entryPrice, action } when user clicks Paper BUY/SELL
   const [buyModalData, setBuyModalData] = useState(null);
@@ -1414,7 +1415,7 @@ export default function ScanAlertsPage() {
 
   // Column sort: { col: 'score'|'symbol'|..., dir: 'asc'|'desc' }
   // Default is 'rank' desc which preserves the "strongest first" ordering.
-  const [sort, setSort] = useState({ col: 'rank', dir: 'desc' });
+  const [sort, setSort] = useLocalState('scan:sort', { col: 'rank', dir: 'desc' });
 
   /** Toggle sort: clicking same column flips direction, new column starts desc. */
   const toggleSort = useCallback((col) => {

@@ -12,6 +12,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import useAppStore from '../../store/appStore';
 import api from '../../api';
+import useLocalState from '../../hooks/useLocalState';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -187,12 +188,12 @@ export default function EquityScanPanel({ inline = false }) {
   const pollRef = useRef(null);
 
   // ── Filter state ─────────────────────────────────────────────────────────
-  const [tfFilter,      setTfFilter]      = useState('all');
-  const [signalFilter,  setSignalFilter]  = useState('all');
-  const [patternFilter, setPatternFilter] = useState('all');
-  const [volOnly,       setVolOnly]       = useState(false);
-  const [minRR,         setMinRR]         = useState(0);
-  const [dedup,         setDedup]         = useState(false);
+  const [tfFilter,      setTfFilter]      = useLocalState('eqscan:tfFilter',      'all');
+  const [signalFilter,  setSignalFilter]  = useLocalState('eqscan:signalFilter',  'all');
+  const [patternFilter, setPatternFilter] = useLocalState('eqscan:patternFilter', 'all');
+  const [volOnly,       setVolOnly]       = useLocalState('eqscan:volOnly',       false);
+  const [minRR,         setMinRR]         = useLocalState('eqscan:minRR',         0);
+  const [dedup,         setDedup]         = useLocalState('eqscan:dedup',         false);
 
   // ── Token subscription for live LTP ──────────────────────────────────────
   const subscribedRef = useRef(new Set());

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import api from "../../api";
 import useAppStore from "../../store/appStore";
+import useLocalState from "../../hooks/useLocalState";
 import ScanChartModal from "../Scanner/ScanChartModal";
 
 // ── Timeframe display order (most important first in the UI) ──────────────────
@@ -790,16 +791,16 @@ export default function PaperTradingPanel() {
     const removePaperTrade = useAppStore(s => s.removePaperTrade);
     const clearPaperTrades = useAppStore(s => s.clearPaperTrades);
     const [closingTrade, setClosingTrade] = useState(null);
-    const [sourceFilter, setSourceFilter] = useState("all");
-    const [exchFilter, setExchFilter] = useState("all");
-    const [openSort, setOpenSort] = useState({ field: "ts", dir: "desc" });
-    const [closedSort, setClosedSort] = useState({ field: "closedTs", dir: "desc" });
+    const [sourceFilter, setSourceFilter] = useLocalState("pt:sourceFilter", "all");
+    const [exchFilter,   setExchFilter]   = useLocalState("pt:exchFilter",   "all");
+    const [openSort,     setOpenSort]     = useLocalState("pt:openSort",     { field: "ts", dir: "desc" });
+    const [closedSort,   setClosedSort]   = useLocalState("pt:closedSort",   { field: "closedTs", dir: "desc" });
 
     // Historical trades fetched from MongoDB — merged with live store for display.
     const [dbTrades, setDbTrades] = useState([]);
     const [loadingDb, setLoadingDb] = useState(false);
     const [dbLoaded, setDbLoaded] = useState(false);
-    const [dbLimit, setDbLimit] = useState(200);
+    const [dbLimit, setDbLimit] = useLocalState("pt:dbLimit", 200);
 
     // Pending orders section — collapsed state (starts expanded so orders are visible)
     const [pendingCollapsed, setPendingCollapsed] = useState(false);
