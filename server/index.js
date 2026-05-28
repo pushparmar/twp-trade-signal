@@ -88,6 +88,19 @@ app.get('/', (req, res) => {
   res.redirect('http://localhost:5173');
 });
 
+// ── Health check — Railway pings this to decide if the service is alive ───────
+app.get('/api/health', (req, res) => {
+  const kiteConnected = !!store.getConfig()?.kite?.accessToken || !!process.env.KITE_ACCESS_TOKEN;
+  res.json({
+    status:        'ok',
+    uptime:        Math.floor(process.uptime()),
+    kiteConnected: kiteConnected,
+    mongoConnected: require('./services/mongoClient').isReady(),
+    env:           process.env.NODE_ENV || 'development',
+    ts:            new Date().toISOString(),
+  });
+});
+
 app.use('/api/kite/auth', kiteAuthRouter);
 app.use('/api/kite', kiteRouter);
 app.use('/api/telegram', telegramRouter);
