@@ -157,15 +157,13 @@ export default function SettingsPanel() {
                             <span className="conn-dot" />
                             <span>{kiteConnected ? "Connected" : "Not connected"}</span>
                         </div>
-                        {!kiteConnected && (
-                            <button className="btn btn-primary btn-sm" onClick={openKiteLogin}>
-                                Login to Kite →
-                            </button>
-                        )}
+                        <button className="btn btn-primary btn-sm" onClick={openKiteLogin}>
+                            {kiteConnected ? "Re-auth Kite →" : "Login to Kite →"}
+                        </button>
                     </div>
                     <p className="poll-hint" style={{ marginTop: "10px" }}>
                         {kiteConnected
-                            ? "Access token expires daily at midnight IST — re-login each morning."
+                            ? "Token expires daily at midnight IST — click Re-auth Kite each morning to refresh."
                             : "Login opens Kite in this tab. After authorizing, you'll be redirected back automatically."}
                     </p>
                 </div>
