@@ -918,8 +918,10 @@ function TfPill({ interval, state, matches, error }) {
 }
 
 function ScreenerToolbar({ onTfResults, onClear }) {
-  const [patterns,   setPatterns]   = useState([]);
-  const [patternId,  setPatternId]  = useState('');
+  const [patterns,            setPatterns]            = useState([]);
+  const [selectedPatternIds,  setSelectedPatternIds]  = useState([]); // [] = all selected
+  const [patternMenuOpen,     setPatternMenuOpen]     = useState(false);
+  const patternMenuRef = useRef(null);
   const [universe,   setUniverse]   = useState(null);   // { macros, watchlist, futures, all }
   const [tfFilter,   setTfFilter]   = useState('all');  // 'all' | interval id
   const [running,    setRunning]    = useState(false);
@@ -992,14 +994,25 @@ function ScreenerToolbar({ onTfResults, onClear }) {
       .finally(() => setResetting(false));
   }, [confirmReset, clearScreenerAlerts, onClear, setTfState, setStatus, setStatusKind, setScreenerLastRunAt, addToast]);
 
+  // Close pattern dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (patternMenuRef.current && !patternMenuRef.current.contains(e.target)) {
+        setPatternMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   // Load pattern list + universe counts on mount
   useEffect(() => {
     api.get('/scan/patterns')
       .then((r) => {
         const list = r.data;
         setPatterns(list);
-        // Default to "all" so the first auto-scan covers every pattern at once
-        if (list.length) setPatternId('all');
+        // Default: all patterns selected (empty array = "all")
+        setSelectedPatternIds([]);
       })
       .catch(() => {});
 
@@ -1008,10 +1021,23 @@ function ScreenerToolbar({ onTfResults, onClear }) {
       .catch(() => {});
   }, []);
 
-  // 'all' is a synthetic option; otherwise look up the real pattern record
-  const selectedPattern = patternId === 'all'
-    ? { id: 'all', label: 'All patterns', description: `Runs every registered pattern (${patterns.length}) against each candle set. Candles are fetched once per instrument×timeframe and reused across patterns, so this is almost free.` }
-    : patterns.find((p) => p.id === patternId);
+  // Derived: which pattern IDs will actually run (empty = all)
+  const activePatternIds = selectedPatternIds.length === 0
+    ? patterns.map((p) => p.id)
+    : selectedPatternIds;
+
+  // Label shown on the multi-select button
+  const patternButtonLabel = selectedPatternIds.length === 0
+    ? `★ All patterns (${patterns.length || '…'})`
+    : selectedPatternIds.length === 1
+      ? (patterns.find((p) => p.id === selectedPatternIds[0])?.label ?? selectedPatternIds[0])
+      : `${selectedPatternIds.length} patterns selected`;
+
+  function togglePattern(id) {
+    setSelectedPatternIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
 
   /**
    * Run the scan: one request per (timeframe × pattern), in parallel.
@@ -1034,16 +1060,13 @@ function ScreenerToolbar({ onTfResults, onClear }) {
    *                                 the foreground summary)
    */
   const runScan = useCallback(async (overrideIntervals = null, opts = {}) => {
-    if (!patternId || running) return;
+    if (running) return;
 
     const intervals = overrideIntervals
       ?? (tfFilter === 'all' ? ALL_INTERVALS : [tfFilter]);
 
-    // Resolve list of pattern IDs to scan. If user picked 'all' but the
-    // pattern list hasn't loaded yet, abort with a clear status.
-    const patternIds = patternId === 'all'
-      ? (patterns.length ? patterns.map((p) => p.id) : null)
-      : [patternId];
+    // Resolve list of pattern IDs to scan
+    const patternIds = activePatternIds.length ? activePatternIds : null;
 
     if (!patternIds) {
       setStatus('Pattern list not loaded yet — refresh and try again');
@@ -1183,7 +1206,7 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     setScreenerLastRunAt(Date.now());
 
     setRunning(false);
-  }, [patternId, running, tfFilter, patterns, strictness, onTfResults, onClear, setScreenerLastRunAt, setTfState, setStatus, setStatusKind]);
+  }, [activePatternIds, running, tfFilter, patterns, strictness, onTfResults, onClear, setScreenerLastRunAt, setTfState, setStatus, setStatusKind]);
 
   /**
    * Manual "Run Screener" click handler.
@@ -1217,18 +1240,60 @@ function ScreenerToolbar({ onTfResults, onClear }) {
     <div className="screener-toolbar">
       {/* Left: pattern picker + TF picker + run button */}
       <div className="screener-toolbar__left">
-        <select
-          className="screener-pattern-select"
-          value={patternId}
-          onChange={(e) => setPatternId(e.target.value)}
-          disabled={running}
-          title="Pattern to scan for"
-        >
-          <option value="all">★ All patterns ({patterns.length || 9})</option>
-          {patterns.map((p) => (
-            <option key={p.id} value={p.id}>{p.label}</option>
-          ))}
-        </select>
+        {/* Multi-select pattern picker */}
+        <div className="screener-pattern-multiselect" ref={patternMenuRef}>
+          <button
+            className={`screener-pattern-select screener-pattern-select--multi ${selectedPatternIds.length > 0 ? 'screener-pattern-select--active' : ''}`}
+            onClick={() => !running && setPatternMenuOpen((o) => !o)}
+            disabled={running}
+            title="Select patterns to scan"
+            type="button"
+          >
+            <span className="screener-pattern-select__label">{patternButtonLabel}</span>
+            <span className="screener-pattern-select__arrow">{patternMenuOpen ? '▲' : '▼'}</span>
+          </button>
+          {patternMenuOpen && (
+            <div className="screener-pattern-dropdown">
+              {/* Select All / Clear All */}
+              <div className="screener-pattern-dropdown__header">
+                <button
+                  className="screener-pattern-dropdown__action"
+                  onClick={() => setSelectedPatternIds([])}
+                  type="button"
+                >All</button>
+                <span className="screener-pattern-dropdown__sep">·</span>
+                <button
+                  className="screener-pattern-dropdown__action"
+                  onClick={() => setSelectedPatternIds(patterns.map((p) => p.id))}
+                  type="button"
+                >Select all</button>
+                <span className="screener-pattern-dropdown__sep">·</span>
+                <button
+                  className="screener-pattern-dropdown__action screener-pattern-dropdown__action--clear"
+                  onClick={() => setSelectedPatternIds([])}
+                  type="button"
+                >Clear</button>
+              </div>
+              {/* Pattern checkboxes */}
+              <div className="screener-pattern-dropdown__list">
+                {patterns.map((p) => {
+                  const checked = selectedPatternIds.length === 0 || selectedPatternIds.includes(p.id);
+                  const explicit = selectedPatternIds.includes(p.id);
+                  return (
+                    <label key={p.id} className={`screener-pattern-option ${explicit ? 'screener-pattern-option--checked' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={explicit}
+                        onChange={() => togglePattern(p.id)}
+                      />
+                      <span>{p.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
 
         <select
           className="screener-tf-select"
@@ -1262,7 +1327,7 @@ function ScreenerToolbar({ onTfResults, onClear }) {
         <button
           className={`screener-run-btn ${running ? 'screener-run-btn--running' : ''}`}
           onClick={handleManualRunScan}
-          disabled={running || !patternId}
+          disabled={running || !patterns.length}
           title="Run screener — Shift+click to force re-scan during off-market hours"
         >
           {running ? (

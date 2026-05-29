@@ -20,7 +20,7 @@ const tradeStore    = require('./tradeStore');
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-const PATTERN_IDS = ['tk-reversion'];
+const PATTERN_IDS = ['tk-reversion', 'kumo-breakout'];
 const INTERVALS   = ['minute', '5minute', '15minute'];
 const POLL_MS     = 2000; // check for new candles every 2 seconds
 
