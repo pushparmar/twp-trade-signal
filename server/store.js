@@ -460,6 +460,10 @@ function getAutoTraderSettings() {
         // When true, SL exits wait for a 15-minute candle close beyond the SL
         // level before closing the position — avoids wick-triggered false exits.
         slViaCandleClose: config.autoTrader?.slViaCandleClose ?? false,
+        // Trading time window (IST). No NEW entries placed outside this range.
+        // Open trades continue to be monitored and exited at any time.
+        tradeStartHHMM: config.autoTrader?.tradeStartHHMM ?? '09:20',
+        tradeEndHHMM:   config.autoTrader?.tradeEndHHMM   ?? '15:15',
     };
 }
 

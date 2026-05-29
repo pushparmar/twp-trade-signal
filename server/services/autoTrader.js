@@ -37,6 +37,27 @@ const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
 const candleStore     = require('./candleStore');
 const { getSignals: ichimokuGetSignals, to4H } = require('./ichimoku');
 
+// ── Trading time window helper ───────────────────────────────────────────────
+
+/**
+ * Returns true when the current IST time is within the configured entry window.
+ * Reads tradeStartHHMM / tradeEndHHMM from autoTrader settings (format 'HH:MM').
+ * Defaults: 09:20–15:15 IST.
+ */
+function _isWithinTradingWindow() {
+  const settings  = store.getAutoTraderSettings();
+  const start     = settings.tradeStartHHMM ?? '09:20';
+  const end       = settings.tradeEndHHMM   ?? '15:15';
+
+  const nowIST  = new Date(Date.now() + IST_OFFSET_MS);
+  const nowMins = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
+
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+
+  return nowMins >= sh * 60 + sm && nowMins <= eh * 60 + em;
+}
+
 // ── F5: Pattern-specific TSL trigger R-values ────────────────────────────────
 // Trend patterns (breakout, support, bounce) need 1.5R room before trailing
 // so the trade can develop.  Bounce/retest patterns already have confirmation
@@ -319,6 +340,18 @@ async function _onAlert(alert, source) {
     || mcxSymbolHint.test(String(alert.label ?? ''));
   if (!isNseOpen() && !isMcxOpen()) return;
   if (!isNseOpen() && isMcxOpen() && !isMcxSymbol) return;
+
+  // ── 2.6a Trading time window gate ────────────────────────────────────────
+  // No new entries before 09:20 or after 15:15 IST (configurable).
+  // Only NSE equities respect this; MCX sessions run later so we skip the gate.
+  if (isNseOpen() && !isMcxSymbol && !_isWithinTradingWindow()) {
+    const s = store.getAutoTraderSettings();
+    console.log(
+      `[AutoTrader] ⏰ Time filter: outside window ` +
+      `(${s.tradeStartHHMM}–${s.tradeEndHHMM} IST) — ${alert.label ?? token} skipped`,
+    );
+    return;
+  }
 
   const numToken = Number(token);
 

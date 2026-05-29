@@ -243,6 +243,40 @@ async function getCandles(instrumentToken, interval, bars, priority = false) {
 }
 
 /**
+ * Directly seed a token+interval buffer from a pre-fetched candle array,
+ * bypassing the Kite historical API entirely.
+ *
+ * Used by equityScanService to restore candles from MongoDB without hitting
+ * the Kite rate-limited endpoint. The behaviour mirrors what `getCandles()`
+ * does after the API call resolves — live tick state is preserved if present.
+ *
+ * @param {number}   instrumentToken
+ * @param {string}   interval   e.g. '60minute', 'day'
+ * @param {object[]} candles    OHLCV array (same format as historicalCache returns)
+ */
+function seed(instrumentToken, interval, candles) {
+  if (!candles || candles.length === 0) return;
+  const token = Number(instrumentToken);
+  const key   = `${token}:${interval}`;
+
+  // Register in token index so onTick can find this entry
+  if (!_tokenIndex.has(token)) _tokenIndex.set(token, new Set());
+  _tokenIndex.get(token).add(interval);
+
+  // Preserve any in-flight live candle state built from ticks during the load
+  const live = _store.get(key);
+  _store.set(key, {
+    candles:       [...candles],
+    currentSlot:   live?.currentSlot   ?? null,
+    currentCandle: live?.currentCandle ?? null,
+  });
+
+  // Mark as seeded so getCandles() won't trigger a redundant Kite re-fetch
+  _seededWith.set(key, candles.length);
+  _emptyResultAt.delete(key);
+}
+
+/**
  * Drop all buffers for a token (call when unsubscribing).
  */
 function remove(instrumentToken) {
@@ -289,4 +323,4 @@ function clearAll() {
   return cleared;
 }
 
-module.exports = { onTick, getCandles, getCandlesSync, remove, stats, clearAll };
+module.exports = { onTick, getCandles, getCandlesSync, seed, remove, stats, clearAll };

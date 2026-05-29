@@ -625,19 +625,24 @@ function AutoTraderSettings() {
 
     async function saveEdits() {
         const profit = Number(profitStr);
-        const trig = Number(trigStr);
-        const dist = Number(distStr);
-        const risk = Number(riskStr);
+        const trig   = Number(trigStr);
+        const dist   = Number(distStr);
+        const risk   = Number(riskStr);
         const updates = {};
-        if (profit > 0) updates.minProfit = profit;
-        if (trig > 0) updates.tslTriggerR = trig;
-        if (dist > 0) updates.tslDistanceR = dist;
-        if (risk > 0) updates.riskPerTrade = risk;
+        if (profit > 0) updates.minProfit    = profit;
+        if (trig   > 0) updates.tslTriggerR  = trig;
+        if (dist   > 0) updates.tslDistanceR = dist;
+        if (risk   > 0) updates.riskPerTrade = risk;
+        // Time window — save only if valid HH:MM format
+        if (/^\d{2}:\d{2}$/.test(startStr)) updates.tradeStartHHMM = startStr;
+        if (/^\d{2}:\d{2}$/.test(endStr))   updates.tradeEndHHMM   = endStr;
         if (Object.keys(updates).length) await patch(updates);
         setEditing(false);
     }
 
-    const [riskStr, setRiskStr] = useState("");
+    const [riskStr,  setRiskStr]  = useState("");
+    const [startStr, setStartStr] = useState("");
+    const [endStr,   setEndStr]   = useState("");
 
     function startEdit() {
         if (!settings) return;
@@ -645,6 +650,8 @@ function AutoTraderSettings() {
         setTrigStr(String(settings.tslTriggerR));
         setDistStr(String(settings.tslDistanceR));
         setRiskStr(String(settings.riskPerTrade));
+        setStartStr(settings.tradeStartHHMM ?? '09:20');
+        setEndStr(settings.tradeEndHHMM     ?? '15:15');
         setEditing(true);
     }
 
@@ -687,6 +694,11 @@ function AutoTraderSettings() {
                     >
                         {settings.tslEnabled ? `ON · ${settings.tslTriggerR}R / ${settings.tslDistanceR}R` : "OFF"}
                     </button>
+                    <span className="at-risk-sep">·</span>
+                    <span className="at-risk-label" title="Trading time window (IST)">Window</span>
+                    <span className="at-risk-val" title="No new entries outside this IST window">
+                        {settings.tradeStartHHMM ?? '09:20'}–{settings.tradeEndHHMM ?? '15:15'}
+                    </span>
                     <span className="at-risk-sep">·</span>
                     <span className="at-risk-label" title="SL via 15m candle close">SL close</span>
                     <button
@@ -752,6 +764,22 @@ function AutoTraderSettings() {
                         value={distStr}
                         onChange={e => setDistStr(e.target.value)}
                         placeholder="0.5"
+                    />
+                    <label className="at-edit-label" title="No new entries before this IST time">Entry from</label>
+                    <input
+                        className="at-edit-input"
+                        type="time"
+                        value={startStr}
+                        onChange={e => setStartStr(e.target.value)}
+                        style={{ width: 90 }}
+                    />
+                    <label className="at-edit-label" title="No new entries after this IST time">Entry until</label>
+                    <input
+                        className="at-edit-input"
+                        type="time"
+                        value={endStr}
+                        onChange={e => setEndStr(e.target.value)}
+                        style={{ width: 90 }}
                     />
                     <button className="btn btn-primary btn-sm" onClick={saveEdits} disabled={saving}>
                         Save

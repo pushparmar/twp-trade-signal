@@ -19,16 +19,18 @@
  *   week → synthesised from daily via toWeekly()   (400 × day bars → ~80 weeks)
  */
 
-const candleStore      = require('./candleStore');
-const patternRegistry  = require('./patternRegistry');
-const instrumentCache  = require('./instrumentCache');
-const equityScanRepo   = require('../db/repositories/equityScanRepo');
-const { to4H }         = require('./ichimoku');
+const candleStore           = require('./candleStore');
+const patternRegistry       = require('./patternRegistry');
+const instrumentCache       = require('./instrumentCache');
+const equityScanRepo        = require('../db/repositories/equityScanRepo');
+const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
+const { to4H }              = require('./ichimoku');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-/** Maximum instruments to scan. Set high enough to cover all NSE EQ (~1200-1400). */
-const EQUITY_SCAN_MAX = 1500;
+// No hard cap — scan ALL NSE EQ instruments returned by getAllNseEquity()
+// (~1200-1400 stocks).  F&O stocks come first so the most liquid names
+// always get scanned even if the run is interrupted.
 
 /** Minimum candle bars needed for valid Ichimoku (52 for SenkouB + 26 chikou = 78 minimum). */
 const MIN_BARS = 52;
@@ -179,37 +181,187 @@ async function run() {
   return { status: 'started' };
 }
 
+// ── Candle merge helper ───────────────────────────────────────────────────────
+
+/**
+ * Merge a full historical candle array (from MongoDB) with a small set of
+ * recently-fetched bars (from Kite).  Only bars whose timestamp is strictly
+ * after the last historical bar are appended — prevents duplicates when the
+ * Kite fetch window overlaps the stored history.
+ *
+ * @param {object[]} historical  Full candle array from MongoDB cache
+ * @param {object[]} recent      Small recent-bars batch from Kite API
+ * @param {number}   maxSize     Ring-buffer cap — oldest bars are trimmed
+ * @returns {object[]}
+ */
+function _mergeCandles(historical, recent, maxSize) {
+  if (!recent      || recent.length      === 0) return historical;
+  if (!historical  || historical.length  === 0) return recent.slice(-maxSize);
+
+  // 'YYYY-MM-DDTHH:MM' prefix is sortable as a plain string for both ISO and plain dates
+  const lastPrefix = String(historical[historical.length - 1].date).slice(0, 16);
+  const newBars    = recent.filter(c => String(c.date).slice(0, 16) > lastPrefix);
+
+  if (newBars.length === 0) return historical;  // nothing new from Kite
+
+  const merged = [...historical, ...newBars];
+  return merged.length > maxSize ? merged.slice(merged.length - maxSize) : merged;
+}
+
 async function _runScan(scanDate) {
   console.log(`[EquityScan] Starting full equity scan for ${scanDate}`);
 
-  const instruments = instrumentCache.getAllNseEquity().slice(0, EQUITY_SCAN_MAX);
+  const instruments = instrumentCache.getAllNseEquity(); // no cap — all NSE EQ
   const patterns    = patternRegistry.list();
   const intervals   = ['4h', 'day', 'week'];
 
-  _state.progress.total = instruments.length;   // shows stocks count, not stocks×intervals
+  _state.progress.total = instruments.length;
 
-  // ── Phase 1: Parallel candle prefetch ─────────────────────────────────────
-  // Non-F&O stocks are NOT pre-buffered by backgroundScanner. We kick off ALL
-  // API fetches simultaneously so historicalCache queues them at its own rate
-  // limit (3 concurrent, 300ms gap ≈ 5-8 req/s). This means ~1300 non-F&O
-  // stocks × 2 intervals = 2600 fetches complete in ~5-9 min rather than
-  // hours of sequential blocking. F&O stocks return instantly from buffer.
+  // ── Phase 0: Classify instruments against MongoDB candle cache ──────────────
   //
-  // We fetch '60minute' (covers 4h synthesis) and 'day' (covers both 1D and
-  // 1W synthesis) — only 2 fetches per stock.
-  console.log(`[EquityScan] Prefetching candles for ${instruments.length} instruments…`);
+  // Strategy:
+  //   fresh   — both intervals stored AND lastCandleDate >= yesterdayIST
+  //             → seed from MongoDB directly, zero Kite calls
+  //   stale   — both intervals stored, but lastCandleDate < yesterdayIST
+  //             → fetch a small recent window from Kite, merge onto stored history
+  //   missing — at least one interval not stored (first-ever run, or new stock)
+  //             → full Kite fetch for both intervals
+  //
+  // "yesterday" is the minimum freshness threshold: day candles close at 15:30 IST
+  // so during a morning scan the newest candle is always from the prior session.
+  const todayIST     = scanDate;
+  const yesterdayIST = (() => {
+    const d = new Date(Date.now() + 5.5 * 3600_000 - 86_400_000);
+    return d.toISOString().slice(0, 10);
+  })();
+
   _state.prefetching = true;
+  console.log(`[EquityScan] Phase 0: loading candle history from MongoDB (fresh ≥ ${yesterdayIST})…`);
 
-  const prefetchPromises = instruments.flatMap((inst) => [
-    candleStore.getCandles(inst.instrumentToken, '60minute', CANDLE_BARS['4h'])
-      .catch(() => null),
-    candleStore.getCandles(inst.instrumentToken, 'day', CANDLE_BARS['week'])
-      .catch(() => null),
-  ]);
+  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
 
-  await Promise.all(prefetchPromises);
+  const freshInsts   = [];  // both intervals fresh  — MongoDB only
+  const staleInsts   = [];  // both exist, needs top-up — incremental Kite fetch
+  const missingInsts = [];  // at least one interval absent — full Kite fetch
+
+  for (const inst of instruments) {
+    const e60  = cachedCandles.get(`${inst.instrumentToken}:60minute`);
+    const eDay = cachedCandles.get(`${inst.instrumentToken}:day`);
+
+    const hasBoth   = e60  != null && eDay != null;
+    const bothFresh = hasBoth &&
+                      (e60.lastCandleDate  ?? '') >= yesterdayIST &&
+                      (eDay.lastCandleDate ?? '') >= yesterdayIST;
+
+    if (bothFresh) {
+      freshInsts.push(inst);
+      candleStore.seed(Number(inst.instrumentToken), '60minute', e60.candles);
+      candleStore.seed(Number(inst.instrumentToken), 'day',      eDay.candles);
+    } else if (hasBoth) {
+      staleInsts.push(inst);
+    } else {
+      missingInsts.push(inst);
+    }
+  }
+
+  console.log(
+    `[EquityScan] Phase 0: ${freshInsts.length} fresh (MongoDB), ` +
+    `${staleInsts.length} stale (incremental), ${missingInsts.length} missing (full fetch)`,
+  );
+
+  // ── Phase 1a: Incremental update for stale instruments ───────────────────
+  //
+  // Fetch only a small recent window from Kite (10 day bars / 20 hourly bars —
+  // enough to cover any multi-day gap including weekends and holidays).
+  // Merge new bars onto the end of the existing MongoDB history so the full
+  // 400–450 bar depth is always available for pattern detection.
+  // The merged arrays are upserted back to MongoDB so the next run sees them
+  // as "fresh" and skips Kite entirely.
+  const INCR_BARS = { '60minute': 20, 'day': 10 };
+
+  if (staleInsts.length > 0) {
+    console.log(`[EquityScan] Phase 1a: incremental Kite fetch for ${staleInsts.length} stale instruments…`);
+
+    const stalePromises = staleInsts.flatMap((inst) => {
+      const e60  = cachedCandles.get(`${inst.instrumentToken}:60minute`);
+      const eDay = cachedCandles.get(`${inst.instrumentToken}:day`);
+
+      return [
+        candleStore.getCandles(inst.instrumentToken, '60minute', INCR_BARS['60minute'])
+          .then((recent) => {
+            const merged = _mergeCandles(e60.candles, recent, CANDLE_BARS['4h']);
+            candleStore.seed(Number(inst.instrumentToken), '60minute', merged);
+            return { token: Number(inst.instrumentToken), interval: '60minute', candles: merged };
+          })
+          .catch(() => null),
+
+        candleStore.getCandles(inst.instrumentToken, 'day', INCR_BARS['day'])
+          .then((recent) => {
+            const merged = _mergeCandles(eDay.candles, recent, CANDLE_BARS['week']);
+            candleStore.seed(Number(inst.instrumentToken), 'day', merged);
+            return { token: Number(inst.instrumentToken), interval: 'day', candles: merged };
+          })
+          .catch(() => null),
+      ];
+    });
+
+    const staleResults = (await Promise.all(stalePromises)).filter(Boolean);
+    console.log(`[EquityScan] Phase 1a: done — ${staleResults.length} entries merged`);
+
+    // Persist merged histories back to MongoDB (fire-and-forget)
+    if (staleResults.length > 0) {
+      setImmediate(() =>
+        equityCandleCacheRepo.bulkUpsert(staleResults)
+          .catch((err) => console.warn('[EquityScan] Stale upsert failed:', err.message)),
+      );
+    }
+  }
+
+  // ── Phase 1b: Full fetch for instruments with no cached history ───────────
+  //
+  // First-ever run (or new stocks added to the exchange): fetch the full
+  // candle depth from Kite.  Results are upserted to MongoDB so subsequent
+  // runs hit Phase 1a (incremental) instead.
+  if (missingInsts.length > 0) {
+    console.log(
+      `[EquityScan] Phase 1b: full Kite fetch for ${missingInsts.length} instruments` +
+      ` (${freshInsts.length + staleInsts.length} from MongoDB)…`,
+    );
+
+    const fetchPromises = missingInsts.flatMap((inst) => [
+      candleStore.getCandles(inst.instrumentToken, '60minute', CANDLE_BARS['4h']).catch(() => null),
+      candleStore.getCandles(inst.instrumentToken, 'day',      CANDLE_BARS['week']).catch(() => null),
+    ]);
+
+    await Promise.all(fetchPromises);
+    console.log(`[EquityScan] Phase 1b: full fetch complete`);
+
+    // Persist to MongoDB so the next run only does an incremental top-up
+    setImmediate(async () => {
+      try {
+        const toCache = [];
+        for (const inst of missingInsts) {
+          for (const interval of ['60minute', 'day']) {
+            const candles = candleStore.getCandlesSync(inst.instrumentToken, interval);
+            if (candles && candles.length >= MIN_BARS) {
+              toCache.push({ token: Number(inst.instrumentToken), interval, candles });
+            }
+          }
+        }
+        if (toCache.length > 0) {
+          await equityCandleCacheRepo.bulkUpsert(toCache);
+          console.log(`[EquityScan] Saved ${toCache.length} new candle arrays to MongoDB`);
+        }
+      } catch (err) {
+        console.warn('[EquityScan] MongoDB candle cache write failed:', err.message);
+      }
+    });
+  } else {
+    console.log(`[EquityScan] Phase 1b: skipped — all instruments have cached history`);
+  }
+
   _state.prefetching = false;
-  console.log(`[EquityScan] Prefetch complete — starting pattern scan`);
+  console.log(`[EquityScan] Starting pattern scan on ${instruments.length} instruments…`);
 
   // ── Phase 2: Pattern scan from buffer (no API calls) ──────────────────────
 
