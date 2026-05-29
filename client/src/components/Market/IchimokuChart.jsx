@@ -41,6 +41,66 @@ const TICK_INTERVAL_SECS = {
 // Dashed line style constant (lightweight-charts LineStyle.Dashed = 2)
 const LINE_DASHED = 2;
 
+// ── FVG / Order Block detection (pure, no React deps) ────────────────────────
+
+/**
+ * Detect Fair Value Gaps from OHLCV candle array.
+ * Bullish FVG:  candle[i-2].high < candle[i].low   (price jumped up, left a gap below)
+ * Bearish FVG:  candle[i-2].low  > candle[i].high  (price jumped down, left a gap above)
+ * Returns the last `maxCount` gaps so the chart stays uncluttered.
+ */
+function _detectFVG(candles, maxCount = 5) {
+    const gaps = [];
+    for (let i = 2; i < candles.length; i++) {
+        const c0 = candles[i - 2];
+        const c2 = candles[i];
+        if (c0.high < c2.low) {
+            // Bullish gap — unfilled upward inefficiency
+            gaps.push({ signal: 'bullish', top: c2.low, bottom: c0.high });
+        } else if (c0.low > c2.high) {
+            // Bearish gap — unfilled downward inefficiency
+            gaps.push({ signal: 'bearish', top: c0.low, bottom: c2.high });
+        }
+    }
+    return gaps.slice(-maxCount);
+}
+
+/**
+ * Detect Order Blocks from OHLCV candle array.
+ * Bullish OB:  last bearish candle before `minImpulse` consecutive bullish candles
+ * Bearish OB:  last bullish candle before `minImpulse` consecutive bearish candles
+ * Returns the last `maxCount` blocks — most recent are most relevant.
+ */
+function _detectOrderBlocks(candles, maxCount = 3, minImpulse = 2) {
+    const blocks = [];
+    for (let i = 1; i < candles.length - minImpulse; i++) {
+        const c = candles[i];
+        const isBear = c.close < c.open;
+        const isBull = c.close > c.open;
+
+        if (isBear) {
+            // Check for bullish impulse after this bearish candle
+            let bullCount = 0;
+            for (let j = i + 1; j <= i + minImpulse && j < candles.length; j++) {
+                if (candles[j].close > candles[j].open) bullCount++;
+            }
+            if (bullCount >= minImpulse) {
+                blocks.push({ signal: 'bullish', high: c.high, low: c.low });
+            }
+        } else if (isBull) {
+            // Check for bearish impulse after this bullish candle
+            let bearCount = 0;
+            for (let j = i + 1; j <= i + minImpulse && j < candles.length; j++) {
+                if (candles[j].close < candles[j].open) bearCount++;
+            }
+            if (bearCount >= minImpulse) {
+                blocks.push({ signal: 'bearish', high: c.high, low: c.low });
+            }
+        }
+    }
+    return blocks.slice(-maxCount);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Read a CSS variable from :root, with a fallback for when theme hasn't loaded */
@@ -69,6 +129,9 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
     const [timefmAvail, setTimefmAvail] = useState(true);
     // Toggle Ichimoku indicator visibility (cloud + lines) without removing series
     const [showIchimoku, setShowIchimoku] = useState(true);
+    // Toggle Fair Value Gap and Order Block overlays
+    const [showFVG, setShowFVG] = useState(true);
+    const [showOB,  setShowOB]  = useState(true);
 
     const containerRef = useRef(null);
     const chartRef = useRef(null);
@@ -80,6 +143,12 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
     // stale value when the user switches TF (interval is not in [tick] deps).
     const intervalRef = useRef(interval);
     intervalRef.current = interval; // updated on every render, no useEffect needed
+
+    // Raw OHLCV candles from the last successful data load — used for FVG/OB detection
+    const rawCandlesRef = useRef([]);
+    // Price-line handles for FVG and OB overlays — kept for cleanup on redraw/unmount
+    const fvgLinesRef = useRef([]);
+    const obLinesRef  = useRef([]);
 
     // Subscribe to live tick for this token from the global store
     const tick = useAppStore(s => (token ? s.ticks[token] : null));
@@ -373,6 +442,62 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
         s.chikou.setData([]);
         // Reset live candle tracker so stale ticks don't bleed into the new TF
         liveRef.current = null;
+        // Clear FVG/OB overlays and raw candle store
+        _clearFVGLines();
+        _clearOBLines();
+        rawCandlesRef.current = [];
+    }
+
+    /** Remove all existing FVG price lines from the candle series */
+    function _clearFVGLines() {
+        const cs = seriesRef.current.candles;
+        for (const line of fvgLinesRef.current) {
+            try { cs?.removePriceLine(line); } catch { /* already removed */ }
+        }
+        fvgLinesRef.current = [];
+    }
+
+    /** Remove all existing OB price lines from the candle series */
+    function _clearOBLines() {
+        const cs = seriesRef.current.candles;
+        for (const line of obLinesRef.current) {
+            try { cs?.removePriceLine(line); } catch { /* already removed */ }
+        }
+        obLinesRef.current = [];
+    }
+
+    /** Redraw FVG zones from rawCandlesRef (respects current showFVG state) */
+    function _redrawFVG(visible) {
+        _clearFVGLines();
+        const cs = seriesRef.current.candles;
+        if (!visible || !cs || rawCandlesRef.current.length < 3) return;
+        const gaps = _detectFVG(rawCandlesRef.current, 5);
+        for (const gap of gaps) {
+            const isBull = gap.signal === 'bullish';
+            const color  = isBull ? 'rgba(89, 200, 92, 0.80)' : 'rgba(215, 90, 74, 0.80)';
+            const title  = isBull ? 'FVG↑' : 'FVG↓';
+            fvgLinesRef.current.push(
+                cs.createPriceLine({ price: gap.top,    color, lineWidth: 1, lineStyle: LINE_DASHED, axisLabelVisible: false, title }),
+                cs.createPriceLine({ price: gap.bottom, color, lineWidth: 1, lineStyle: LINE_DASHED, axisLabelVisible: false, title: '' }),
+            );
+        }
+    }
+
+    /** Redraw OB zones from rawCandlesRef (respects current showOB state) */
+    function _redrawOB(visible) {
+        _clearOBLines();
+        const cs = seriesRef.current.candles;
+        if (!visible || !cs || rawCandlesRef.current.length < 3) return;
+        const blocks = _detectOrderBlocks(rawCandlesRef.current, 3);
+        for (const ob of blocks) {
+            const isBull = ob.signal === 'bullish';
+            const color  = isBull ? 'rgba(120, 220, 120, 0.90)' : 'rgba(240, 130, 80, 0.90)';
+            const title  = isBull ? 'OB↑' : 'OB↓';
+            obLinesRef.current.push(
+                cs.createPriceLine({ price: ob.high, color, lineWidth: 1, lineStyle: 0, axisLabelVisible: false, title }),
+                cs.createPriceLine({ price: ob.low,  color, lineWidth: 1, lineStyle: 0, axisLabelVisible: false, title: '' }),
+            );
+        }
     }
 
     // ── Populate all series from API response data ────────────────────────────
@@ -432,6 +557,13 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
         // can call series.update() without re-fetching historical data.
         const lastCandle = candleData[candleData.length - 1];
         liveRef.current = lastCandle ? { ...lastCandle } : null;
+
+        // Store raw OHLCV for FVG / OB detection and draw overlays immediately.
+        // We pass the current React state values explicitly so the draw functions
+        // use the right visibility flags even when called inside an async .then().
+        rawCandlesRef.current = candleData;
+        _redrawFVG(showFVG);
+        _redrawOB(showOB);
 
         // Set the initial visible range.
         //
@@ -577,6 +709,12 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
         s.tenkan?.applyOptions(v);
         s.chikou?.applyOptions(v);
     }, [showIchimoku]);
+
+    // ── FVG / OB overlay toggle ─────────────────────────────────────────────
+    // Re-draw (or clear) price lines whenever the user toggles the overlay.
+    // _redrawFVG/_redrawOB clear existing lines first, so toggling off removes them.
+    useEffect(() => { _redrawFVG(showFVG); }, [showFVG]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { _redrawOB(showOB);   }, [showOB]);  // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── TimeFM forecast overlay ─────────────────────────────────────────────
     // Forecasts persist per instrument — switching token does NOT clear them.
@@ -797,6 +935,22 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
                         title={showIchimoku ? 'Hide Ichimoku cloud & lines' : 'Show Ichimoku cloud & lines'}
                     >
                         {showIchimoku ? 'Ichi ✓' : 'Ichi ✗'}
+                    </button>
+                    {/* FVG overlay toggle */}
+                    <button
+                        className={`ichi-chart-auto-btn${showFVG ? '' : ' ichi-chart-auto-btn--off'}`}
+                        onClick={() => setShowFVG(v => !v)}
+                        title={showFVG ? 'Hide Fair Value Gaps' : 'Show Fair Value Gaps'}
+                    >
+                        {showFVG ? 'FVG ✓' : 'FVG ✗'}
+                    </button>
+                    {/* OB overlay toggle */}
+                    <button
+                        className={`ichi-chart-auto-btn${showOB ? '' : ' ichi-chart-auto-btn--off'}`}
+                        onClick={() => setShowOB(v => !v)}
+                        title={showOB ? 'Hide Order Blocks' : 'Show Order Blocks'}
+                    >
+                        {showOB ? 'OB ✓' : 'OB ✗'}
                     </button>
                     {/* Auto button — resets pan/zoom back to the default view */}
                     <button

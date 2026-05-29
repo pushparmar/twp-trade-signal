@@ -1401,10 +1401,11 @@ function ScreenerToolbar({ onTfResults, onClear }) {
         </div>
       )}
 
-      {/* Pattern description tooltip row */}
-      {selectedPattern?.description && (
-        <div className="screener-pattern-desc">{selectedPattern.description}</div>
-      )}
+      {/* Pattern description tooltip row — shown only when exactly one pattern is selected */}
+      {selectedPatternIds.length === 1 && (() => {
+        const desc = patterns.find(p => p.id === selectedPatternIds[0])?.description;
+        return desc ? <div className="screener-pattern-desc">{desc}</div> : null;
+      })()}
     </div>
   );
 }

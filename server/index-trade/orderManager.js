@@ -39,6 +39,31 @@ let _tickTimer = null;
 // from a different timeframe, pattern, or strategy while a trade is open.
 const _openKeys = new Set(); // token (Number)
 
+// ── IST time window helper ──────────────────────────────────────────────────
+
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+/**
+ * Returns true when the current IST time is within the configured trading window.
+ * Reads tradeStartHHMM / tradeEndHHMM from config (format 'HH:MM').
+ * Defaults to '09:20'–'15:15' so both pattern and LP entries respect the gate.
+ */
+function _isWithinTradingWindow() {
+    const config = tradeStore.getConfig();
+    const start  = config.tradeStartHHMM ?? '09:20';
+    const end    = config.tradeEndHHMM   ?? '15:15';
+
+    const nowIST  = new Date(Date.now() + IST_OFFSET_MS);
+    const nowMins = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
+
+    const [sh, sm] = start.split(':').map(Number);
+    const [eh, em] = end.split(':').map(Number);
+    const startMins = sh * 60 + sm;
+    const endMins   = eh * 60 + em;
+
+    return nowMins >= startMins && nowMins <= endMins;
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -73,6 +98,16 @@ function onSignal(signal) {
     const config = tradeStore.getConfig();
     if (!config.enabled) return;
     if (!isNseOpen()) return;
+
+    // ── Time window gate ──────────────────────────────────────────────────────
+    if (!_isWithinTradingWindow()) {
+        const cfg = tradeStore.getConfig();
+        console.log(
+            `[IdxOrder] ⏰ Time filter: outside trading window ` +
+            `(${cfg.tradeStartHHMM}–${cfg.tradeEndHHMM} IST) — ${signal.symbol} skipped`,
+        );
+        return;
+    }
 
     const { token, interval, close, sl, target, signal: direction } = signal;
     if (!close || !sl || !target || !token || !direction) return;
@@ -186,6 +221,7 @@ function onSignal(signal) {
  */
 function _checkLowPremiumEntry() {
     if (!isNseOpen()) return;
+    if (!_isWithinTradingWindow()) return; // respect trading time window
 
     const config = tradeStore.getConfig();
     if (!config.enabled || !config.lowPremiumEnabled) return;

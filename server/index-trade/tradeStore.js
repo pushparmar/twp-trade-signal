@@ -37,6 +37,12 @@ let _config = {
   rsiBearishMin:     35,     // SELL (future): RSI must be ≥ this
   rsiBearishMax:     50,     // SELL (future): RSI must be ≤ this
 
+  // ── Trading time window (IST) ────────────────────────────────────────────────
+  // No new entries (pattern OR LP) are placed outside this window.
+  // Format: 'HH:MM' in 24-hour IST.
+  tradeStartHHMM: '09:20',   // earliest entry — first 5 min of session skipped
+  tradeEndHHMM:   '15:15',   // last entry cutoff — 15 min before close
+
   // ── Low Premium Scalper strategy ────────────────────────────────────────────
   // Buys any subscribed option in the lpEntryMin–lpEntryMax range.
   // Averages down once when price drops lpAvgDownPct from entry.

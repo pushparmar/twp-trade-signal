@@ -652,6 +652,59 @@ function OptionChainIndex({ indexName, data }) {
  *   • Max lpMaxPositions concurrent LP trades
  *   • TSL activates at lpTslTrigger → SL jumps to lpTslInitialSl, then trails at lpTslTrailPct × peak
  */
+
+// ── Time Filter Config ────────────────────────────────────────────────────────
+
+function TimeFilterConfig({ config, onUpdate }) {
+  if (!config) return null;
+
+  const startTime = config.tradeStartHHMM ?? '09:20';
+  const endTime   = config.tradeEndHHMM   ?? '15:15';
+
+  function handleChange(key, val) {
+    // Basic HH:MM validation before sending to server
+    if (/^\d{2}:\d{2}$/.test(val)) onUpdate({ [key]: val });
+  }
+
+  return (
+    <div className="settings-group">
+      <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        ⏰ Trading Time Window
+        <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                       background: '#51cf6622', color: '#51cf66' }}>
+          {startTime} – {endTime} IST
+        </span>
+      </h3>
+      <p style={{ fontSize: 12, color: 'var(--txt-muted)', marginBottom: 12 }}>
+        No new entries (pattern or LP) will be placed outside this window. Existing open trades
+        continue to be monitored and exited normally at any time.
+      </p>
+      <div style={{ display: 'flex', gap: 24, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <span style={{ color: 'var(--txt-muted)' }}>No entry before (IST)</span>
+          <input
+            type="time"
+            className="screener-input"
+            value={startTime}
+            onChange={e => handleChange('tradeStartHHMM', e.target.value)}
+            style={{ width: 120, fontSize: 13 }}
+          />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <span style={{ color: 'var(--txt-muted)' }}>No entry after (IST)</span>
+          <input
+            type="time"
+            className="screener-input"
+            value={endTime}
+            onChange={e => handleChange('tradeEndHHMM', e.target.value)}
+            style={{ width: 120, fontSize: 13 }}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
 function LowPremiumConfig({ config, onUpdate }) {
   const [open, setOpen] = useState(false);
 
@@ -1017,6 +1070,7 @@ export default function IndexTradePage() {
       <div className="settings-panel">
         <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
+        <TimeFilterConfig config={config} onUpdate={updateConfig} />
         <LowPremiumConfig config={config} onUpdate={updateConfig} />
         <RsiFilterConfig config={config} onUpdate={updateConfig} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
