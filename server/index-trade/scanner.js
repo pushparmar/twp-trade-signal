@@ -20,9 +20,16 @@ const tradeStore    = require('./tradeStore');
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
-const PATTERN_IDS = ['tk-reversion', 'kumo-breakout'];
-const INTERVALS   = ['minute', '5minute', '15minute'];
+const PATTERN_IDS = ['tk-reversion', 'kumo-breakout', 'kijun-bounce', 'kijun-retest'];
+const INTERVALS   = ['minute', '5minute', '15minute', '60minute'];
 const POLL_MS     = 2000; // check for new candles every 2 seconds
+
+// Patterns that should only run on specific intervals.
+// Patterns not listed here run on ALL intervals.
+const PATTERN_INTERVALS = {
+  'kijun-bounce': ['15minute', '60minute'],  // Kijun support/resistance — higher TF only
+  'kijun-retest': ['15minute', '60minute'],  // Kijun retest — higher TF only
+};
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -56,7 +63,7 @@ function _markSeen(token, interval, patternId, signal) {
 
 // ── TF label helper ─────────────────────────────────────────────────────────
 
-const TF_LABEL = { minute: '1m', '5minute': '5m', '15minute': '15m' };
+const TF_LABEL = { minute: '1m', '5minute': '5m', '15minute': '15m', '60minute': '1h' };
 
 // ── Scan logic ──────────────────────────────────────────────────────────────
 
@@ -75,6 +82,10 @@ function _scan(token, interval) {
   const rsi14    = rsi14Raw != null ? +rsi14Raw.toFixed(1) : null;
 
   for (const patternId of PATTERN_IDS) {
+    // Skip patterns that are restricted to specific intervals
+    const allowedIntervals = PATTERN_INTERVALS[patternId];
+    if (allowedIntervals && !allowedIntervals.includes(interval)) continue;
+
     const pattern = patternRegistry.get(patternId);
     if (!pattern) continue;
 

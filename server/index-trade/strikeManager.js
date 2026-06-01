@@ -19,7 +19,7 @@ const { isNseOpen }   = require('../utils/marketHours');
 const INDICES = ['NIFTY', 'SENSEX'];
 const STRIKE_RANGE = 5;          // ATM ± 5
 const REFRESH_MS   = 5 * 60_000; // refresh every 5 minutes
-const SEED_INTERVALS = ['minute', '5minute', '15minute'];
+const SEED_INTERVALS = ['minute', '5minute', '15minute', '60minute'];
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 // Morning reset fires at 9:20 IST — opening price has settled by then

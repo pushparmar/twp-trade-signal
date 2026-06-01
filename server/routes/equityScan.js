@@ -16,10 +16,16 @@
  *
  * POST /api/equity-scan/rerun
  *   Force re-run even if already cached today (clears in-memory date guard).
+ *
+ * POST /api/equity-scan/clear-candle-cache
+ *   Delete all stored candle history from MongoDB (equity_candle_cache collection).
+ *   The next scan run will re-fetch everything from the Kite historical API and
+ *   rebuild the cache from scratch.  Useful when candle data looks stale or corrupt.
  */
 
-const express     = require('express');
-const equityScan  = require('../services/equityScanService');
+const express               = require('express');
+const equityScan            = require('../services/equityScanService');
+const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
 
 const router = express.Router();
 
@@ -68,6 +74,24 @@ router.get('/results', async (req, res) => {
     return res.json(results);
   } catch (err) {
     console.error('[equityScan] /results error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Clear candle cache (force full re-fetch on next scan) ─────────────────────
+
+router.post('/clear-candle-cache', async (req, res) => {
+  try {
+    const deleted = await equityCandleCacheRepo.clearAll();
+    // Also reset the in-memory date guard so the next run() doesn't skip
+    equityScan._forceRun();
+    return res.json({
+      ok:      true,
+      deleted,
+      message: `Cleared ${deleted} candle cache entries. Next scan will re-fetch from Kite.`,
+    });
+  } catch (err) {
+    console.error('[equityScan] /clear-candle-cache error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });

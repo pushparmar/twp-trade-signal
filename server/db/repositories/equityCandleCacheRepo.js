@@ -147,4 +147,26 @@ async function createIndexes() {
   }
 }
 
-module.exports = { bulkUpsert, loadAll, createIndexes, _todayIST };
+/**
+ * Delete all documents from the candle cache.
+ * Call this when you want the next equity scan to re-fetch everything
+ * from the Kite historical API and rebuild the cache from scratch.
+ *
+ * @returns {Promise<number>} number of documents deleted
+ */
+async function clearAll() {
+  if (!mongo.isReady()) {
+    console.warn('[equityCandleCache] MongoDB not ready — skipping clearAll');
+    return 0;
+  }
+  try {
+    const result = await mongo.db().collection(COLLECTION).deleteMany({});
+    console.log(`[equityCandleCache] Cleared ${result.deletedCount} candle cache documents`);
+    return result.deletedCount;
+  } catch (err) {
+    console.warn('[equityCandleCache] clearAll failed:', err.message);
+    return 0;
+  }
+}
+
+module.exports = { bulkUpsert, loadAll, clearAll, createIndexes, _todayIST };
