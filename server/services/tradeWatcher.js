@@ -150,7 +150,7 @@ function _closeTrade(trade, closeAt, reason) {
   if (_closing.has(trade.id)) return;
   _closing.add(trade.id);
 
-  const closed = store.closePaperTrade(trade.id, closeAt);
+  const closed = store.closePaperTrade(trade.id, closeAt, reason);
   if (!closed) { _closing.delete(trade.id); return; }
 
   _lastTickBroadcast.delete(trade.id);

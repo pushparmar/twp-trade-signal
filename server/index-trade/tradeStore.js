@@ -42,6 +42,7 @@ let _config = {
   // Format: 'HH:MM' in 24-hour IST.
   tradeStartHHMM: '09:20',   // earliest entry — first 5 min of session skipped
   tradeEndHHMM:   '15:15',   // last entry cutoff — 15 min before close
+  eodCloseHHMM:   '15:25',   // force-close ALL open positions at this time (EOD)
 
   // ── Low Premium Scalper strategy ────────────────────────────────────────────
   // Buys any subscribed option in the lpEntryMin–lpEntryMax range.
@@ -186,29 +187,51 @@ function getAllTrades()     { return _trades; }
 function getTrade(id)      { return _trades.find(t => t.id === id) || null; }
 
 function getPnlSummary() {
-  const closed = getClosedTrades();
-  const wins   = closed.filter(t => t.pnl > 0);
-  const losses = closed.filter(t => t.pnl <= 0);
-  const totalPnl = closed.reduce((sum, t) => sum + (t.pnl || 0), 0);
-
-  // Today's PnL (IST)
+  // All stats are scoped to today (IST) so the summary resets each trading day.
+  // Historical trades remain in MongoDB for reporting; in-memory is today-only.
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
-  const todayClosed = closed.filter(t => {
+
+  const todayClosed = getClosedTrades().filter(t => {
     if (!t.closedTs) return false;
     return new Date(t.closedTs + IST_OFFSET_MS).toISOString().slice(0, 10) === todayIST;
   });
-  const todayPnl = todayClosed.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+  const wins      = todayClosed.filter(t => t.pnl > 0);
+  const losses    = todayClosed.filter(t => t.pnl <= 0);
+  const totalPnl  = todayClosed.reduce((sum, t) => sum + (t.pnl || 0), 0);
 
   return {
-    totalPnl: Math.round(totalPnl * 100) / 100,
-    todayPnl: Math.round(todayPnl * 100) / 100,
-    winCount: wins.length,
-    lossCount: losses.length,
-    winRate: closed.length > 0 ? Math.round((wins.length / closed.length) * 100) : 0,
-    openCount: getOpenTrades().length,
-    totalTrades: closed.length,
+    totalPnl:    Math.round(totalPnl * 100) / 100,
+    todayPnl:    Math.round(totalPnl * 100) / 100,  // same — kept for UI compat
+    winCount:    wins.length,
+    lossCount:   losses.length,
+    winRate:     todayClosed.length > 0 ? Math.round((wins.length / todayClosed.length) * 100) : 0,
+    openCount:   getOpenTrades().length,
+    totalTrades: todayClosed.length,
   };
+}
+
+/**
+ * Drop closed trades from previous days out of the in-memory _trades array.
+ * Open trades are always retained. Called each morning so memory stays lean
+ * and getPnlSummary() starts fresh without waiting for a server restart.
+ */
+function purgePreviousDayTrades() {
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+  const before = _trades.length;
+  _trades = _trades.filter(t => {
+    if (t.status !== 'CLOSED') return true; // keep open trades
+    if (!t.closedTs) return false;
+    return new Date(t.closedTs + IST_OFFSET_MS).toISOString().slice(0, 10) === todayIST;
+  });
+
+  const purged = before - _trades.length;
+  if (purged > 0) {
+    console.log(`[IdxTradeStore] Morning reset: purged ${purged} previous-day closed trade(s) from memory`);
+  }
 }
 
 function clearTrades() {
@@ -238,6 +261,6 @@ module.exports = {
   createIndexes, restore,
   addTrade, closeTrade, updateTrade,
   getOpenTrades, getClosedTrades, getAllTrades, getTrade,
-  getPnlSummary, clearTrades,
+  getPnlSummary, clearTrades, purgePreviousDayTrades,
   getConfig, setConfig,
 };

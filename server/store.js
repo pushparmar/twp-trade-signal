@@ -353,7 +353,7 @@ function cancelPendingTrade(id) {
     return true;
 }
 
-function closePaperTrade(id, exitPrice) {
+function closePaperTrade(id, exitPrice, reason) {
     const trade = _paperTrades.find(t => t.id === id);
     if (!trade || trade.status !== "OPEN") return null;
     // For MCX commodities multiply by the contract lot size so PnL is in rupees.
@@ -362,10 +362,11 @@ function closePaperTrade(id, exitPrice) {
         trade.action === "BUY"
             ? (exitPrice - trade.entryPrice) * trade.quantity * lotMult
             : (trade.entryPrice - exitPrice) * trade.quantity * lotMult;
-    trade.status = "CLOSED";
-    trade.exitPrice = exitPrice;
-    trade.pnl = Math.round(pnl * 100) / 100;
-    trade.closedTs = Date.now();
+    trade.status     = "CLOSED";
+    trade.exitPrice  = exitPrice;
+    trade.exitReason = reason ?? null;   // 'TARGET' | 'TSL' | 'SL' | 'MANUAL' | null
+    trade.pnl        = Math.round(pnl * 100) / 100;
+    trade.closedTs   = Date.now();
     // Persist realized PnL so balance survives restarts and "Clear All"
     _cumulativePnl = Math.round((_cumulativePnl + trade.pnl) * 100) / 100;
     _saveCumulativePnl();

@@ -201,8 +201,7 @@ function PnlSummary({ pnl }) {
       display: 'flex', gap: 16, flexWrap: 'wrap', padding: '10px 16px',
       background: 'var(--bg-secondary)', borderRadius: 8, marginBottom: 12,
     }}>
-      <StatBox label="Total PnL" value={fmtPnl(pnl.totalPnl)} color={pnl.totalPnl >= 0 ? '#51cf66' : '#ff6b6b'} />
-      <StatBox label="Today" value={fmtPnl(pnl.todayPnl)} color={pnl.todayPnl >= 0 ? '#51cf66' : '#ff6b6b'} />
+      <StatBox label="Today's PnL" value={fmtPnl(pnl.totalPnl)} color={pnl.totalPnl >= 0 ? '#51cf66' : '#ff6b6b'} />
       <StatBox label="Wins" value={pnl.winCount} color="#51cf66" />
       <StatBox label="Losses" value={pnl.lossCount} color="#ff6b6b" />
       <StatBox label="Win Rate" value={`${pnl.winRate}%`} color="var(--text-primary)" />
@@ -660,6 +659,7 @@ function TimeFilterConfig({ config, onUpdate }) {
 
   const startTime = config.tradeStartHHMM ?? '09:20';
   const endTime   = config.tradeEndHHMM   ?? '15:15';
+  const eodTime   = config.eodCloseHHMM   ?? '15:25';
 
   function handleChange(key, val) {
     // Basic HH:MM validation before sending to server
@@ -676,8 +676,8 @@ function TimeFilterConfig({ config, onUpdate }) {
         </span>
       </h3>
       <p style={{ fontSize: 12, color: 'var(--txt-muted)', marginBottom: 12 }}>
-        No new entries (pattern or LP) will be placed outside this window. Existing open trades
-        continue to be monitored and exited normally at any time.
+        No new entries (pattern or LP) will be placed outside this window. All open trades
+        are force-closed at the EOD time regardless of SL/target status.
       </p>
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-end', flexWrap: 'wrap' }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
@@ -697,6 +697,16 @@ function TimeFilterConfig({ config, onUpdate }) {
             className="screener-input"
             value={endTime}
             onChange={e => handleChange('tradeEndHHMM', e.target.value)}
+            style={{ width: 120, fontSize: 13 }}
+          />
+        </label>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <span style={{ color: 'var(--txt-muted)' }}>EOD force-close (IST)</span>
+          <input
+            type="time"
+            className="screener-input"
+            value={eodTime}
+            onChange={e => handleChange('eodCloseHHMM', e.target.value)}
             style={{ width: 120, fontSize: 13 }}
           />
         </label>

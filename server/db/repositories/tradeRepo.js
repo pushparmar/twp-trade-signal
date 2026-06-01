@@ -167,11 +167,12 @@ function closeTrade(trade) {
         { tradeId: trade.id },
         {
           $set: {
-            status:    'CLOSED',
-            exitPrice: trade.exitPrice ?? null,
-            pnl:       trade.pnl       ?? null,
-            closedAt:  trade.closedTs ? new Date(trade.closedTs) : new Date(),
-            updatedAt: new Date(),
+            status:     'CLOSED',
+            exitPrice:  trade.exitPrice  ?? null,
+            exitReason: trade.exitReason ?? null,
+            pnl:        trade.pnl        ?? null,
+            closedAt:   trade.closedTs ? new Date(trade.closedTs) : new Date(),
+            updatedAt:  new Date(),
           },
         },
       )
@@ -317,6 +318,7 @@ async function getRecentTrades(limit = 200) {
       volumeConfirmed: doc.volumeConfirmed ?? null,
       volumeRatio:     doc.volumeRatio     ?? null,
       mtfAligned:      doc.mtfAligned      ?? false,
+      exitReason:      doc.exitReason      ?? null,
     }));
   } catch (err) {
     console.warn('[tradeRepo] getRecentTrades failed:', err.message);

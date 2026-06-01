@@ -302,7 +302,7 @@ router.post('/:id/close', (req, res) => {
   if (!exitPrice || isNaN(exitPrice)) {
     return res.status(400).json({ error: 'exitPrice is required' });
   }
-  const trade = closePaperTrade(req.params.id, Number(exitPrice));
+  const trade = closePaperTrade(req.params.id, Number(exitPrice), 'MANUAL');
   if (!trade) return res.status(404).json({ error: 'Trade not found or already closed' });
   broadcast('paper_trade_update', trade);
   broadcast('paper_balance', getPaperBalance());

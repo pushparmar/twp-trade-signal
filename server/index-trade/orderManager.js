@@ -39,6 +39,13 @@ let _tickTimer = null;
 // from a different timeframe, pattern, or strategy while a trade is open.
 const _openKeys = new Set(); // token (Number)
 
+// IST date string of the last day EOD close was executed.
+// Guards against firing the EOD sweep more than once per session.
+let _eodClosedDate = null;
+
+// IST date string of the last morning purge — resets in-memory closed trades.
+let _morningPurgeDate = null;
+
 // ── IST time window helper ──────────────────────────────────────────────────
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -562,9 +569,83 @@ function _handlePatternTSL(trade, ltp) {
     });
 }
 
+// ── Morning reset — purge previous day's closed trades ───────────────────────
+
+/**
+ * Fires once per day at tradeStartHHMM (09:20 by default).
+ * Drops previous-day closed trades from the in-memory _trades array so
+ * getPnlSummary() and the trade list start fresh each morning.
+ * Historical data is preserved in MongoDB.
+ */
+function _checkMorningPurge() {
+    const config    = tradeStore.getConfig();
+    const startTime = config.tradeStartHHMM ?? '09:20';
+
+    const nowIST   = new Date(Date.now() + IST_OFFSET_MS);
+    const nowMins  = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
+    const [sh, sm] = startTime.split(':').map(Number);
+    const startMins = sh * 60 + sm;
+
+    if (nowMins < startMins) return; // before market open
+
+    const todayIST = nowIST.toISOString().slice(0, 10);
+    if (_morningPurgeDate === todayIST) return; // already done today
+    _morningPurgeDate = todayIST;
+
+    tradeStore.purgePreviousDayTrades();
+}
+
+// ── EOD force-close ──────────────────────────────────────────────────────────
+
+/**
+ * At eodCloseHHMM IST, close every open trade at the current market price.
+ * Fires once per calendar day (guarded by _eodClosedDate).
+ * Runs regardless of isNseOpen() so trades don't carry over midnight.
+ */
+function _checkEodClose() {
+    const config  = tradeStore.getConfig();
+    const eodTime = config.eodCloseHHMM ?? '15:25';
+
+    const nowIST    = new Date(Date.now() + IST_OFFSET_MS);
+    const nowMins   = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
+    const [eh, em]  = eodTime.split(':').map(Number);
+    const eodMins   = eh * 60 + em;
+
+    if (nowMins < eodMins) return; // not yet time
+
+    // One sweep per calendar day — avoids re-closing on every subsequent tick
+    const todayIST = nowIST.toISOString().slice(0, 10);
+    if (_eodClosedDate === todayIST) return;
+    _eodClosedDate = todayIST;
+
+    const openTrades = tradeStore.getOpenTrades();
+    if (openTrades.length === 0) return;
+
+    console.log(
+        `[IdxOrder] 🕐 EOD sweep at ${eodTime} IST — force-closing ${openTrades.length} open trade(s)`,
+    );
+
+    for (const trade of openTrades) {
+        // Use the live price; fall back to entry price if candles aren't available
+        const ltp          = _getCurrentPrice(trade.token) ?? trade.entryPrice;
+        const closedTrade  = tradeStore.closeTrade(trade.id, ltp, 'eod');
+        if (closedTrade) {
+            _openKeys.delete(Number(trade.token));
+            console.log(
+                `[IdxOrder] 🕐 EOD closed ${trade.symbol} @₹${ltp} PnL=₹${closedTrade.pnl}`,
+            );
+            broadcast('idx_trade_update', closedTrade);
+        }
+    }
+}
+
 // ── Main tick loop ───────────────────────────────────────────────────────────
 
 function _checkTrades() {
+    // Daily lifecycle hooks — run unconditionally (independent of market hours)
+    _checkMorningPurge();
+    _checkEodClose();
+
     if (!isNseOpen()) return;
 
     const openTrades = tradeStore.getOpenTrades();

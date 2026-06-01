@@ -1385,7 +1385,28 @@ export default function PaperTradingPanel() {
                                                             )}
                                                         </td>
                                                         <td className="td-num mob-hide">{t.entryPrice}</td>
-                                                        <td className="td-num mob-hide">{t.exitPrice}</td>
+                                                        <td className="td-num mob-hide">
+                                                            {t.exitPrice ?? '—'}
+                                                            {t.exitReason && (() => {
+                                                                const map = {
+                                                                    TARGET: { label: 'TGT', color: '#51cf66' },
+                                                                    TSL:    { label: 'TSL', color: '#4dabf7' },
+                                                                    SL:     { label: 'SL',  color: '#ff6b6b' },
+                                                                    MANUAL: { label: 'MNL', color: '#fab005' },
+                                                                };
+                                                                const r = map[t.exitReason] ?? { label: t.exitReason, color: '#aaa' };
+                                                                return (
+                                                                    <span style={{
+                                                                        marginLeft: 5, fontSize: 9, fontWeight: 700,
+                                                                        padding: '1px 4px', borderRadius: 3,
+                                                                        background: r.color + '22', color: r.color,
+                                                                        letterSpacing: '0.03em',
+                                                                    }}>
+                                                                        {r.label}
+                                                                    </span>
+                                                                );
+                                                            })()}
+                                                        </td>
                                                         {/* Qty — desktop only */}
                                                         <td className="td-num mob-hide">
                                                             {t.lots != null && t.lotSize > 1 ? (
@@ -1430,9 +1451,25 @@ export default function PaperTradingPanel() {
                                                                 <div className="td-stacked-row">
                                                                     <span className="td-stacked-label">Exit</span>
                                                                     <span className="td-stacked-val">
-                                                                        {t.exitPrice != null
-                                                                            ? fmtPrice(t.exitPrice)
-                                                                            : "—"}
+                                                                        {t.exitPrice != null ? fmtPrice(t.exitPrice) : "—"}
+                                                                        {t.exitReason && (() => {
+                                                                            const map = {
+                                                                                TARGET: { label: 'TGT', color: '#51cf66' },
+                                                                                TSL:    { label: 'TSL', color: '#4dabf7' },
+                                                                                SL:     { label: 'SL',  color: '#ff6b6b' },
+                                                                                MANUAL: { label: 'MNL', color: '#fab005' },
+                                                                            };
+                                                                            const r = map[t.exitReason] ?? { label: t.exitReason, color: '#aaa' };
+                                                                            return (
+                                                                                <span style={{
+                                                                                    marginLeft: 5, fontSize: 9, fontWeight: 700,
+                                                                                    padding: '1px 4px', borderRadius: 3,
+                                                                                    background: r.color + '22', color: r.color,
+                                                                                }}>
+                                                                                    {r.label}
+                                                                                </span>
+                                                                            );
+                                                                        })()}
                                                                     </span>
                                                                 </div>
                                                                 <div className="td-stacked-row">
