@@ -18,6 +18,7 @@
 const mongo              = require('../services/mongoClient');
 const alertRepo          = require('./repositories/alertRepo');
 const tradeRepo          = require('./repositories/tradeRepo');
+const indexTradeRepo     = require('./repositories/indexTradeRepo');
 const signalOutcomeRepo  = require('./repositories/signalOutcomeRepo');
 const settingsRepo       = require('./repositories/settingsRepo');
 const equityScanRepo        = require('./repositories/equityScanRepo');
@@ -39,6 +40,7 @@ async function init() {
   await Promise.all([
     alertRepo.createIndexes(),
     tradeRepo.createIndexes(),
+    indexTradeRepo.createIndexes(),
     signalOutcomeRepo.createIndexes(),
     settingsRepo.createIndexes(),
     equityScanRepo.createIndexes(),
@@ -55,4 +57,4 @@ async function close() {
   await mongo.close();
 }
 
-module.exports = { init, close, alertRepo, tradeRepo, signalOutcomeRepo, settingsRepo, equityScanRepo, equityCandleCacheRepo };
+module.exports = { init, close, alertRepo, tradeRepo, indexTradeRepo, signalOutcomeRepo, settingsRepo, equityScanRepo, equityCandleCacheRepo };

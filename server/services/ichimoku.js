@@ -2259,109 +2259,147 @@ function getTKReversion(candles, opts = {}) {
   const results = calculate(candles);
   const n       = results.length;
 
-  // Scan the last `lookback` bars for a Tenkan cross event
-  for (let offset = 0; offset < lookback; offset++) {
-    const idx  = n - 1 - offset;
-    const prev = results[idx - 1];
-    const curr = results[idx];
+  // ── New TK Reversion Logic ───────────────────────────────────────────────────
+  // Setup: Latest candle closes inside Tenkan-Kijun gap
+  // Confirmation: Within next 2 candles, find a wick rejection:
+  //   - Bullish: Low wicks below Tenkan, close stays above Tenkan
+  //   - Bearish: High wicks above Tenkan, close stays below Tenkan
+  // Entry: Tenkan line value
+  // SL: Below wick low (bullish) / Above wick high (bearish)
+  // Target: Kijun (current logic)
 
-    if (!curr || !prev) continue;
-    if (curr.tenkan == null || curr.kijun == null) continue;
-    if (prev.tenkan == null || prev.kijun == null) continue;
+  // Start from latest candle
+  const latest = results[n - 1];
+  if (!latest || latest.tenkan == null || latest.kijun == null) return null;
 
-    const close      = curr.close;
-    const tenkan     = curr.tenkan;
-    const kijun      = curr.kijun;
-    const tkSpread   = Math.abs(tenkan - kijun);
-    const spreadPct  = (tkSpread / close) * 100;
+  const close    = latest.close;
+  const tenkan   = latest.tenkan;
+  const kijun    = latest.kijun;
+  const tkSpread = Math.abs(tenkan - kijun);
+  const spreadPct = (tkSpread / close) * 100;
 
-    // Must have wide enough TK spread
-    if (spreadPct < minSpreadPct) continue;
+  // Must have wide enough TK spread
+  if (spreadPct < minSpreadPct) return null;
 
-    let signal = null;
-    const tkHigh = Math.max(tenkan, kijun);
-    const tkLow  = Math.min(tenkan, kijun);
-    const insideGap = close > tkLow && close < tkHigh;
+  const tkHigh = Math.max(tenkan, kijun);
+  const tkLow  = Math.min(tenkan, kijun);
+  const insideGap = close > tkLow && close < tkHigh;
 
-    // ── Bearish signal: prior bullish rally, price enters TK gap from above
-    // Tenkan above Kijun (was rallying), prev close was above Tenkan (outside gap),
-    // current close is inside the gap (between Tenkan and Kijun) heading down
-    if (tenkan > kijun && prev.close >= tenkan && insideGap) {
-      signal = 'bearish';
-    }
+  // Latest candle must close inside TK gap
+  if (!insideGap) return null;
 
-    // ── Bullish signal: prior bearish dump, price enters TK gap from below
-    // Kijun above Tenkan (was dumping), prev close was below Tenkan (outside gap),
-    // current close is inside the gap (between Tenkan and Kijun) heading up
-    if (kijun > tenkan && prev.close <= tenkan && insideGap) {
-      signal = 'bullish';
-    }
+  let signal = null;
+  let wickCandleIdx = null;
+  let wickLow = null;
+  let wickHigh = null;
 
-    if (!signal) continue;
+  // ── Bullish Setup: Kijun > Tenkan (price was below, reverting up) ────────
+  // Look for wick rejection in next 2 candles (current + 1 past)
+  if (kijun > tenkan) {
+    // Check current candle (n-1) and previous candle (n-2)
+    for (let i = 0; i < 2 && n - 1 - i >= 0; i++) {
+      const idx = n - 1 - i;
+      const c = results[idx];
+      if (!c || c.tenkan == null) continue;
 
-    // ── Price must still have room to Kijun ─────────────────────────────
-    // If price is already too close to Kijun (< 30% of TK spread away),
-    // there's not enough room left for the reversion trade.
-    const priceToKijunPct = (Math.abs(close - kijun) / close) * 100;
-    if (priceToKijunPct < spreadPct * 0.3) continue;
-
-    // ── Verify the spread was genuinely widening (not just flat-wide) ────
-    // Check that the current spread is near peak over the spreadLookback window.
-    // This filters out long-sideways conditions where TK happen to be apart.
-    let peakSpreadPct = 0;
-    const spreadStart = Math.max(0, idx - spreadLookback);
-    for (let j = spreadStart; j <= idx; j++) {
-      const r = results[j];
-      if (r.tenkan != null && r.kijun != null && r.close > 0) {
-        const sp = (Math.abs(r.tenkan - r.kijun) / r.close) * 100;
-        if (sp > peakSpreadPct) peakSpreadPct = sp;
+      // Wick rejection: low below Tenkan, close above Tenkan
+      if (c.low < c.tenkan && c.close > c.tenkan) {
+        signal = 'bullish';
+        wickCandleIdx = idx;
+        wickLow = c.low;
+        break;
       }
     }
-    // Current spread must be at least 60% of peak — confirms it's still wide
-    if (peakSpreadPct > 0 && spreadPct < peakSpreadPct * 0.6) continue;
-
-    // ── Score (0–5) ──────────────────────────────────────────────────────
-    let score = 2; // base: wide spread + Tenkan cross confirmed
-
-    // Wider spread = stronger reversion potential
-    if (spreadPct >= minSpreadPct * 2)  score++;
-    if (spreadPct >= minSpreadPct * 3)  score++;
-
-    // Candle body confirms direction (not just a wick cross)
-    const bodyRatio = Math.abs(curr.close - curr.open) / (curr.high - curr.low + 0.0001);
-    if (bodyRatio >= 0.5) score++;
-
-    // Cloud agreement: reversion toward cloud adds conviction
-    if (signal === 'bearish' && curr.aboveCloud) score = Math.min(score + 1, 5); // above cloud, room to fall
-    if (signal === 'bullish' && curr.belowCloud) score = Math.min(score + 1, 5); // below cloud, room to rise
-
-    score = Math.min(score, 5);
-    const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
-
-    // ── Future cloud color ───────────────────────────────────────────────
-    const futureCloudColor = getFutureCloudColor(candles);
-
-    return {
-      matched: true,
-      signal,
-      score,
-      close,
-      strength,
-      tenkan,
-      kijun,
-      kijunValue:       kijun,
-      senkouA:          curr.senkouA,
-      senkouB:          curr.senkouB,
-      cloudTop:         curr.cloudTop,
-      cloudBottom:      curr.cloudBottom,
-      cloudPosition:    curr.aboveCloud ? 'above' : curr.belowCloud ? 'below' : 'inside',
-      futureCloudColor,
-      tkSpreadPct:      +spreadPct.toFixed(2),
-      barsAgo:          offset,
-    };
   }
 
-  return null;
+  // ── Bearish Setup: Tenkan > Kijun (price was above, reverting down) ──────
+  // Look for wick rejection in next 2 candles (current + 1 past)
+  if (tenkan > kijun) {
+    // Check current candle (n-1) and previous candle (n-2)
+    for (let i = 0; i < 2 && n - 1 - i >= 0; i++) {
+      const idx = n - 1 - i;
+      const c = results[idx];
+      if (!c || c.tenkan == null) continue;
+
+      // Wick rejection: high above Tenkan, close below Tenkan
+      if (c.high > c.tenkan && c.close < c.tenkan) {
+        signal = 'bearish';
+        wickCandleIdx = idx;
+        wickHigh = c.high;
+        break;
+      }
+    }
+  }
+
+  if (!signal || wickCandleIdx == null) return null;
+
+  // ── Verify the spread was genuinely widening (not just flat-wide) ────────
+  // Check that the current spread is near peak over the spreadLookback window.
+  let peakSpreadPct = 0;
+  const spreadStart = Math.max(0, n - 1 - spreadLookback);
+  for (let j = spreadStart; j <= n - 1; j++) {
+    const r = results[j];
+    if (r.tenkan != null && r.kijun != null && r.close > 0) {
+      const sp = (Math.abs(r.tenkan - r.kijun) / r.close) * 100;
+      if (sp > peakSpreadPct) peakSpreadPct = sp;
+    }
+  }
+  // Current spread must be at least 60% of peak — confirms it's still wide
+  if (peakSpreadPct > 0 && spreadPct < peakSpreadPct * 0.6) return null;
+
+  // ── Score (0–5) ──────────────────────────────────────────────────────
+  const wickCandle = results[wickCandleIdx];
+  let score = 3; // base: wide spread + wick rejection confirmed
+
+  // Wider spread = stronger reversion potential
+  if (spreadPct >= minSpreadPct * 2)  score++;
+  if (spreadPct >= minSpreadPct * 3)  score++;
+
+  // Wick size: larger rejection wick = stronger signal
+  const wickSize = signal === 'bullish'
+    ? Math.abs(wickCandle.tenkan - wickLow)
+    : Math.abs(wickHigh - wickCandle.tenkan);
+  const wickSizePct = (wickSize / wickCandle.close) * 100;
+  if (wickSizePct >= 0.5) score++; // meaningful wick (≥0.5%)
+
+  // Cloud agreement: reversion toward cloud adds conviction
+  if (signal === 'bearish' && latest.aboveCloud) score = Math.min(score + 1, 5); // above cloud, room to fall
+  if (signal === 'bullish' && latest.belowCloud) score = Math.min(score + 1, 5); // below cloud, room to rise
+
+  score = Math.min(score, 5);
+  const strength = score >= 4 ? 'strong' : score >= 3 ? 'neutral' : 'weak';
+
+  // ── Future cloud color ───────────────────────────────────────────────
+  const futureCloudColor = getFutureCloudColor(candles);
+
+  // Entry price = Tenkan (not the candle close)
+  const entryPrice = tenkan;
+
+  // SL = below wick low (bullish) / above wick high (bearish)
+  const slPrice = signal === 'bullish' ? wickLow : wickHigh;
+
+  return {
+    matched: true,
+    signal,
+    score,
+    close: entryPrice,          // Entry at Tenkan line
+    strength,
+    tenkan,
+    kijun,
+    kijunValue:       kijun,
+    senkouA:          latest.senkouA,
+    senkouB:          latest.senkouB,
+    cloudTop:         latest.cloudTop,
+    cloudBottom:      latest.cloudBottom,
+    cloudPosition:    latest.aboveCloud ? 'above' : latest.belowCloud ? 'below' : 'inside',
+    futureCloudColor,
+    tkSpreadPct:      +spreadPct.toFixed(2),
+    wickLow:          wickLow,          // Store wick extremes for reference
+    wickHigh:         wickHigh,
+    wickCandleIdx:    wickCandleIdx,
+    slPrice:          slPrice,          // SL at wick extreme
+    barsAgo:          0,                // Always current bar now
+  };
 }
 
 // ── Senkou Span Cross Confirmation ────────────────────────────────────────────

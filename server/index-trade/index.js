@@ -20,8 +20,7 @@ const priceBroadcaster  = require('./priceBroadcaster');
 const tradeStore        = require('./tradeStore');
 
 async function start() {
-  // Create MongoDB indexes + restore open trades
-  await tradeStore.createIndexes();
+  // Restore open trades from MongoDB (indexes are created by db/index.js on boot)
   await tradeStore.restore();
 
   // Start sub-modules

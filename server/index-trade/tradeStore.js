@@ -9,8 +9,8 @@
 
 const { v4: uuidv4 } = require('uuid');
 const mongo = require('../services/mongoClient');
+const db = require('../db');
 
-const COLLECTION = 'index_trades';
 const CONFIG_COLLECTION = 'settings'; // reuse existing settings collection
 
 // ── In-memory state ─────────────────────────────────────────────────────────
@@ -61,48 +61,20 @@ let _config = {
 };
 
 // ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────
-
-function _col() {
-  return mongo.isReady() ? mongo.db().collection(COLLECTION) : null;
-}
-
-function _upsertToMongo(trade) {
-  const col = _col();
-  if (!col) return;
-  col.updateOne(
-    { tradeId: trade.id },
-    { $set: { ...trade, tradeId: trade.id, updatedAt: new Date() } },
-    { upsert: true },
-  ).catch(err => console.warn('[IdxTradeStore] upsert failed:', err.message));
-}
-
-async function createIndexes() {
-  const col = _col();
-  if (!col) return;
-  try {
-    await col.createIndex({ tradeId: 1 }, { unique: true });
-    await col.createIndex({ status: 1 });
-    await col.createIndex({ index: 1 });
-    await col.createIndex({ ts: -1 });
-    console.log(`[IdxTradeStore] Indexes ensured on "${COLLECTION}"`);
-  } catch (err) {
-    console.warn('[IdxTradeStore] createIndexes failed:', err.message);
-  }
-}
+// Delegated to db.indexTradeRepo for consistency with equity trades
 
 // ── Boot: restore from MongoDB ──────────────────────────────────────────────
 
 async function restore() {
-  const col = _col();
-  if (!col) return;
+  if (!mongo.isReady()) return;
   try {
     // Restore OPEN trades so they resume SL/Target monitoring
-    const openTrades = await col.find({ status: 'OPEN' }).toArray();
+    const openTrades = await db.indexTradeRepo.getOpenTrades();
     if (openTrades.length > 0) {
-      for (const doc of openTrades) {
+      for (const trade of openTrades) {
         // Avoid duplicates if already in memory
-        if (!_trades.find(t => t.id === doc.tradeId)) {
-          _trades.push({ ...doc, id: doc.tradeId });
+        if (!_trades.find(t => t.id === trade.id)) {
+          _trades.push(trade);
         }
       }
       console.log(`[IdxTradeStore] Restored ${openTrades.length} open trade(s) from MongoDB`);
@@ -137,7 +109,10 @@ function addTrade(tradeData) {
   };
   _trades.unshift(trade);
   if (_trades.length > 500) _trades.pop();
-  _upsertToMongo(trade);
+
+  // Persist to MongoDB via repository
+  db.indexTradeRepo.upsertTrade(trade);
+
   return trade;
 }
 
@@ -163,7 +138,9 @@ function closeTrade(id, exitPrice, exitReason = 'manual') {
   trade.exitReason = exitReason;
   trade.closedTs = Date.now();
 
-  _upsertToMongo(trade);
+  // Persist to MongoDB via repository
+  db.indexTradeRepo.closeTrade(trade);
+
   return trade;
 }
 
@@ -175,7 +152,10 @@ function updateTrade(id, fields) {
   for (const k of allowed) {
     if (fields[k] !== undefined) trade[k] = fields[k];
   }
-  _upsertToMongo(trade);
+
+  // Persist to MongoDB via repository
+  db.indexTradeRepo.updateTrade(trade);
+
   return trade;
 }
 
@@ -236,8 +216,8 @@ function purgePreviousDayTrades() {
 
 function clearTrades() {
   _trades = [];
-  const col = _col();
-  if (col) col.deleteMany({}).catch(() => {});
+  // Note: This only clears in-memory trades. MongoDB records are preserved.
+  // To clear MongoDB, use: db.indexTradeRepo collection directly via mongo shell.
 }
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -258,7 +238,7 @@ function setConfig(updates) {
 }
 
 module.exports = {
-  createIndexes, restore,
+  restore,
   addTrade, closeTrade, updateTrade,
   getOpenTrades, getClosedTrades, getAllTrades, getTrade,
   getPnlSummary, clearTrades, purgePreviousDayTrades,

@@ -215,6 +215,18 @@ async function _runScan(scanDate) {
   const patterns    = patternRegistry.list();
   const intervals   = ['4h', 'day', 'week'];
 
+  // Debug logging to verify universe size
+  const foStockRegistry = require('./foStockRegistry');
+  const foStocks = foStockRegistry.getAll();
+  const foTokens = new Set(foStocks.map(s => Number(s.instrumentToken)));
+  const nonFOCount = instruments.filter(i => !foTokens.has(Number(i.instrumentToken))).length;
+
+  console.log(`[EquityScan] Universe breakdown:`);
+  console.log(`  - Total stocks: ${instruments.length}`);
+  console.log(`  - F&O stocks: ${instruments.filter(i => foTokens.has(Number(i.instrumentToken))).length}`);
+  console.log(`  - Non-F&O stocks: ${nonFOCount}`);
+  console.log(`  - Scanning ${patterns.length} patterns across ${intervals.length} timeframes`);
+
   _state.progress.total = instruments.length;
 
   // ── Phase 0: Classify instruments against MongoDB candle cache ──────────────
@@ -370,9 +382,11 @@ async function _runScan(scanDate) {
 
   let scanned = 0;
   let matched = 0;
+  let nonFOMatched = 0;  // Track non-F&O matches separately
 
   for (const inst of instruments) {
     const label = inst.name ?? inst.tradingsymbol;
+    const isFO = foTokens.has(Number(inst.instrumentToken));
     _state.progress.done++;                      // increment per stock, not per interval
 
     for (const interval of intervals) {
@@ -417,6 +431,10 @@ async function _runScan(scanDate) {
         _dedup.add(dedupKey);
 
         matched++;
+        if (!isFO) {
+          nonFOMatched++;
+          console.log(`[EquityScan] ✅ Non-F&O match: ${label} (${TF_LABELS[interval]}) ${result.signal} ${patternId}`);
+        }
 
         // ── Build result document (same shape as scan_alerts) ─────────────
         const firedAt    = new Date();
@@ -463,6 +481,9 @@ async function _runScan(scanDate) {
 
   console.log(
     `[EquityScan] Done — scanned ${scanned} instruments, found ${matched} signals (${batch.length} stored) for ${scanDate}`,
+  );
+  console.log(
+    `[EquityScan] Signal breakdown: ${matched - nonFOMatched} F&O signals, ${nonFOMatched} non-F&O signals`,
   );
 }
 

@@ -523,63 +523,29 @@ const PATTERNS = {
       if (result.signal === 'bearish' && result.cloudPosition === 'below') return { matched: false };
       if (result.signal === 'bullish' && result.cloudPosition === 'above') return { matched: false };
 
+      // New TK Reversion Logic:
+      // Entry = Tenkan line (result.close already set to tenkan in getTKReversion)
+      // SL = wick extreme (result.slPrice)
       // Target = Kijun (the reversion destination)
-      // SL = recent swing beyond Tenkan (the wrong-side extreme)
-      //
-      // Override result.close with the CURRENT bar's close (not the matched bar).
-      // getTKReversion scans up to `lookback=3` past bars — when the cross was
-      // detected on a prior bar (barsAgo > 0), result.close is stale (up to 2-3
-      // candles old). Using a stale entry price causes wrong PnL calculations in
-      // the order manager and incorrect SL/target levels relative to live price.
-      const currentClose = candles[candles.length - 1].close;
+
       const { signal, kijun } = result;
-      const close = currentClose;
+      const close = result.close;        // Entry at Tenkan line
+      const sl = result.slPrice;         // SL at wick extreme
       const atr = getATR(candles, 14);
-      const atrFloor = atr != null ? MIN_SL_ATR_MULT * atr : null;
 
-      // SL: beyond the Tenkan on the side the price came from
-      // For bearish (price falling to kijun): SL above recent high
-      // For bullish (price rising to kijun): SL below recent low
-      let sl;
-      const recentBars = candles.slice(-10);
-      if (signal === 'bearish') {
-        sl = Math.max(...recentBars.map(c => c.high));
-        const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
-        const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
-        sl = sl + Math.max(pctBuf, atrBuf);
-      } else {
-        sl = Math.min(...recentBars.map(c => c.low));
-        const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
-        const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
-        sl = sl - Math.max(pctBuf, atrBuf);
-      }
+      // Apply small buffer to SL for safety
+      const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+      const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+      const slWithBuffer = signal === 'bullish'
+        ? sl - Math.max(pctBuf, atrBuf)
+        : sl + Math.max(pctBuf, atrBuf);
 
-      // ATR floor
-      if (atrFloor != null) {
-        const naturalDist = Math.abs(close - sl);
-        if (naturalDist < atrFloor) {
-          sl = signal === 'bullish' ? close - atrFloor : close + atrFloor;
-        }
-      }
-
-      // F2: ATR ceiling — reversion trades are short-lived mean-reversion plays.
-      // A swing-high SL wider than 2.5×ATR means the move was too extended and
-      // the risk:reward is no longer viable.  Cap the SL distance to keep risk
-      // proportional to the instrument's normal volatility.
-      const TK_REV_MAX_SL_ATR = 2.5;
-      if (atr != null) {
-        const maxSlDist = TK_REV_MAX_SL_ATR * atr;
-        if (Math.abs(close - sl) > maxSlDist) {
-          sl = signal === 'bullish' ? close - maxSlDist : close + maxSlDist;
-        }
-      }
-
-      sl = Math.round(sl * 100) / 100;
+      const slFinal = Math.round(slWithBuffer * 100) / 100;
 
       // Target = closer of Kijun or cloud edge (first obstacle in reversion direction)
       //   Bullish (reverting UP):   target = min(kijun, cloudBottom) — whichever is nearer above
       //   Bearish (reverting DOWN): target = max(kijun, cloudTop)   — whichever is nearer below
-      const risk = Math.abs(close - sl);
+      const risk = Math.abs(close - slFinal);
       const { cloudTop, cloudBottom } = result;
 
       // Collect valid target candidates on the correct side of close
@@ -615,9 +581,11 @@ const PATTERNS = {
       return {
         matched: true,
         ...result,
-        sl, target,
+        sl: slFinal,
+        target,
         atr: atr != null ? Math.round(atr * 100) / 100 : null,
-        targetSource, trailingAnchor,
+        targetSource,
+        trailingAnchor,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };
