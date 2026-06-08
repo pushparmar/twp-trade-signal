@@ -16,7 +16,13 @@
       "Bash(node -c services/tradePairing.js)",
       "Bash(node -c routes/paperTrades.js)",
       "Bash(grep -E \"\\\\.\\(js|ts\\)$\")",
-      "Bash(grep -E \"\\\\.\\(jsx|js|tsx|ts\\)$\")"
+      "Bash(grep -E \"\\\\.\\(jsx|js|tsx|ts\\)$\")",
+      "Bash(git fetch *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(npm list *)",
+      "Bash(node --check index.js)"
     ]
   }
 }
