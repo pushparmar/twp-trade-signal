@@ -78,6 +78,18 @@ router.get('/results', async (req, res) => {
   }
 });
 
+// ── Get universe (all stocks to be scanned) ───────────────────────────────────
+
+router.get('/universe', (req, res) => {
+  try {
+    const universe = equityScan.getUniverse();
+    return res.json(universe);
+  } catch (err) {
+    console.error('[equityScan] /universe error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Clear candle cache (force full re-fetch on next scan) ─────────────────────
 
 router.post('/clear-candle-cache', async (req, res) => {

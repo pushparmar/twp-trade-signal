@@ -244,14 +244,15 @@ function getNearestATMOption(name, exchange, spotPrice, optionType) {
 //   GOI / government loans  — "GOI", "LOAN" in name  (e.g. "7.17GS2028")
 //   Sovereign Gold Bonds    — "SGB" prefix in symbol
 //   ETFs                    — "ETF", "BEES", "NIFTY" at start (index ETFs)
-//   Bonds / debentures      — "BOND", "NCD", "SERIES" in name
+//   Bonds / debentures      — "BOND", "NCD", "SERIES", "SECURED", "UNSECURED" in name
 //   REITs / InvITs          — "REIT", "INVIT" in name
 //   Symbols with % or rate  — trading symbols containing digits mid-string
 //     (e.g. "7.17GS2028", "6.84GS2022") are government securities
-const _EQUITY_EXCLUDE_NAME = /GOI|LOAN|BOND|DEBENTURE|NCD|SERIES[- ]|REIT|INVIT|SGB/i;
+const _EQUITY_EXCLUDE_NAME = /GOI|LOAN|BOND|DEBENTURE|NCD|SERIES[- ]|REIT|INVIT|SGB|SECURED|UNSECURED|TBILL|GSEC/i;
 const _EQUITY_EXCLUDE_SYM  = /^(NIFTY|SGB|LIQUIDBEES|GOLDBEES|JUNIORBEES|BANKBEES|SETFNN50|KOTAKBKETF|N100|MOM|NV20|MIDCAP|SMALLCAP|CPSE)/i;
 // Government securities have rate+tenor in symbol: digits followed by GS/SDL/TB
-const _GOVT_SEC_SYM        = /^\d+\.?\d*(GS|SDL|TB|OIL|CS|RF)\d*/i;
+// Also exclude pure numeric symbols (bonds) and symbols with dashes followed by numbers (bond series)
+const _GOVT_SEC_SYM        = /^\d+\.?\d*(GS|SDL|TB|OIL|CS|RF)\d*|^\d+$|[-]\d+$/i;
 
 /**
  * getAllNseEquity — returns ALL NSE EQ instruments (F&O and non-F&O alike),
@@ -281,6 +282,42 @@ function getAllNseEquity() {
   return [...foFirst, ...rest];
 }
 
+/**
+ * getAllEquity — returns ALL NSE + BSE EQ instruments (F&O and non-F&O alike),
+ * excluding non-equity instruments (GOI bonds, ETFs, SGBs, debentures).
+ *
+ * Sort order: F&O-eligible stocks first (most liquid, reliable candle data),
+ * then remaining NSE stocks, then BSE stocks alphabetically by trading symbol.
+ *
+ * @returns {object[]} Array of instrument objects with instrumentToken, tradingsymbol, exchange, name
+ */
+function getAllEquity() {
+  const all = _instruments.filter((i) => {
+    // Accept both NSE and BSE
+    if ((i.exchange !== 'NSE' && i.exchange !== 'BSE') || i.instrumentType !== 'EQ') return false;
+    const sym  = String(i.tradingsymbol ?? '');
+    const name = String(i.name ?? '');
+    // Exclude government bonds, ETFs, debentures, REITs
+    if (_EQUITY_EXCLUDE_NAME.test(name))  return false;
+    if (_EQUITY_EXCLUDE_SYM.test(sym))    return false;
+    if (_GOVT_SEC_SYM.test(sym))          return false;
+    return true;
+  });
+
+  const foNames = new Set(getFutureNames());
+
+  // Sort: F&O first, then NSE, then BSE
+  const foFirst = all.filter((i) => foNames.has(i.name ?? i.tradingsymbol));
+  const nseRest = all
+    .filter((i) => !foNames.has(i.name ?? i.tradingsymbol) && i.exchange === 'NSE')
+    .sort((a, b) => a.tradingsymbol.localeCompare(b.tradingsymbol));
+  const bseRest = all
+    .filter((i) => !foNames.has(i.name ?? i.tradingsymbol) && i.exchange === 'BSE')
+    .sort((a, b) => a.tradingsymbol.localeCompare(b.tradingsymbol));
+
+  return [...foFirst, ...nseRest, ...bseRest];
+}
+
 function isLoaded() {
   return _instruments.length > 0;
 }
@@ -293,4 +330,4 @@ function getCount() {
   return _instruments.length;
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, isLoaded, getLastLoaded, getCount };
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount };

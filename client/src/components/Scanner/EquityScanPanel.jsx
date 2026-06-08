@@ -199,6 +199,7 @@ export default function EquityScanPanel({ inline = false }) {
     const [scanStatus, setScanStatus] = useState(null); // server status object
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [universe, setUniverse] = useState(null); // equity universe info
     const pollRef = useRef(null);
 
     // ── Filter state ─────────────────────────────────────────────────────────
@@ -230,10 +231,14 @@ export default function EquityScanPanel({ inline = false }) {
         };
     }, []);
 
-    // ── Load status + results on mount ───────────────────────────────────────
+    // ── Load universe + status + results on mount ─────────────────────────────
     useEffect(() => {
         async function init() {
             try {
+                // First, fetch the equity universe (all stocks to be scanned)
+                const { data: universeData } = await api.get("/equity-scan/universe");
+                setUniverse(universeData);
+
                 const { data: status } = await api.get("/equity-scan/status");
                 setScanStatus(status);
                 if (status.cachedToday) {
@@ -446,8 +451,43 @@ export default function EquityScanPanel({ inline = false }) {
                     <span className="mw-detail-name" style={{ fontSize: 16, fontWeight: 700 }}>
                         Equity Scan
                     </span>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>All NSE EQ · 4H / 1D / 1W</span>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>All NSE + BSE EQ · 4H / 1D / 1W</span>
                 </div>
+
+                {/* Universe Info */}
+                {universe && (
+                    <div style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: 12,
+                        marginBottom: 12,
+                        padding: "10px 14px",
+                        borderRadius: 8,
+                        background: "var(--bg-secondary)",
+                        border: "1px solid var(--border)"
+                    }}>
+                        <div style={{ textAlign: "center", minWidth: 70 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}>{universe.total}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Total Stocks</div>
+                        </div>
+                        <div style={{ textAlign: "center", minWidth: 70 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "#4dabf7" }}>{universe.nseCount}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)" }}>NSE</div>
+                        </div>
+                        <div style={{ textAlign: "center", minWidth: 70 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "#fab005" }}>{universe.bseCount}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)" }}>BSE</div>
+                        </div>
+                        <div style={{ textAlign: "center", minWidth: 70 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "#51cf66" }}>{universe.foCount}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)" }}>F&O</div>
+                        </div>
+                        <div style={{ textAlign: "center", minWidth: 70 }}>
+                            <div style={{ fontSize: 18, fontWeight: 700, color: "#ff6b6b" }}>{universe.nonFoCount}</div>
+                            <div style={{ fontSize: 10, color: "var(--text-muted)" }}>Non-F&O</div>
+                        </div>
+                    </div>
+                )}
 
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     {renderStatusChip()}
@@ -763,7 +803,7 @@ export default function EquityScanPanel({ inline = false }) {
             <div className="page-header">
                 <div>
                     <h2 className="page-title">Equity Scan</h2>
-                    <p className="page-sub">On-demand scan · All NSE stocks · 4H / 1D / 1W · Cached daily</p>
+                    <p className="page-sub">On-demand scan · All NSE + BSE stocks · 4H / 1D / 1W · Cached daily</p>
                 </div>
             </div>
             {inner}

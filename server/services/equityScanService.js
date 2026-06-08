@@ -210,22 +210,54 @@ function _mergeCandles(historical, recent, maxSize) {
 
 async function _runScan(scanDate) {
   console.log(`[EquityScan] Starting full equity scan for ${scanDate}`);
+  console.log(`[EquityScan] ═══════════════════════════════════════════════════════════════`);
 
-  const instruments = instrumentCache.getAllNseEquity(); // no cap — all NSE EQ
+  // ── Phase -1: Fetch and list ALL NSE + BSE equity instruments first ───────────
+  const instruments = instrumentCache.getAllEquity(); // ALL NSE + BSE EQ
   const patterns    = patternRegistry.list();
   const intervals   = ['4h', 'day', 'week'];
 
-  // Debug logging to verify universe size
+  // Classify by exchange and F&O status
   const foStockRegistry = require('./foStockRegistry');
   const foStocks = foStockRegistry.getAll();
   const foTokens = new Set(foStocks.map(s => Number(s.instrumentToken)));
-  const nonFOCount = instruments.filter(i => !foTokens.has(Number(i.instrumentToken))).length;
 
-  console.log(`[EquityScan] Universe breakdown:`);
-  console.log(`  - Total stocks: ${instruments.length}`);
-  console.log(`  - F&O stocks: ${instruments.filter(i => foTokens.has(Number(i.instrumentToken))).length}`);
-  console.log(`  - Non-F&O stocks: ${nonFOCount}`);
-  console.log(`  - Scanning ${patterns.length} patterns across ${intervals.length} timeframes`);
+  const nseStocks = instruments.filter(i => i.exchange === 'NSE');
+  const bseStocks = instruments.filter(i => i.exchange === 'BSE');
+  const foCount   = instruments.filter(i => foTokens.has(Number(i.instrumentToken))).length;
+  const nonFOCount = instruments.length - foCount;
+
+  console.log(`[EquityScan] ┌──────────────────────────────────────────────────────────────┐`);
+  console.log(`[EquityScan] │         EQUITY UNIVERSE - ALL STOCKS TO SCAN                │`);
+  console.log(`[EquityScan] ├──────────────────────────────────────────────────────────────┤`);
+  console.log(`[EquityScan] │  NSE Stocks:     ${String(nseStocks.length).padStart(5)}                                      │`);
+  console.log(`[EquityScan] │  BSE Stocks:     ${String(bseStocks.length).padStart(5)}                                      │`);
+  console.log(`[EquityScan] │  ─────────────────────────                                   │`);
+  console.log(`[EquityScan] │  F&O Stocks:     ${String(foCount).padStart(5)}                                      │`);
+  console.log(`[EquityScan] │  Non-F&O Stocks: ${String(nonFOCount).padStart(5)}                                      │`);
+  console.log(`[EquityScan] │  ─────────────────────────                                   │`);
+  console.log(`[EquityScan] │  TOTAL:          ${String(instruments.length).padStart(5)}                                      │`);
+  console.log(`[EquityScan] └──────────────────────────────────────────────────────────────┘`);
+
+  // Log first 50 and last 50 instruments as a sample
+  console.log(`[EquityScan] First 30 stocks in scan list:`);
+  instruments.slice(0, 30).forEach((inst, idx) => {
+    const fo = foTokens.has(Number(inst.instrumentToken)) ? '[F&O]' : '     ';
+    console.log(`  ${String(idx + 1).padStart(4)}. ${fo} ${inst.exchange}:${inst.tradingsymbol.padEnd(20)} - ${inst.name || 'N/A'}`);
+  });
+
+  if (instruments.length > 60) {
+    console.log(`  ... (${instruments.length - 60} more stocks) ...`);
+    console.log(`[EquityScan] Last 30 stocks in scan list:`);
+    instruments.slice(-30).forEach((inst, idx) => {
+      const fo = foTokens.has(Number(inst.instrumentToken)) ? '[F&O]' : '     ';
+      const num = instruments.length - 30 + idx + 1;
+      console.log(`  ${String(num).padStart(4)}. ${fo} ${inst.exchange}:${inst.tradingsymbol.padEnd(20)} - ${inst.name || 'N/A'}`);
+    });
+  }
+
+  console.log(`[EquityScan] ═══════════════════════════════════════════════════════════════`);
+  console.log(`[EquityScan] Scanning ${patterns.length} patterns across ${intervals.length} timeframes`);
 
   _state.progress.total = instruments.length;
 
@@ -433,7 +465,8 @@ async function _runScan(scanDate) {
         matched++;
         if (!isFO) {
           nonFOMatched++;
-          console.log(`[EquityScan] ✅ Non-F&O match: ${label} (${TF_LABELS[interval]}) ${result.signal} ${patternId}`);
+          const exch = inst.exchange || 'NSE';
+          console.log(`[EquityScan] ✅ Non-F&O match: ${exch}:${label} (${TF_LABELS[interval]}) ${result.signal} ${patternId}`);
         }
 
         // ── Build result document (same shape as scan_alerts) ─────────────
@@ -479,12 +512,21 @@ async function _runScan(scanDate) {
   _state.prefetching = false;
   _state.completedAt = new Date().toISOString();
 
-  console.log(
-    `[EquityScan] Done — scanned ${scanned} instruments, found ${matched} signals (${batch.length} stored) for ${scanDate}`,
-  );
-  console.log(
-    `[EquityScan] Signal breakdown: ${matched - nonFOMatched} F&O signals, ${nonFOMatched} non-F&O signals`,
-  );
+  // Count NSE vs BSE signals
+  const nseSignals = batch.filter(s => s.exchange === 'NSE').length;
+  const bseSignals = batch.filter(s => s.exchange === 'BSE').length;
+
+  console.log(`[EquityScan] ═══════════════════════════════════════════════════════════════`);
+  console.log(`[EquityScan] SCAN COMPLETE for ${scanDate}`);
+  console.log(`[EquityScan]   Instruments scanned: ${scanned}`);
+  console.log(`[EquityScan]   Total signals found: ${matched}`);
+  console.log(`[EquityScan]   Signals stored:      ${batch.length}`);
+  console.log(`[EquityScan]   ─────────────────────`);
+  console.log(`[EquityScan]   F&O signals:     ${matched - nonFOMatched}`);
+  console.log(`[EquityScan]   Non-F&O signals: ${nonFOMatched}`);
+  console.log(`[EquityScan]   NSE signals:     ${nseSignals}`);
+  console.log(`[EquityScan]   BSE signals:     ${bseSignals}`);
+  console.log(`[EquityScan] ═══════════════════════════════════════════════════════════════`);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -527,4 +569,35 @@ function _forceRun() {
   _state.scanDate = null;
 }
 
-module.exports = { run, getStatus, getResults, isCachedToday, toWeekly, _forceRun };
+/**
+ * Get the equity universe that will be scanned.
+ * Returns all NSE + BSE equity instruments with their details.
+ * @returns {object} Universe breakdown and instrument list
+ */
+function getUniverse() {
+  const instruments = instrumentCache.getAllEquity();
+  const foStockRegistry = require('./foStockRegistry');
+  const foStocks = foStockRegistry.getAll();
+  const foTokens = new Set(foStocks.map(s => Number(s.instrumentToken)));
+
+  const nseStocks = instruments.filter(i => i.exchange === 'NSE');
+  const bseStocks = instruments.filter(i => i.exchange === 'BSE');
+  const foCount = instruments.filter(i => foTokens.has(Number(i.instrumentToken))).length;
+
+  return {
+    total: instruments.length,
+    nseCount: nseStocks.length,
+    bseCount: bseStocks.length,
+    foCount: foCount,
+    nonFoCount: instruments.length - foCount,
+    instruments: instruments.map(i => ({
+      token: i.instrumentToken,
+      symbol: i.tradingsymbol,
+      name: i.name,
+      exchange: i.exchange,
+      isFO: foTokens.has(Number(i.instrumentToken))
+    }))
+  };
+}
+
+module.exports = { run, getStatus, getResults, isCachedToday, toWeekly, _forceRun, getUniverse };
