@@ -14,7 +14,8 @@
       "Bash(node -c services/patternRegistry.js)",
       "Bash(node -c index-trade/orderManager.js)",
       "Bash(node -c services/tradePairing.js)",
-      "Bash(node -c routes/paperTrades.js)"
+      "Bash(node -c routes/paperTrades.js)",
+      "Bash(grep -E \"\\\\.\\(js|ts\\)$\")"
     ]
   }
 }

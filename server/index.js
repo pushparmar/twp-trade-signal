@@ -32,6 +32,7 @@ const foStockRegistry       = require('./services/foStockRegistry');
 const tradeArchiver         = require('./services/tradeArchiver');
 const signalOutcomeTracker  = require('./services/signalOutcomeTracker');
 const dailySnapshotJob      = require('./services/dailySnapshotJob');
+const equityScanScheduler   = require('./services/equityScanScheduler');
 const db                    = require('./db');
 const store = require('./store');
 const indexTrade            = require('./index-trade');
@@ -264,6 +265,14 @@ app.listen(PORT, async () => {
     dailySnapshotJob.start();
   } catch (err) {
     console.warn('[DailySnapshot] Could not start:', err.message);
+  }
+
+  // Equity scan scheduler — runs full NSE equity scan at 11:55 PM IST daily
+  // Also available on-demand via API endpoint
+  try {
+    equityScanScheduler.init();
+  } catch (err) {
+    console.warn('[EquityScanScheduler] Could not start:', err.message);
   }
 
   // Load F&O stock registry from disk immediately — no auth needed.
