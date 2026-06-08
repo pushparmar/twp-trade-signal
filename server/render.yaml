@@ -1,0 +1,25 @@
+# Render Blueprint for TWP Trading Backend
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: twp-trade-signal
+    runtime: node
+    region: singapore  # Closest to India for lower latency
+    plan: free  # or starter for $7/month with no sleep
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      # Add these manually in Render dashboard for security:
+      # - KITE_API_KEY
+      # - KITE_API_SECRET
+      # - KITE_ACCESS_TOKEN
+      # - MONGODB_URI
+      # - TELEGRAM_BOT_TOKEN
+    healthCheckPath: /api/health
+    autoDeploy: true  # Auto-deploy on push to connected branch
