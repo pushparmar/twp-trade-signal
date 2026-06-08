@@ -10,6 +10,7 @@ const tradeStore    = require('./tradeStore');
 const strikeManager = require('./strikeManager');
 const scanner       = require('./scanner');
 const db            = require('../db');
+const tradePairing  = require('../services/tradePairing');
 
 const router = express.Router();
 
@@ -192,6 +193,109 @@ router.get('/analytics/recent-trades', async (req, res) => {
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 200;
     const trades = await db.indexTradeRepo.getRecentTrades(limit);
     res.json(trades);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Trade Pairing & Backtesting Analytics ────────────────────────────────────
+
+// GET /api/index-trade/paired-trades
+// Returns trades paired into complete round-trip cycles for backtesting
+router.get('/paired-trades', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 200;
+    let trades = await db.indexTradeRepo.getRecentTrades(limit);
+
+    // Optional date filtering
+    if (req.query.fromDate || req.query.toDate) {
+      const fromMs = req.query.fromDate ? new Date(req.query.fromDate).getTime() : 0;
+      const toMs = req.query.toDate ? new Date(req.query.toDate).getTime() : Infinity;
+      trades = trades.filter(t => t.ts >= fromMs && t.ts <= toMs);
+    }
+
+    const pairs = tradePairing.pairTrades(trades);
+    const stats = tradePairing.generateBacktestStats(pairs);
+
+    res.json({
+      count: pairs.length,
+      stats,
+      trades: pairs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/index-trade/backtest-by-symbol
+// Groups paired trades by symbol (option contract)
+router.get('/backtest-by-symbol', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 500;
+    const trades = await db.indexTradeRepo.getRecentTrades(limit);
+    const pairs = tradePairing.pairTrades(trades);
+    const grouped = tradePairing.groupBySymbol(pairs);
+
+    const results = Object.values(grouped)
+      .sort((a, b) => b.totalPnl - a.totalPnl);
+
+    res.json({
+      count: results.length,
+      symbols: results,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/index-trade/backtest-by-pattern
+// Groups paired trades by pattern for pattern performance analysis
+router.get('/backtest-by-pattern', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 500;
+    const trades = await db.indexTradeRepo.getRecentTrades(limit);
+    const pairs = tradePairing.pairTrades(trades);
+    const grouped = tradePairing.groupByPattern(pairs);
+
+    const results = Object.values(grouped)
+      .sort((a, b) => b.winRate - a.winRate);
+
+    res.json({
+      count: results.length,
+      patterns: results,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/index-trade/backtest-summary
+// Comprehensive backtesting statistics
+router.get('/backtest-summary', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 500;
+    let trades = await db.indexTradeRepo.getRecentTrades(limit);
+
+    if (req.query.fromDate || req.query.toDate) {
+      const fromMs = req.query.fromDate ? new Date(req.query.fromDate).getTime() : 0;
+      const toMs = req.query.toDate ? new Date(req.query.toDate).getTime() : Infinity;
+      trades = trades.filter(t => t.ts >= fromMs && t.ts <= toMs);
+    }
+
+    const pairs = tradePairing.pairTrades(trades);
+    const stats = tradePairing.generateBacktestStats(pairs);
+    const bySymbol = tradePairing.groupBySymbol(pairs);
+    const byPattern = tradePairing.groupByPattern(pairs);
+
+    res.json({
+      overall: stats,
+      topSymbols: Object.values(bySymbol)
+        .sort((a, b) => b.totalPnl - a.totalPnl)
+        .slice(0, 10),
+      topPatterns: Object.values(byPattern)
+        .sort((a, b) => b.winRate - a.winRate)
+        .slice(0, 10),
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

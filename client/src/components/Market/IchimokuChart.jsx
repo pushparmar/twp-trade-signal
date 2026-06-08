@@ -130,8 +130,8 @@ function IchimokuChartImpl({ token, interval = "15minute", defaultBars = 50, lab
     // Toggle Ichimoku indicator visibility (cloud + lines) without removing series
     const [showIchimoku, setShowIchimoku] = useState(true);
     // Toggle Fair Value Gap and Order Block overlays
-    const [showFVG, setShowFVG] = useState(true);
-    const [showOB,  setShowOB]  = useState(true);
+    const [showFVG, setShowFVG] = useState(false);
+    const [showOB,  setShowOB]  = useState(false);
 
     const containerRef = useRef(null);
     const chartRef = useRef(null);

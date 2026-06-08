@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import useIndexTrade from './useIndexTrade';
+import ScanChartModal from '../Scanner/ScanChartModal';
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -222,6 +223,8 @@ function StatBox({ label, value, color }) {
 // ── Open Trades Panel ───────────────────────────────────────────────────────
 
 function OpenTradesPanel({ trades, tradeTicks, onClose }) {
+  const [chartTrade, setChartTrade] = useState(null);
+
   if (trades.length === 0) {
     return (
       <div className="settings-group">
@@ -232,99 +235,129 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
   }
 
   return (
-    <div className="settings-group">
-      <h3>Open Paper Trades ({trades.length})</h3>
-      <div style={{ overflowX: 'auto' }}>
-        <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
-          <thead>
-            <tr>
-              <th>Index</th>
-              <th>Symbol</th>
-              <th>Action</th>
-              <th>Pattern</th>
-              <th>TF</th>
-              <th>Entry</th>
-              <th>LTP</th>
-              <th>PnL</th>
-              <th>SL</th>
-              <th>Target</th>
-              <th>TSL</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {trades.map(t => {
-              const tick = tradeTicks[t.id];
-              const ltp = tick?.ltp ?? t.entryPrice;
-              const unrealizedPnl = tick?.unrealizedPnl ?? 0;
-              const isTsl = tick?.tslActivated || t.tslActivated;
-              const isLp = t.strategyType === 'low-premium';
-              // Live avg price from tick (updated after avg-down), fall back to trade field
-              const displayAvg = tick?.avgPrice ?? t.avgPrice ?? null;
-              const displayLots = tick?.lotCount ?? t.lotCount ?? 1;
-              const hasAvgdDown = isLp && (t.avgDownCount ?? 0) > 0;
+    <>
+      <div className="settings-group">
+        <h3>Open Paper Trades ({trades.length})</h3>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+            <thead>
+              <tr>
+                <th>Index</th>
+                <th>Symbol</th>
+                <th>Action</th>
+                <th>Pattern</th>
+                <th>TF</th>
+                <th>Entry</th>
+                <th>LTP</th>
+                <th>PnL</th>
+                <th>SL</th>
+                <th>Target</th>
+                <th>TSL</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map(t => {
+                const tick = tradeTicks[t.id];
+                const ltp = tick?.ltp ?? t.entryPrice;
+                const unrealizedPnl = tick?.unrealizedPnl ?? 0;
+                const isTsl = tick?.tslActivated || t.tslActivated;
+                const isLp = t.strategyType === 'low-premium';
+                // Live avg price from tick (updated after avg-down), fall back to trade field
+                const displayAvg = tick?.avgPrice ?? t.avgPrice ?? null;
+                const displayLots = tick?.lotCount ?? t.lotCount ?? 1;
+                const hasAvgdDown = isLp && (t.avgDownCount ?? 0) > 0;
 
-              return (
-                <tr key={t.id}>
-                  <td>{t.index}</td>
-                  <td style={{ fontWeight: 500 }}>
-                    {t.strike} {t.optionType}
-                  </td>
-                  <td>
-                    <span style={{
-                      color: t.action === 'BUY' ? '#51cf66' : '#ff6b6b',
-                      fontWeight: 600,
-                    }}>
-                      {t.action}
-                    </span>
-                  </td>
-                  <td>
-                    {isLp
-                      ? (
-                        <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                          <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>
-                            💰 LP {displayLots > 1 ? `×${displayLots}` : ''}
-                          </span>
-                          {hasAvgdDown && displayAvg != null && (
-                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>avg ₹{fmtPrice(displayAvg)}</span>
-                          )}
-                        </span>
-                      )
-                      : (t.patternLabel || t.patternId)}
-                  </td>
-                  <td>{t.tfLabel}</td>
-                  <td>
-                    {fmtPrice(t.entryPrice)}
-                    {hasAvgdDown && displayAvg != null && (
-                      <div style={{ fontSize: 10, color: '#fab005' }}>avg ₹{fmtPrice(displayAvg)}</div>
-                    )}
-                  </td>
-                  <td style={{ fontWeight: 500 }}>{fmtPrice(ltp)}</td>
-                  <td style={{
-                    fontWeight: 600,
-                    color: unrealizedPnl >= 0 ? '#51cf66' : '#ff6b6b',
-                  }}>
-                    {fmtPnl(unrealizedPnl)}
-                  </td>
-                  <td>{fmtPrice(tick?.sl ?? t.sl)}</td>
-                  <td>{fmtPrice(t.target)}</td>
-                  <td>{isTsl ? '🔒' : isLp && !isTsl && (t.avgDownAt != null) ? '⏳' : '—'}</td>
-                  <td>
-                    <button
-                      className="btn btn-sm btn-danger"
-                      onClick={() => onClose(t.id, ltp)}
-                      style={{ fontSize: 10, padding: '2px 6px' }}
+                return (
+                  <tr key={t.id}>
+                    <td>{t.index}</td>
+                    <td
+                      style={{
+                        fontWeight: 500,
+                        cursor: t.token ? 'pointer' : 'default',
+                        color: t.token ? '#4dabf7' : 'inherit',
+                        textDecoration: t.token ? 'underline' : 'none'
+                      }}
+                      onClick={() => t.token && setChartTrade(t)}
+                      title={t.token ? 'Click to view chart' : ''}
                     >
-                      Close
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                      {t.strike} {t.optionType}
+                    </td>
+                    <td>
+                      <span style={{
+                        color: t.action === 'BUY' ? '#51cf66' : '#ff6b6b',
+                        fontWeight: 600,
+                      }}>
+                        {t.action}
+                      </span>
+                    </td>
+                    <td>
+                      {isLp
+                        ? (
+                          <span style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                            <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>
+                              💰 LP {displayLots > 1 ? `×${displayLots}` : ''}
+                            </span>
+                            {hasAvgdDown && displayAvg != null && (
+                              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>avg ₹{fmtPrice(displayAvg)}</span>
+                            )}
+                          </span>
+                        )
+                        : (t.patternLabel || t.patternId)}
+                    </td>
+                    <td>{t.tfLabel}</td>
+                    <td>
+                      {fmtPrice(t.entryPrice)}
+                      {hasAvgdDown && displayAvg != null && (
+                        <div style={{ fontSize: 10, color: '#fab005' }}>avg ₹{fmtPrice(displayAvg)}</div>
+                      )}
+                    </td>
+                    <td style={{ fontWeight: 500 }}>{fmtPrice(ltp)}</td>
+                    <td style={{
+                      fontWeight: 600,
+                      color: unrealizedPnl >= 0 ? '#51cf66' : '#ff6b6b',
+                    }}>
+                      {fmtPnl(unrealizedPnl)}
+                    </td>
+                    <td>{fmtPrice(tick?.sl ?? t.sl)}</td>
+                    <td>{fmtPrice(t.target)}</td>
+                    <td>{isTsl ? '🔒' : isLp && !isTsl && (t.avgDownAt != null) ? '⏳' : '—'}</td>
+                    <td>
+                      <button
+                        className="btn btn-sm btn-danger"
+                        onClick={() => onClose(t.id, ltp)}
+                        style={{ fontSize: 10, padding: '2px 6px' }}
+                      >
+                        Close
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+
+      {/* Chart Modal */}
+      {chartTrade && (
+        <ScanChartModal
+          alert={{
+            token: chartTrade.token,
+            label: chartTrade.symbol || `${chartTrade.strike} ${chartTrade.optionType}`,
+            interval: chartTrade.interval || '15minute',
+            tfLabel: chartTrade.tfLabel || '15m',
+            patternLabel: chartTrade.patternLabel || (chartTrade.strategyType === 'low-premium' ? '💰 LP Scalper' : null),
+            patternId: chartTrade.patternId || null,
+            signal: chartTrade.signalDirection || 'bullish',
+            close: chartTrade.entryPrice || 0,
+            sl: chartTrade.sl || null,
+            target: chartTrade.target || null,
+          }}
+          onClose={() => setChartTrade(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -336,6 +369,7 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
  */
 function OrderHistory({ trades, allTrades }) {
   const [expanded, setExpanded] = useState(true);
+  const [chartTrade, setChartTrade] = useState(null);
 
   if (trades.length === 0) {
     return (
@@ -363,95 +397,127 @@ function OrderHistory({ trades, allTrades }) {
   const losses = trades.filter(t => t.pnl <= 0).length;
 
   return (
-    <div className="settings-group">
-      <h3
-        style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
-        onClick={() => setExpanded(prev => !prev)}
-      >
-        {/* Left side: title + today's stats */}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-          <span>Today&apos;s Closed Trades ({trades.length})</span>
-          <span style={{ fontSize: 13, fontWeight: 600, color: todayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
-            {fmtPnl(todayPnl)}
+    <>
+      <div className="settings-group">
+        <h3
+          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+          onClick={() => setExpanded(prev => !prev)}
+        >
+          {/* Left side: title + today's stats */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+            <span>Today&apos;s Closed Trades ({trades.length})</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: todayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
+              {fmtPnl(todayPnl)}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              W:{wins} L:{losses}
+            </span>
           </span>
-          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-            W:{wins} L:{losses}
-          </span>
-        </span>
 
-        {/* Right side: export button + collapse chevron */}
-        <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          {allTrades && allTrades.length > 0 && (
-            <button
-              className="btn btn-sm btn-secondary"
-              onClick={(e) => { e.stopPropagation(); exportToCSV(allTrades); }}
-              style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
-              title={`Export all ${allTrades.length} closed trades to CSV`}
-            >
-              ⬇ Export CSV
-            </button>
-          )}
-          <span style={{ fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
-        </span>
-      </h3>
-      {expanded && (
-        <div style={{ overflowX: 'auto' }}>
-          <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Index</th>
-                <th>Symbol</th>
-                <th>Action</th>
-                <th>Pattern</th>
-                <th>TF</th>
-                <th>Entry</th>
-                <th>Exit</th>
-                <th>PnL</th>
-                <th>Reason</th>
-              </tr>
-            </thead>
-            <tbody>
-              {trades.map(t => (
-                <tr key={t.id}>
-                  <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(t.closedTs)}</td>
-                  <td>{t.index}</td>
-                  <td style={{ fontWeight: 500 }}>{t.strike} {t.optionType}</td>
-                  <td>
-                    <span style={{ color: t.action === 'BUY' ? '#51cf66' : '#ff6b6b' }}>
-                      {t.action}
-                    </span>
-                  </td>
-                  <td>
-                    {t.strategyType === 'low-premium'
-                      ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
-                      : (t.patternLabel || t.patternId)}
-                  </td>
-                  <td>{t.tfLabel}</td>
-                  <td>{fmtPrice(t.entryPrice)}</td>
-                  <td>{fmtPrice(t.exitPrice)}</td>
-                  <td style={{
-                    fontWeight: 600,
-                    color: (t.pnl || 0) >= 0 ? '#51cf66' : '#ff6b6b',
-                  }}>
-                    {fmtPnl(t.pnl)}
-                  </td>
-                  <td>
-                    <span style={{
-                      fontSize: 10, padding: '1px 4px', borderRadius: 3,
-                      background: t.exitReason === 'target' ? '#51cf6622' : '#ff6b6b22',
-                      color: t.exitReason === 'target' ? '#51cf66' : '#ff6b6b',
-                    }}>
-                      {(t.exitReason || 'manual').toUpperCase()}
-                    </span>
-                  </td>
+          {/* Right side: export button + collapse chevron */}
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {allTrades && allTrades.length > 0 && (
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={(e) => { e.stopPropagation(); exportToCSV(allTrades); }}
+                style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
+                title={`Export all ${allTrades.length} closed trades to CSV`}
+              >
+                ⬇ Export CSV
+              </button>
+            )}
+            <span style={{ fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
+          </span>
+        </h3>
+        {expanded && (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Index</th>
+                  <th>Symbol</th>
+                  <th>Action</th>
+                  <th>Pattern</th>
+                  <th>TF</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>PnL</th>
+                  <th>Reason</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {trades.map(t => (
+                  <tr key={t.id}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(t.closedTs)}</td>
+                    <td>{t.index}</td>
+                    <td
+                      style={{
+                        fontWeight: 500,
+                        cursor: t.token ? 'pointer' : 'default',
+                        color: t.token ? '#4dabf7' : 'inherit',
+                        textDecoration: t.token ? 'underline' : 'none'
+                      }}
+                      onClick={() => t.token && setChartTrade(t)}
+                      title={t.token ? 'Click to view chart' : ''}
+                    >
+                      {t.strike} {t.optionType}
+                    </td>
+                    <td>
+                      <span style={{ color: t.action === 'BUY' ? '#51cf66' : '#ff6b6b' }}>
+                        {t.action}
+                      </span>
+                    </td>
+                    <td>
+                      {t.strategyType === 'low-premium'
+                        ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
+                        : (t.patternLabel || t.patternId)}
+                    </td>
+                    <td>{t.tfLabel}</td>
+                    <td>{fmtPrice(t.entryPrice)}</td>
+                    <td>{fmtPrice(t.exitPrice)}</td>
+                    <td style={{
+                      fontWeight: 600,
+                      color: (t.pnl || 0) >= 0 ? '#51cf66' : '#ff6b6b',
+                    }}>
+                      {fmtPnl(t.pnl)}
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, padding: '1px 4px', borderRadius: 3,
+                        background: t.exitReason === 'target' ? '#51cf6622' : '#ff6b6b22',
+                        color: t.exitReason === 'target' ? '#51cf66' : '#ff6b6b',
+                      }}>
+                        {(t.exitReason || 'manual').toUpperCase()}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Chart Modal */}
+      {chartTrade && (
+        <ScanChartModal
+          alert={{
+            token: chartTrade.token,
+            label: chartTrade.symbol || `${chartTrade.strike} ${chartTrade.optionType}`,
+            interval: chartTrade.interval || '15minute',
+            tfLabel: chartTrade.tfLabel || '15m',
+            patternLabel: chartTrade.patternLabel || (chartTrade.strategyType === 'low-premium' ? '💰 LP Scalper' : null),
+            patternId: chartTrade.patternId || null,
+            signal: chartTrade.signalDirection || 'bullish',
+            close: chartTrade.entryPrice || 0,
+            sl: chartTrade.sl || null,
+            target: chartTrade.target || null,
+          }}
+          onClose={() => setChartTrade(null)}
+        />
       )}
-    </div>
+    </>
   );
 }
 
