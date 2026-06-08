@@ -615,18 +615,24 @@ function _handleLowPremiumTSL(trade, ltp) {
 /**
  * Handles TSL trailing for standard pattern-based BUY trades.
  *
- * TSL logic (R-multiple based):
- *   Activates when unrealizedR >= tslTriggerR.
- *   Trails at: SL = peak - tslDistanceR × initialRisk
+ * TSL logic (Target percentage based):
+ *   Activates when price reaches tslTriggerPct% of the distance to target.
+ *   Example: Entry=100, Target=120, Trigger=80% → activates at 116 (80% of 20-point move)
+ *   Trails at: SL = peak × tslTrailPct (e.g., 70% of peak = 30% drawdown allowed)
  */
 function _handlePatternTSL(trade, ltp) {
-    const config      = tradeStore.getConfig();
-    const numToken    = Number(trade.token);
-    const riskPerUnit = Math.abs(trade.entryPrice - trade.initialSl);
+    const config   = tradeStore.getConfig();
+    const numToken = Number(trade.token);
 
     // ── TSL: Trailing Stop Loss ─────────────────────────────────────────────
-    if (config.tslEnabled && riskPerUnit > 0) {
-        const unrealizedR = (ltp - trade.entryPrice) / riskPerUnit;
+    if (config.tslEnabled && trade.target && trade.entryPrice) {
+        // Calculate target distance and trigger price
+        const targetDistance = Math.abs(trade.target - trade.entryPrice);
+        const tslTriggerPct  = config.tslTriggerPct ?? 80; // Default 80%
+        const tslTrailPct    = (config.tslTrailPct ?? 70) / 100; // Convert 70 → 0.70
+
+        // For BUY: trigger when LTP reaches entry + (80% of target distance)
+        const tslTriggerPrice = trade.entryPrice + (targetDistance * tslTriggerPct / 100);
 
         // Track peak (highest price reached since entry)
         const currentPeak = trade.peakPrice || trade.entryPrice;
@@ -636,23 +642,20 @@ function _handlePatternTSL(trade, ltp) {
             trade.peakPrice = newPeak;
         }
 
-        // Pattern-specific TSL trigger:
-        // tk-reversion targets are close (Kijun / cloud edge ~1-1.5R away), so we
-        // arm the TSL early at 0.5R. All other patterns use the global tslTriggerR.
-        const triggerR = trade.patternId === 'tk-reversion'
-            ? Math.min(0.5, config.tslTriggerR)
-            : config.tslTriggerR;
-
-        // Activate TSL when profit >= triggerR × risk
-        if (!trade.tslActivated && unrealizedR >= triggerR) {
+        // Activate TSL when price reaches trigger level
+        if (!trade.tslActivated && ltp >= tslTriggerPrice) {
             tradeStore.updateTrade(trade.id, { tslActivated: true });
             trade.tslActivated = true;
-            console.log(`[IdxOrder] 🔒 TSL activated: ${trade.symbol} @${ltp} (${unrealizedR.toFixed(2)}R, trigger=${triggerR}R)`);
+            const progressPct = ((ltp - trade.entryPrice) / targetDistance * 100).toFixed(0);
+            console.log(
+                `[IdxOrder] 🔒 TSL activated: ${trade.symbol} @₹${ltp} ` +
+                `(${progressPct}% to target, trigger=${tslTriggerPct}%)`
+            );
         }
 
-        // Trail SL upward only (BUY)
+        // Trail SL upward only (BUY): SL = peak × tslTrailPct
         if (trade.tslActivated) {
-            const trailedSl = trade.peakPrice - config.tslDistanceR * riskPerUnit;
+            const trailedSl = trade.peakPrice * tslTrailPct;
             if (trailedSl > trade.sl) {
                 tradeStore.updateTrade(trade.id, { sl: Math.round(trailedSl * 100) / 100 });
                 trade.sl = Math.round(trailedSl * 100) / 100;

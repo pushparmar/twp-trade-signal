@@ -251,6 +251,7 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                 <th>LTP</th>
                 <th>PnL</th>
                 <th>SL</th>
+                <th>% from SL</th>
                 <th>Target</th>
                 <th>TSL</th>
                 <th></th>
@@ -267,6 +268,28 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                 const displayAvg = tick?.avgPrice ?? t.avgPrice ?? null;
                 const displayLots = tick?.lotCount ?? t.lotCount ?? 1;
                 const hasAvgdDown = isLp && (t.avgDownCount ?? 0) > 0;
+
+                // Calculate % distance from SL
+                const currentSl = tick?.sl ?? t.sl;
+                let distanceFromSl = null;
+                let distanceColor = 'var(--text-muted)';
+                if (currentSl != null && ltp != null) {
+                  if (t.action === 'BUY') {
+                    // BUY: SL is below LTP, show how far above SL we are
+                    distanceFromSl = ((ltp - currentSl) / currentSl) * 100;
+                  } else {
+                    // SELL: SL is above LTP, show how far below SL we are
+                    distanceFromSl = ((currentSl - ltp) / currentSl) * 100;
+                  }
+                  // Color: green if far from SL (safe), yellow/orange if close, red if very close
+                  if (distanceFromSl > 5) {
+                    distanceColor = '#51cf66'; // Green - safe
+                  } else if (distanceFromSl > 2) {
+                    distanceColor = '#fab005'; // Yellow - caution
+                  } else {
+                    distanceColor = '#ff6b6b'; // Red - danger
+                  }
+                }
 
                 return (
                   <tr key={t.id}>
@@ -320,6 +343,13 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
                       {fmtPnl(unrealizedPnl)}
                     </td>
                     <td>{fmtPrice(tick?.sl ?? t.sl)}</td>
+                    <td style={{
+                      fontWeight: 600,
+                      color: distanceColor,
+                      fontSize: 11
+                    }}>
+                      {distanceFromSl != null ? `${distanceFromSl > 0 ? '+' : ''}${distanceFromSl.toFixed(1)}%` : '—'}
+                    </td>
                     <td>{fmtPrice(t.target)}</td>
                     <td>{isTsl ? '🔒' : isLp && !isTsl && (t.avgDownAt != null) ? '⏳' : '—'}</td>
                     <td>
@@ -717,11 +747,18 @@ function PatternTradeConfig({ config, onUpdate }) {
     niftyLots:        config.niftyLots        ?? 3,
     sensexLots:       config.sensexLots       ?? 5,
     bankniftyLots:    config.bankniftyLots    ?? 3,
+    tslEnabled:       config.tslEnabled       ?? true,
+    tslTriggerPct:    config.tslTriggerPct    ?? 80,
+    tslTrailPct:      config.tslTrailPct      ?? 70,
   };
 
   function handleNum(key, raw) {
     const val = parseInt(raw, 10);
     if (!isNaN(val) && val >= 0) onUpdate({ [key]: val });
+  }
+
+  function handleToggle(key) {
+    onUpdate({ [key]: !c[key] });
   }
 
   return (
@@ -734,6 +771,7 @@ function PatternTradeConfig({ config, onUpdate }) {
           📈 Pattern Trade Settings
           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
             max {c.maxPatternTrades} open · NIFTY ×{c.niftyLots} · SENSEX ×{c.sensexLots}
+            {c.tslEnabled && ` · TSL @${c.tslTriggerPct}%`}
           </span>
         </span>
         <span style={{ fontSize: 12 }}>{open ? '▼' : '▶'}</span>
@@ -794,6 +832,44 @@ function PatternTradeConfig({ config, onUpdate }) {
           </div>
 
           <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Trailing Stop Loss (TSL)
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>
+              <input
+                type="checkbox"
+                checked={c.tslEnabled}
+                onChange={() => handleToggle('tslEnabled')}
+                style={{ marginRight: 6 }}
+              />
+              Enable TSL for Pattern Trades
+            </label>
+          </div>
+
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+            gap: 12, marginBottom: 16, opacity: c.tslEnabled ? 1 : 0.4,
+          }}>
+            <LpField
+              label="TSL Trigger %"
+              hint="Activate TSL at this % of distance to target"
+              value={c.tslTriggerPct}
+              step="1"
+              onChange={v => handleNum('tslTriggerPct', v)}
+            />
+            <LpField
+              label="TSL Trail %"
+              hint="Trail SL at this % of peak price (70 = 30% drawdown)"
+              value={c.tslTrailPct}
+              step="1"
+              onChange={v => handleNum('tslTrailPct', v)}
+            />
+          </div>
+
+          <div style={{
             padding: '10px 12px', background: 'var(--bg-secondary)',
             borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7,
           }}>
@@ -806,6 +882,19 @@ function PatternTradeConfig({ config, onUpdate }) {
             📊 <strong>SENSEX</strong> options trade with <strong>{c.sensexLots}</strong> lot{c.sensexLots > 1 ? 's' : ''} per trade
             <br />
             🏦 <strong>BANKNIFTY</strong> options trade with <strong>{c.bankniftyLots}</strong> lot{c.bankniftyLots > 1 ? 's' : ''} per trade
+            {c.tslEnabled && (
+              <>
+                <br />
+                <br />
+                <strong style={{ color: 'var(--text-primary)' }}>TSL Example:</strong>
+                <br />
+                Entry ₹100, Target ₹120 (20-point move)
+                <br />
+                🔒 TSL activates at ₹{100 + (20 * c.tslTriggerPct / 100)} ({c.tslTriggerPct}% of target distance)
+                <br />
+                📉 If peak reaches ₹120, SL trails to ₹{(120 * c.tslTrailPct / 100).toFixed(0)} ({c.tslTrailPct}% of peak)
+              </>
+            )}
           </div>
         </div>
       )}

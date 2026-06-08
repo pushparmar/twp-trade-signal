@@ -19,9 +19,12 @@ let _trades = [];
 let _config = {
   enabled: true,
   lotQuantity: 1,        // number of lots per trade (deprecated - use index-specific lots)
-  tslEnabled: true,
-  tslTriggerR: 1.0,      // activate TSL at 1× risk profit
-  tslDistanceR: 0.5,     // trail 0.5× risk behind peak
+
+  // ── Trailing Stop Loss (Pattern Trades) ──────────────────────────────────────
+  tslEnabled: true,          // enable/disable TSL for pattern trades
+  tslTriggerPct: 80,         // activate TSL when price reaches this % of target distance (80% = near target)
+  tslTrailPct: 70,           // trail SL at this % of peak price (70% = 30% drawdown from peak)
+
   minRR: 1.5,            // minimum reward:risk ratio
 
   // ── Pattern Trade Limits ─────────────────────────────────────────────────────
