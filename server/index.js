@@ -101,12 +101,13 @@ app.get('/api/stream', (req, res) => {
 });
 
 // Kite redirects to root when redirect URL in app is set to http://localhost:3001
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 app.get('/', (req, res) => {
   const { request_token, status } = req.query;
   if (status === 'success' && request_token) {
     return res.redirect(`/api/kite/auth/callback?request_token=${request_token}&status=success`);
   }
-  res.redirect('http://localhost:5173');
+  res.json({ status: 'ok', message: 'TWP Trade Signal API', frontend: FRONTEND_URL });
 });
 
 // ── Health check — Railway pings this to decide if the service is alive ───────
