@@ -27,8 +27,34 @@ router.get('/status', (_req, res) => {
 });
 
 // GET /api/index-trade/trades
-router.get('/trades', (_req, res) => {
-  res.json(tradeStore.getAllTrades());
+// Returns in-memory trades, or fetches from MongoDB if memory is empty
+router.get('/trades', async (_req, res) => {
+  let trades = tradeStore.getAllTrades();
+
+  // If memory is empty, try to restore from MongoDB
+  if (trades.length === 0) {
+    console.log('[IndexTrade] Memory empty, attempting restore from MongoDB...');
+    await tradeStore.restore();
+    trades = tradeStore.getAllTrades();
+  }
+
+  res.json(trades);
+});
+
+// POST /api/index-trade/restore — manually restore trades from MongoDB
+router.post('/restore', async (_req, res) => {
+  try {
+    await tradeStore.restore();
+    const trades = tradeStore.getAllTrades();
+    res.json({
+      ok: true,
+      restored: trades.length,
+      open: trades.filter(t => t.status === 'OPEN').length,
+      closed: trades.filter(t => t.status === 'CLOSED').length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/index-trade/trades/open
