@@ -17,10 +17,12 @@
  *     • TSL activates when LTP ≥ lpTslTrigger; trails at lpTslTrailPct × peak.
  */
 
-const candleStore    = require('../services/candleStore');
-const { broadcast }  = require('../sseHub');
-const { isNseOpen }  = require('../utils/marketHours');
-const { getRSI }     = require('../services/ichimoku');
+const candleStore       = require('../services/candleStore');
+const { broadcast }     = require('../sseHub');
+const { isNseOpen }     = require('../utils/marketHours');
+const { getRSI }        = require('../services/ichimoku');
+const telegramNotifier  = require('../services/telegramNotifier');
+const store             = require('../store');
 
 const tradeStore     = require('./tradeStore');
 const strikeManager  = require('./strikeManager');
@@ -93,6 +95,95 @@ function _getCurrentPrice(token) {
         return fiveMinCandles[fiveMinCandles.length - 1].close;
     }
     return null;
+}
+
+// ── Telegram notification helpers ───────────────────────────────────────────
+
+/**
+ * Send Telegram alert for index trade execution.
+ * Fire-and-forget — errors are logged but never thrown.
+ */
+async function _sendTelegramAlert(trade) {
+    try {
+        const config = store.getConfig();
+        const chatId = config.telegram?.chatId;
+        if (!chatId) return; // Telegram not configured
+
+        const action = trade.action; // Always 'BUY' for index options
+        const symbol = trade.symbol;
+        const entry = trade.entryPrice;
+        const sl = trade.sl;
+        const target = trade.target;
+        const rrRatio = trade.rrRatio?.toFixed(2) || 'N/A';
+        const strategyLabel = trade.strategyType === 'low-premium' ? 'LP' : trade.tfLabel;
+        const patternLabel = trade.patternLabel || trade.patternId || 'N/A';
+
+        // Build message
+        const emoji = action === 'BUY' ? '🟢' : '🔴';
+        let text = `${emoji} <b>INDEX ORDER EXECUTED</b>\n\n`;
+        text += `<b>Symbol:</b> ${symbol}\n`;
+        text += `<b>Action:</b> ${action}\n`;
+        text += `<b>Strategy:</b> ${strategyLabel}\n`;
+        text += `<b>Pattern:</b> ${patternLabel}\n`;
+        text += `<b>Entry:</b> ₹${entry}\n`;
+        text += `<b>SL:</b> ₹${sl}\n`;
+        text += `<b>Target:</b> ₹${target}\n`;
+        text += `<b>R:R:</b> ${rrRatio}\n`;
+        text += `<b>Lots:</b> ${trade.quantity} (${trade.lotSize} per lot)\n`;
+
+        // Add LP-specific info
+        if (trade.strategyType === 'low-premium') {
+            text += `<b>Avg-Down At:</b> ₹${trade.avgDownAt}\n`;
+        }
+
+        await telegramNotifier.sendMessage(chatId, text);
+    } catch (err) {
+        console.warn('[IdxOrder] Telegram notification failed:', err.message);
+    }
+}
+
+/**
+ * Send Telegram alert for index trade exit.
+ * Fire-and-forget — errors are logged but never thrown.
+ */
+async function _sendTelegramExitAlert(trade) {
+    try {
+        const config = store.getConfig();
+        const chatId = config.telegram?.chatId;
+        if (!chatId) return; // Telegram not configured
+
+        const symbol = trade.symbol;
+        const entry = trade.avgPrice ?? trade.entryPrice;
+        const exit = trade.exitPrice;
+        const pnl = trade.pnl;
+        const reason = trade.exitReason;
+        const strategyLabel = trade.strategyType === 'low-premium' ? 'LP' : trade.tfLabel;
+        const lots = trade.lotCount ?? trade.quantity ?? 1;
+
+        // Emoji based on outcome
+        let emoji = '⚪';
+        if (reason === 'target') emoji = '🎯';
+        else if (reason === 'sl') emoji = '🛑';
+        else if (reason === 'tsl') emoji = '📉';
+        else if (reason === 'eod') emoji = '🕐';
+
+        // PnL color
+        const pnlEmoji = pnl > 0 ? '💚' : pnl < 0 ? '❤️' : '⚪';
+        const pnlSign = pnl > 0 ? '+' : '';
+
+        let text = `${emoji} <b>INDEX TRADE CLOSED</b>\n\n`;
+        text += `<b>Symbol:</b> ${symbol}\n`;
+        text += `<b>Strategy:</b> ${strategyLabel}\n`;
+        text += `<b>Entry:</b> ₹${entry}\n`;
+        text += `<b>Exit:</b> ₹${exit}\n`;
+        text += `<b>Reason:</b> ${reason.toUpperCase()}\n`;
+        text += `<b>Lots:</b> ${lots}\n`;
+        text += `${pnlEmoji} <b>PnL:</b> ${pnlSign}₹${pnl.toFixed(2)}\n`;
+
+        await telegramNotifier.sendMessage(chatId, text);
+    } catch (err) {
+        console.warn('[IdxOrder] Telegram exit notification failed:', err.message);
+    }
 }
 
 // ── Signal handler (pattern-based entry) ────────────────────────────────────
@@ -214,6 +305,11 @@ function onSignal(signal) {
     );
 
     broadcast('idx_trade', trade);
+
+    // Send Telegram notification (fire-and-forget)
+    _sendTelegramAlert(trade).catch(err =>
+        console.warn('[IdxOrder] Telegram alert failed:', err.message)
+    );
 }
 
 // ── Low Premium Scalper entry ────────────────────────────────────────────────
@@ -331,6 +427,11 @@ function _checkLowPremiumEntry() {
         );
 
         broadcast('idx_trade', trade);
+
+        // Send Telegram notification (fire-and-forget)
+        _sendTelegramAlert(trade).catch(err =>
+            console.warn('[IdxOrder] Telegram alert failed:', err.message)
+        );
     }
 }
 
@@ -455,6 +556,11 @@ function _handleLowPremiumTSL(trade, ltp) {
                 `lots=${trade.lotCount ?? 1} PnL=₹${closedTrade.pnl}`,
             );
             broadcast('idx_trade_update', closedTrade);
+
+            // Send Telegram exit notification (fire-and-forget)
+            _sendTelegramExitAlert(closedTrade).catch(err =>
+                console.warn('[IdxOrder] Telegram exit alert failed:', err.message)
+            );
         }
         return;
     }
@@ -550,6 +656,11 @@ function _handlePatternTSL(trade, ltp) {
                 `PnL=₹${closedTrade.pnl}`,
             );
             broadcast('idx_trade_update', closedTrade);
+
+            // Send Telegram exit notification (fire-and-forget)
+            _sendTelegramExitAlert(closedTrade).catch(err =>
+                console.warn('[IdxOrder] Telegram exit alert failed:', err.message)
+            );
         }
         return;
     }
@@ -635,6 +746,11 @@ function _checkEodClose() {
                 `[IdxOrder] 🕐 EOD closed ${trade.symbol} @₹${ltp} PnL=₹${closedTrade.pnl}`,
             );
             broadcast('idx_trade_update', closedTrade);
+
+            // Send Telegram exit notification (fire-and-forget)
+            _sendTelegramExitAlert(closedTrade).catch(err =>
+                console.warn('[IdxOrder] Telegram exit alert failed:', err.message)
+            );
         }
     }
 }
