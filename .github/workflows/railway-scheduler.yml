@@ -1,0 +1,70 @@
+name: Railway Service Scheduler
+
+# Schedule Railway service start/stop to save costs
+# Runs only on weekdays (Mon-Fri) during Indian market hours
+
+on:
+  schedule:
+    # Start at 7:30 AM IST (02:00 UTC) Mon-Fri
+    - cron: '0 2 * * 1-5'
+    # Stop at 11:45 PM IST (18:15 UTC) Mon-Fri
+    - cron: '15 18 * * 1-5'
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'status'
+        type: choice
+        options:
+          - start
+          - stop
+          - status
+
+jobs:
+  manage-service:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Determine Action
+        id: action
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "action=${{ inputs.action }}" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" -lt "12" ]; then
+              echo "action=start" >> $GITHUB_OUTPUT
+            else
+              echo "action=stop" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Start Service
+        if: steps.action.outputs.action == 'start'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Starting Railway service (7:30 AM IST)..."
+          railway service start --environment production
+          echo "Service started successfully"
+
+      - name: Stop Service
+        if: steps.action.outputs.action == 'stop'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Stopping Railway service (11:45 PM IST)..."
+          railway service stop --environment production
+          echo "Service stopped successfully"
+
+      - name: Check Status
+        if: steps.action.outputs.action == 'status'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Checking Railway service status..."
+          railway status
