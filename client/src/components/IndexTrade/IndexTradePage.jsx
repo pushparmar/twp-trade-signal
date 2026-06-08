@@ -705,6 +705,114 @@ function OptionChainIndex({ indexName, data }) {
   );
 }
 
+// ── Pattern Trade Config ────────────────────────────────────────────────────
+
+function PatternTradeConfig({ config, onUpdate }) {
+  const [open, setOpen] = useState(false);
+
+  if (!config) return null;
+
+  const c = {
+    maxPatternTrades: config.maxPatternTrades ?? 2,
+    niftyLots:        config.niftyLots        ?? 3,
+    sensexLots:       config.sensexLots       ?? 5,
+    bankniftyLots:    config.bankniftyLots    ?? 3,
+  };
+
+  function handleNum(key, raw) {
+    const val = parseInt(raw, 10);
+    if (!isNaN(val) && val >= 0) onUpdate({ [key]: val });
+  }
+
+  return (
+    <div className="settings-group">
+      <h3
+        style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => setOpen(prev => !prev)}
+      >
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          📈 Pattern Trade Settings
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            max {c.maxPatternTrades} open · NIFTY ×{c.niftyLots} · SENSEX ×{c.sensexLots}
+          </span>
+        </span>
+        <span style={{ fontSize: 12 }}>{open ? '▼' : '▶'}</span>
+      </h3>
+
+      {open && (
+        <div style={{ marginTop: 8 }}>
+          <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Trade Limits
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+            gap: 12, marginBottom: 16,
+          }}>
+            <LpField
+              label="Max Pattern Trades"
+              hint="Maximum concurrent pattern-based trades"
+              value={c.maxPatternTrades}
+              step="1"
+              onChange={v => handleNum('maxPatternTrades', v)}
+            />
+          </div>
+
+          <div style={{
+            fontSize: 11, fontWeight: 600, color: 'var(--text-muted)',
+            marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Lot Quantities by Index
+          </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
+            gap: 12, marginBottom: 16,
+          }}>
+            <LpField
+              label="NIFTY Lots"
+              hint="Number of lots per NIFTY trade"
+              value={c.niftyLots}
+              step="1"
+              onChange={v => handleNum('niftyLots', v)}
+            />
+            <LpField
+              label="SENSEX Lots"
+              hint="Number of lots per SENSEX trade"
+              value={c.sensexLots}
+              step="1"
+              onChange={v => handleNum('sensexLots', v)}
+            />
+            <LpField
+              label="BANKNIFTY Lots"
+              hint="Number of lots per BANKNIFTY trade"
+              value={c.bankniftyLots}
+              step="1"
+              onChange={v => handleNum('bankniftyLots', v)}
+            />
+          </div>
+
+          <div style={{
+            padding: '10px 12px', background: 'var(--bg-secondary)',
+            borderRadius: 6, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.7,
+          }}>
+            <strong style={{ color: 'var(--text-primary)' }}>Pattern Trade Rules:</strong>
+            <br />
+            📊 Maximum <strong>{c.maxPatternTrades}</strong> pattern-based trades can be open simultaneously (Low Premium trades are counted separately)
+            <br />
+            📈 <strong>NIFTY</strong> options trade with <strong>{c.niftyLots}</strong> lot{c.niftyLots > 1 ? 's' : ''} per trade
+            <br />
+            📊 <strong>SENSEX</strong> options trade with <strong>{c.sensexLots}</strong> lot{c.sensexLots > 1 ? 's' : ''} per trade
+            <br />
+            🏦 <strong>BANKNIFTY</strong> options trade with <strong>{c.bankniftyLots}</strong> lot{c.bankniftyLots > 1 ? 's' : ''} per trade
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Low Premium Scalper Config ──────────────────────────────────────────────
 
 /**
@@ -1147,6 +1255,7 @@ export default function IndexTradePage() {
         <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
         <TimeFilterConfig config={config} onUpdate={updateConfig} />
+        <PatternTradeConfig config={config} onUpdate={updateConfig} />
         <LowPremiumConfig config={config} onUpdate={updateConfig} />
         <RsiFilterConfig config={config} onUpdate={updateConfig} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />

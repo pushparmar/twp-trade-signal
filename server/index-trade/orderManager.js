@@ -246,6 +246,20 @@ function onSignal(signal) {
     const stackKey = Number(token);
     if (_openKeys.has(stackKey)) return;
 
+    // ── Max Pattern Trades Limit ─────────────────────────────────────────────────
+    // Count current open pattern trades (exclude LP trades)
+    const openPatternTrades = tradeStore.getOpenTrades()
+        .filter(t => t.strategyType === 'pattern');
+    const maxPatternTrades = config.maxPatternTrades ?? 2;
+
+    if (openPatternTrades.length >= maxPatternTrades) {
+        console.log(
+            `[IdxOrder] ⏭ Skipped ${signal.symbol} — ` +
+            `max pattern trades (${maxPatternTrades}) already open`
+        );
+        return;
+    }
+
     // R:R check
     const riskPerUnit = Math.abs(close - sl);
     if (riskPerUnit < 0.01) return;
@@ -269,7 +283,20 @@ function onSignal(signal) {
     if (direction !== 'bullish') return;
 
     const lotSize  = inst.lotSize || 1;
-    const quantity = config.lotQuantity || 1;
+
+    // Use index-specific lot quantities
+    let quantity = 1;
+    const indexName = (inst.index || '').toUpperCase();
+    if (indexName.includes('NIFTY') && !indexName.includes('BANK')) {
+        quantity = config.niftyLots ?? 3;
+    } else if (indexName.includes('SENSEX')) {
+        quantity = config.sensexLots ?? 5;
+    } else if (indexName.includes('BANKNIFTY') || indexName.includes('BANK')) {
+        quantity = config.bankniftyLots ?? 3;
+    } else {
+        // Fallback to config.lotQuantity for any other index
+        quantity = config.lotQuantity || 1;
+    }
 
     const trade = tradeStore.addTrade({
         source:          'index-trade',

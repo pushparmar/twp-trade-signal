@@ -18,11 +18,17 @@ const CONFIG_COLLECTION = 'settings'; // reuse existing settings collection
 let _trades = [];
 let _config = {
   enabled: true,
-  lotQuantity: 1,        // number of lots per trade
+  lotQuantity: 1,        // number of lots per trade (deprecated - use index-specific lots)
   tslEnabled: true,
   tslTriggerR: 1.0,      // activate TSL at 1× risk profit
   tslDistanceR: 0.5,     // trail 0.5× risk behind peak
   minRR: 1.5,            // minimum reward:risk ratio
+
+  // ── Pattern Trade Limits ─────────────────────────────────────────────────────
+  maxPatternTrades: 2,   // max concurrent pattern-based trades (across all indices)
+  niftyLots: 3,          // lot quantity for NIFTY options
+  sensexLots: 5,         // lot quantity for SENSEX options
+  bankniftyLots: 3,      // lot quantity for BANKNIFTY options (if added later)
 
   // ── RSI Filter ───────────────────────────────────────────────────────────────
   // When enabled, signals/trades whose RSI falls outside the configured window
