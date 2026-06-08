@@ -77,16 +77,22 @@ let _config = {
 async function restore() {
   if (!mongo.isReady()) return;
   try {
-    // Restore OPEN trades so they resume SL/Target monitoring
-    const openTrades = await db.indexTradeRepo.getOpenTrades();
-    if (openTrades.length > 0) {
-      for (const trade of openTrades) {
+    // Get today's IST date string
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+
+    // Restore today's trades (both OPEN and CLOSED) so UI shows full order book
+    const todayTrades = await db.indexTradeRepo.getByDate(todayIST);
+    if (todayTrades.length > 0) {
+      for (const trade of todayTrades) {
         // Avoid duplicates if already in memory
         if (!_trades.find(t => t.id === trade.id)) {
           _trades.push(trade);
         }
       }
-      console.log(`[IdxTradeStore] Restored ${openTrades.length} open trade(s) from MongoDB`);
+      const openCount = todayTrades.filter(t => t.status === 'OPEN').length;
+      const closedCount = todayTrades.filter(t => t.status === 'CLOSED').length;
+      console.log(`[IdxTradeStore] Restored ${todayTrades.length} trade(s) from MongoDB (${openCount} open, ${closedCount} closed)`);
     }
 
     // Load config
