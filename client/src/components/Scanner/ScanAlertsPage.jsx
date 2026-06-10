@@ -679,7 +679,6 @@ function ActivePaperTrades() {
   // Raw ticks fire 50+ times/sec; never subscribe to s.ticks here.
   const tradeTicks           = useAppStore((s) => s.tradeTicks);
   const closeScanPaperTrade  = useAppStore((s) => s.closeScanPaperTrade);
-  const addToast             = useAppStore((s) => s.addToast);
 
   // Ref for manual-close LTP so we can read the latest price without subscribing.
   const ticksRef = useRef({});
@@ -694,7 +693,6 @@ function ActivePaperTrades() {
   function handleManualClose(trade) {
     const ltp = ticksRef.current[trade.token]?.lastPrice ?? trade.entryPrice;
     closeScanPaperTrade(trade.id, ltp);
-    addToast({ type: 'info', message: `Closed ${trade.symbol} @ ₹${fmt(ltp)}` });
   }
 
   // Total unrealized P&L — sum server-computed values from tradeTicks.
@@ -949,7 +947,6 @@ function ScreenerToolbar({ onTfResults, onClear }) {
   const screenerLastRunAt    = useAppStore((s) => s.screenerLastRunAt);
   const setScreenerLastRunAt = useAppStore((s) => s.setScreenerLastRunAt);
   const clearScreenerAlerts  = useAppStore((s) => s.clearScreenerAlerts);
-  const addToast             = useAppStore((s) => s.addToast);
 
   // ── Reset handler ───────────────────────────────────────────────────────────
   // Two-step: first click arms the confirmation; second click within 3 s fires.
@@ -975,24 +972,19 @@ function ScreenerToolbar({ onTfResults, onClear }) {
         clearScreenerAlerts();
         onClear();
         setTfState({});
-        setStatus('');
-        setStatusKind('');
+        setStatus(`✅ Reset complete — ${d.candleStoreKeys} buffers cleared`);
+        setStatusKind('ok');
         setScreenerLastRunAt(0);
-
-        const msg =
-          `✅ Reset complete — candle buffers: ${d.candleStoreKeys} cleared,` +
-          ` dedup: ${d.bgScannerDedup + d.liveScannerDedup} entries cleared.` +
-          ` Next scan fetches fresh data.`;
-        addToast({ type: 'info', message: msg });
         console.log('[Reset]', d);
       })
       .catch((err) => {
         const errMsg = err.response?.data?.error || err.message || 'Reset failed';
-        addToast({ type: 'error', message: `⚠ Reset failed: ${errMsg}` });
+        setStatus(`⚠ Reset failed: ${errMsg}`);
+        setStatusKind('err');
         console.error('[Reset] Error:', errMsg);
       })
       .finally(() => setResetting(false));
-  }, [confirmReset, clearScreenerAlerts, onClear, setTfState, setStatus, setStatusKind, setScreenerLastRunAt, addToast]);
+  }, [confirmReset, clearScreenerAlerts, onClear, setTfState, setStatus, setStatusKind, setScreenerLastRunAt]);
 
   // Close pattern dropdown when clicking outside
   useEffect(() => {
@@ -1418,7 +1410,6 @@ export default function ScanAlertsPage() {
   const setSelectedInstrument  = useAppStore((s) => s.setSelectedInstrument);
   const addPaperTrade          = useAppStore((s) => s.addPaperTrade);
   const tradingDefaults        = useAppStore((s) => s.tradingDefaults);
-  const addToast               = useAppStore((s) => s.addToast);
   const testMode               = useAppStore((s) => s.testMode);
   const setTestMode            = useAppStore((s) => s.setTestMode);
 
@@ -1681,13 +1672,6 @@ export default function ScanAlertsPage() {
     };
 
     addPaperTrade(trade);
-
-    if (isPending) {
-      const dir = triggerDir === 'above' ? 'rises to' : 'drops to';
-      addToast({ type: 'info', message: `⏳ Pending — ${alert.label} ${action} triggers when price ${dir} ₹${entryPrice}` });
-    } else {
-      addToast({ type: 'buy', message: `Paper ${action} — ${alert.label} @ ₹${fmt(entryPrice)}` });
-    }
     setBuyModalData(null);
 
     // Persist to server so trades-current.json stays current for the daily 6 AM archive.
@@ -1695,7 +1679,7 @@ export default function ScanAlertsPage() {
     api.post('/paper', trade).catch((err) =>
       console.warn('[Paper] Server sync failed for new trade:', err.message)
     );
-  }, [buyModalData, addPaperTrade, addToast]);
+  }, [buyModalData, addPaperTrade]);
 
   const liveCount      = scanAlerts.filter((a) => a.source !== 'screener').length;
   const screenerCount  = scanAlerts.filter((a) => a.source === 'screener').length;

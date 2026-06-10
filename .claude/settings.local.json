@@ -35,7 +35,8 @@
       "Bash(node -c services/mongoClient.js)",
       "Bash(xargs -I {} node -c {})",
       "Bash(node -c server/db/repositories/equityCandleCacheRepo.js)",
-      "Bash(node -c server/routes/equityScan.js)"
+      "Bash(node -c server/routes/equityScan.js)",
+      "Bash(npm run *)"
     ]
   }
 }

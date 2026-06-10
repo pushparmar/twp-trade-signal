@@ -12,7 +12,6 @@ import AnalyticsPage from './components/Analytics/AnalyticsPage';
 import BacktestPage from './components/Backtest/BacktestPage';
 import IndexTradePage from './components/IndexTrade/IndexTradePage';
 import EquityScanPanel from './components/Scanner/EquityScanPanel';
-import ToastContainer from './components/Toast/Toast';
 import LoginPage from './components/Auth/LoginPage';
 import './App.css';
 
@@ -29,7 +28,6 @@ function usePaperAutoClose() {
   const paperTrades         = useAppStore((s) => s.paperTrades);
   const closeScanPaperTrade = useAppStore((s) => s.closeScanPaperTrade);
   const updatePaperTrade    = useAppStore((s) => s.updatePaperTrade);
-  const addToast            = useAppStore((s) => s.addToast);
   // Ref prevents double-closing the same trade in React strict-mode double-effects
   const closedIds  = useRef(new Set());
   // Cache TSL settings — refetched lazily, no need for SSE
@@ -99,9 +97,6 @@ function usePaperAutoClose() {
             api.patch(`/paper/${trade.id}/trail`, {
               sl: newSl, peakPrice: newPeak, tslActivated: true,
             }).catch(() => {});
-            if (!trade.tslActivated && trade.source !== 'auto') {
-              addToast({ type: 'info', message: `🔒 TSL armed — ${trade.symbol} SL → ₹${newSl.toFixed(2)}` });
-            }
             // Continue to SL/target check below using the new SL via local ref
             trade.sl = newSl;
           }
@@ -133,13 +128,10 @@ function usePaperAutoClose() {
       if (closeAt != null) {
         closedIds.current.add(trade.id);
         closeScanPaperTrade(trade.id, closeAt);
-        if (trade.source !== 'auto') {
-          addToast({ type: 'info', message: msg });
-        }
         api.post(`/paper/${trade.id}/close`, { exitPrice: closeAt }).catch(() => {});
       }
     }
-  }, [paperTrades, closeScanPaperTrade, updatePaperTrade, addToast]);
+  }, [paperTrades, closeScanPaperTrade, updatePaperTrade]);
 }
 
 function useTheme() {
@@ -316,7 +308,6 @@ function AppShell() {
         <HeaderStrip />
         <ActiveComponent />
       </div>
-      <ToastContainer />
     </div>
   );
 }

@@ -12,7 +12,6 @@ const useAppStore = create(
   paperTrades: [],
   paperBalance: { initial: 100000, available: 100000, invested: 0, realizedPnl: 0 },
   tradingDefaults: { quantity: 1, exchange: 'NFO', product: 'MIS' },
-  toasts: [],
 
   // Market watch
   watchlist: [],       // [{ instrumentToken, tradingsymbol, exchange, name, lotSize, expiry }]
@@ -130,11 +129,6 @@ const useAppStore = create(
 
       return { paperTrades, paperBalance: newBalance };
     }),
-
-  addToast: (toast) =>
-    set((state) => ({ toasts: [...state.toasts, { id: Date.now() + Math.random(), ...toast }] })),
-  removeToast: (id) =>
-    set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })),
 
   // Market watch actions
   setWatchlist: (watchlist) => set({ watchlist }),
