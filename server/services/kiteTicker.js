@@ -17,20 +17,6 @@ let _intentionalDisconnect = false;
 let _authFailed = false;
 let _tradeWatcherWarned = false;
 
-function _isMarketHours() {
-    const now = new Date();
-    // IST = UTC + 5:30
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(now.getTime() + istOffset);
-    const day = ist.getUTCDay(); // 0=Sun, 6=Sat
-    if (day === 0 || day === 6) return false;
-    const hours = ist.getUTCHours();
-    const minutes = ist.getUTCMinutes();
-    const totalMinutes = hours * 60 + minutes;
-    // 9:15 AM = 555 min, 3:30 PM = 930 min (with 5 min buffer either side)
-    return totalMinutes >= 550 && totalMinutes <= 935;
-}
-
 function connect() {
     const { kite } = getConfig();
     if (!kite.apiKey || !kite.accessToken) {

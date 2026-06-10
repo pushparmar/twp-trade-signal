@@ -30,6 +30,24 @@ const mongo = require('../../services/mongoClient');
 
 const COLLECTION = 'equity_candle_cache';
 
+// ── Ichimoku-specific storage optimization ───────────────────────────────────
+// Ichimoku requires minimum 52 bars (Senkou B) + 26 (Chikou) = 78 bars.
+// Store 90 bars (15% buffer) instead of 400-1200 → 80-90% storage reduction.
+const ICHIMOKU_MIN_BARS = 78;
+const STORAGE_BARS = 90;  // small buffer above minimum
+
+/**
+ * Trim candle array to only what's needed for Ichimoku calculations.
+ * Keeps the most recent STORAGE_BARS candles, discarding older history.
+ *
+ * @param {object[]} candles - Full candle array
+ * @returns {object[]} Trimmed array (most recent 90 bars)
+ */
+function _trimToIchimokuNeeds(candles) {
+  if (!candles || candles.length <= STORAGE_BARS) return candles;
+  return candles.slice(-STORAGE_BARS);
+}
+
 // ── Freshness ─────────────────────────────────────────────────────────────────
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -64,14 +82,22 @@ async function bulkUpsert(docs) {
   }
 
   const now = new Date();
+  let originalSize = 0;
+  let trimmedSize = 0;
+
   const ops = docs.map(({ token, interval, candles }) => {
-    const lastCandle     = candles[candles.length - 1];
+    // Trim to Ichimoku minimum (90 bars) before storing
+    const trimmedCandles = _trimToIchimokuNeeds(candles);
+    originalSize += candles.length;
+    trimmedSize += trimmedCandles.length;
+
+    const lastCandle     = trimmedCandles[trimmedCandles.length - 1];
     const lastCandleDate = _candleDatePrefix(lastCandle?.date);
     return {
       updateOne: {
         filter: { token: Number(token), interval },
         update: {
-          $set: { token: Number(token), interval, candles, lastCandleDate, updatedAt: now },
+          $set: { token: Number(token), interval, candles: trimmedCandles, lastCandleDate, updatedAt: now },
         },
         upsert: true,
       },
@@ -80,9 +106,10 @@ async function bulkUpsert(docs) {
 
   try {
     const result = await mongo.db().collection(COLLECTION).bulkWrite(ops, { ordered: false });
+    const reduction = ((1 - trimmedSize / originalSize) * 100).toFixed(1);
     console.log(
       `[equityCandleCache] Upserted ${result.upsertedCount + result.modifiedCount}` +
-      ` candle arrays (${docs.length} total)`,
+      ` candle arrays (${docs.length} total) — storage reduced ${reduction}% (${originalSize}→${trimmedSize} bars)`,
     );
   } catch (err) {
     // Non-fatal — next scan will re-fetch from Kite
@@ -169,4 +196,72 @@ async function clearAll() {
   }
 }
 
-module.exports = { bulkUpsert, loadAll, clearAll, createIndexes, _todayIST };
+/**
+ * One-time migration: trim all existing candle arrays to Ichimoku minimum.
+ * Run this to reduce storage on existing cached data without re-fetching.
+ *
+ * @returns {Promise<{ processed: number, trimmed: number, savedBytes: number }>}
+ */
+async function trimExistingCache() {
+  if (!mongo.isReady()) {
+    console.warn('[equityCandleCache] MongoDB not ready — skipping trim');
+    return { processed: 0, trimmed: 0, savedBytes: 0 };
+  }
+
+  try {
+    const col = mongo.db().collection(COLLECTION);
+    const docs = await col.find({}).toArray();
+
+    if (docs.length === 0) {
+      console.log('[equityCandleCache] No documents to trim');
+      return { processed: 0, trimmed: 0, savedBytes: 0 };
+    }
+
+    let processed = 0;
+    let trimmed = 0;
+    let originalBars = 0;
+    let trimmedBars = 0;
+
+    const ops = [];
+
+    for (const doc of docs) {
+      processed++;
+      originalBars += doc.candles.length;
+
+      if (doc.candles.length > STORAGE_BARS) {
+        const trimmedCandles = _trimToIchimokuNeeds(doc.candles);
+        trimmedBars += trimmedCandles.length;
+        trimmed++;
+
+        ops.push({
+          updateOne: {
+            filter: { _id: doc._id },
+            update: { $set: { candles: trimmedCandles, updatedAt: new Date() } },
+          },
+        });
+      } else {
+        trimmedBars += doc.candles.length;
+      }
+    }
+
+    if (ops.length > 0) {
+      await col.bulkWrite(ops, { ordered: false });
+    }
+
+    // Rough byte calculation: ~100 bytes per candle document
+    const savedBytes = (originalBars - trimmedBars) * 100;
+    const reduction = ((1 - trimmedBars / originalBars) * 100).toFixed(1);
+
+    console.log(
+      `[equityCandleCache] Trim complete: ${processed} docs, ${trimmed} trimmed ` +
+      `(${originalBars}→${trimmedBars} bars = ${reduction}% reduction, ~${(savedBytes / 1024 / 1024).toFixed(2)} MB saved)`,
+    );
+
+    return { processed, trimmed, savedBytes };
+  } catch (err) {
+    console.warn('[equityCandleCache] trimExistingCache failed:', err.message);
+    return { processed: 0, trimmed: 0, savedBytes: 0 };
+  }
+}
+
+module.exports = { bulkUpsert, loadAll, clearAll, trimExistingCache, createIndexes, _todayIST };

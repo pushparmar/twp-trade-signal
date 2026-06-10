@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { getLotMultiplier } = require('./utils/lotSizeResolver');
 
 // Use Railway persistent volume if available, otherwise fall back to local file.
 // On Railway: add a Volume mounted at /data in the dashboard.
@@ -8,56 +9,6 @@ const CONFIG_PATH = process.env.DATA_DIR
     : path.join(__dirname, "config.json");
 
 const DEFAULT_TRADING = { quantity: 1, exchange: "NFO", product: "MIS" };
-
-// ── MCX commodity lot sizes ────────────────────────────────────────────────
-// PnL for MCX futures = (exitPrice - entryPrice) × quantity × lotSize.
-// Symbols are matched by prefix (e.g. "CRUDEOIL24JUNFUT" → "CRUDEOIL").
-// Listed longest-first so shorter prefixes (GOLD/SILVER) don't shadow longer ones.
-//
-// How each multiplier is derived (standard MCX contracts):
-//   NATURALGAS — 1250 MMBtu contract, price quoted per MMBtu      → ×1250
-//   CRUDEOIL   — 100 barrel contract, price quoted per barrel      → ×100
-//   SILVER     — 30 kg contract, price quoted per kg               → ×30
-//   SILVERM    — 5 kg mini contract, price quoted per kg            → ×5
-//   GOLD       — 1 kg contract, price quoted per 10g (100×10g=1kg) → ×100
-//   GOLDM      — 100g mini contract, price quoted per 10g          → ×10
-// MCX mini contract lot sizes.
-// Longer prefixes MUST come before shorter ones because the lookup does
-// startsWith() and returns on first match — SILVERM before SILVER, etc.
-// All entries use the mini-contract multiplier so position sizing stays
-// manageable on paper trades (e.g. GOLD = 10 units of 10g = 100g total,
-// instead of the full 1 kg contract at 100 units).
-const MCX_LOT_SIZES = {
-    NATGASMINI: 1250, // Natural Gas Mini  — 250 mmBtu
-    NATURALGAS: 1250, // Natural Gas (map full symbol → mini size)
-    CRUDEOILM: 10, // Crude Oil Mini    — 10 barrels
-    CRUDEOIL: 10, // Crude Oil (map full symbol → mini size)
-    SILVERM: 5, // Silver Mini       — 5 kg
-    SILVER: 5, // Silver (map full symbol → mini size)
-    GOLDM: 10, // Gold Mini         — 10 units of 10g = 100g
-    GOLD: 10 // Gold (map full symbol → mini size)
-};
-
-/**
- * Returns the per-unit lot multiplier for a paper trade.
- * Priority: trade.lotSize (if set by auto-trader) → MCX symbol map → 1.
- *
- * @param {{ exchange?: string, symbol?: string, lotSize?: number }} trade
- * @returns {number}
- */
-function getLotMultiplier(trade) {
-    // Prefer an explicitly stored lotSize (set by derivatives/auto-trader logic).
-    if (trade.lotSize && trade.lotSize > 1) return trade.lotSize;
-
-    // For MCX paper trades, derive lot size from the commodity name prefix.
-    if (trade.exchange === "MCX" && trade.symbol) {
-        const sym = trade.symbol.toUpperCase();
-        for (const [name, size] of Object.entries(MCX_LOT_SIZES)) {
-            if (sym.startsWith(name)) return size;
-        }
-    }
-    return 1;
-}
 
 let _runtimeAccessToken = "";
 

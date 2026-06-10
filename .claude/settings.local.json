@@ -22,7 +22,20 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(npm list *)",
-      "Bash(node --check index.js)"
+      "Bash(node --check index.js)",
+      "Bash(node -c utils/tokenHelpers.js)",
+      "Bash(node -c utils/dateHelpers.js)",
+      "Bash(node -c utils/lotSizeResolver.js)",
+      "Bash(node -c utils/tradeQualifier.js)",
+      "Bash(node -c constants.js)",
+      "Bash(node -c store.js)",
+      "Bash(node -c services/autoTrader.js)",
+      "Bash(node -c services/tradeWatcher.js)",
+      "Bash(node -c services/kiteTicker.js)",
+      "Bash(node -c services/mongoClient.js)",
+      "Bash(xargs -I {} node -c {})",
+      "Bash(node -c server/db/repositories/equityCandleCacheRepo.js)",
+      "Bash(node -c server/routes/equityScan.js)"
     ]
   }
 }

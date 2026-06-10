@@ -31,9 +31,12 @@ const alertBus        = require('./alertBus');
 const kiteTicker      = require('./kiteTicker');
 const db              = require('../db');
 const instrumentCache = require('./instrumentCache');
-const kiteService     = require('./kiteService');
 const kiteOrderBridge = require('./kiteOrderBridge');
 const { IST_OFFSET_MS, isNseOpen, isMcxOpen } = require('../utils/marketHours');
+const { NON_TRADEABLE_TOKENS, NON_TRADEABLE_LABEL_RE } = require('../constants');
+const { normalizeToken } = require('../utils/tokenHelpers');
+const { qualifyTrade } = require('../utils/tradeQualifier');
+const priceService    = require('./priceService');
 const candleStore     = require('./candleStore');
 const { getSignals: ichimokuGetSignals, to4H } = require('./ichimoku');
 
@@ -200,60 +203,9 @@ function _getMarketBias() {
 }
 
 // ── Trade qualifier ──────────────────────────────────────────────────────────
+// Now using shared utility from utils/tradeQualifier.js
 
 function _round2(v) { return Math.round(v * 100) / 100; }
-
-/**
- * Per-exchange sizing:
- *   NSE → risk-based.  quantity = floor(riskPerTrade / riskPerUnit).
- *         Example: entry=100, sl=95 → 10000/5 = 2000 shares (risk ≈ ₹10k).
- *         Must clear minProfit (e.g. ≥₹20k expected gain on target).
- *   MCX → lot-based.  quantity = lotSize (1 lot of the commodity contract).
- *         No R:R or profit gate — every signal trades 1 lot.
- *
- * @param {number} entry         Entry price
- * @param {number} sl            Stop-loss from the pattern engine
- * @param {number} target        Target from the pattern engine
- * @param {object} settings      autoTrader settings (riskPerTrade, minProfit)
- * @param {string} exchange      'NSE' | 'MCX'
- * @param {number} lotSize       Exchange lot size (used for MCX)
- * @returns {{ quantity, riskPerUnit, potentialProfit, rrRatio } | null}
- */
-function _qualifyTrade(entry, sl, target, settings, exchange, lotSize) {
-  const riskPerUnit = Math.abs(entry - sl);
-  if (riskPerUnit < 0.01) return null;
-
-  const rrRatio = Math.abs(target - entry) / riskPerUnit;
-  const isMcx   = exchange === 'MCX';
-
-  if (isMcx) {
-    // Gate on minRR — same rule as NSE.  A Natural Gas signal with a 1:1.5 R:R
-    // should be skipped just like any equity signal.
-    if (rrRatio < settings.minRR) return null;
-
-    // MCX trades 1 lot.  potentialProfit is in ₹ (price move × contract lot size).
-    const contractLotSize = lotSize || 1;
-    return {
-      quantity:        1,                 // number of lots
-      lotSize:         contractLotSize,   // stored so closePaperTrade can apply it
-      riskPerUnit:     _round2(riskPerUnit),
-      potentialProfit: _round2(Math.abs(target - entry) * contractLotSize),
-      rrRatio:         _round2(rrRatio),
-    };
-  }
-
-  // NSE: size by ₹riskPerTrade, gate on minProfit.
-  const quantity        = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
-  const potentialProfit = Math.abs(target - entry) * quantity;
-  if (potentialProfit < settings.minProfit) return null;
-
-  return {
-    quantity,
-    riskPerUnit:     _round2(riskPerUnit),
-    potentialProfit: _round2(potentialProfit),
-    rrRatio:         _round2(rrRatio),
-  };
-}
 
 // ── Core handler ──────────────────────────────────────────────────────────────
 
@@ -304,20 +256,8 @@ async function _onAlert(alert, source) {
   // Indices (NIFTY, BANKNIFTY, SENSEX, VIX, etc.) cannot be traded directly;
   // only their derivatives can.  Drop any alert whose token or label matches
   // a known index so we never accidentally open a paper trade on them.
-  const NON_TRADEABLE_TOKENS = new Set([
-    256265,  // NIFTY 50  (NSE:NIFTY 50)
-    260105,  // NIFTY BANK
-    264969,  // India VIX
-    274441,  // NIFTY FIN SERVICE (FINNIFTY)
-    288009,  // NIFTY MIDCAP SELECT (MIDCPNIFTY)
-    265,     // BSE SENSEX
-    270857,  // BSE BANKEX
-  ]);
-  // Label-based guard catches any future index that maps to a known name.
-  const NON_TRADEABLE_LABEL_RE =
-    /\b(NIFTY|BANK\s?NIFTY|SENSEX|VIX|BANKEX|FINNIFTY|MIDCPNIFTY)\b/i;
 
-  if (NON_TRADEABLE_TOKENS.has(Number(token))) {
+  if (NON_TRADEABLE_TOKENS.has(normalizeToken(token))) {
     console.log(
       `[AutoTrader] ⛔ Skipped index token ${token} (${alert.label ?? '?'}) — not tradeable`,
     );
@@ -353,7 +293,7 @@ async function _onAlert(alert, source) {
     return;
   }
 
-  const numToken = Number(token);
+  const numToken = normalizeToken(token);
 
   // ── 2.55 Market bias gate (15m / 1h only) ──────────────────────────────
   // Uses NIFTY multi-TF consensus (same as "Consensus Bias" card on UI):
@@ -443,7 +383,7 @@ async function _onAlert(alert, source) {
   const alreadyActive = store.getPaperTrades().some(
     (t) =>
       (t.status === 'OPEN' || t.status === 'PENDING') &&
-      Number(t.token) === numToken,
+      normalizeToken(t.token) === numToken,
   );
   if (alreadyActive) {
     console.log(`[AutoTrader] ⏭  ${alert.label ?? token} (${alert.tfLabel}) — open/pending trade already exists for this stock`);
@@ -506,12 +446,13 @@ async function _onAlert(alert, source) {
     // the cache lookup misses (e.g. on first boot before the cache is warm).
     const mcxInst   = instrumentCache.getByToken(numToken);
     const cacheSize = mcxInst?.lotSize ?? 0;
+    const { getLotMultiplier } = require('../store');
     lotSize = cacheSize > 1
       ? cacheSize
-      : store.getLotMultiplier({ exchange: 'MCX', symbol: alert.tradingsymbol || alert.label || '' });
+      : getLotMultiplier({ exchange: 'MCX', symbol: alert.tradingsymbol || alert.label || '' });
   }
 
-  const pos = _qualifyTrade(
+  const pos = qualifyTrade(
     usedEntry, usedSl, usedTarget, settings, tradeExchange, lotSize,
   );
   if (!pos) {
@@ -550,14 +491,7 @@ async function _onAlert(alert, source) {
   const tradingSymbol   = alert.tradingsymbol || alert.label || String(numToken);
   const ltpKey          = `${tradeExchange}:${tradingSymbol}`;
 
-  let liveLtp = null;
-  try {
-    const ltpData = await kiteService.getLTP([ltpKey]);
-    const price   = ltpData[ltpKey]?.last_price;
-    if (price && price > 0) liveLtp = price;
-  } catch (err) {
-    console.warn(`[AutoTrader] LTP fetch failed for ${alert.label ?? token}: ${err.message}`);
-  }
+  let liveLtp = await priceService.getLTP(tradeExchange, tradingSymbol);
 
   // (a) LTP unavailable — skip entirely
   if (liveLtp === null) {
@@ -577,7 +511,7 @@ async function _onAlert(alert, source) {
   const shareEntry = hasGap ? patternClose : liveLtp;
 
   // Qualify with the intended entry price
-  const posLive = _qualifyTrade(shareEntry, usedSl, usedTarget, settings, tradeExchange, lotSize);
+  const posLive = qualifyTrade(shareEntry, usedSl, usedTarget, settings, tradeExchange, lotSize);
   if (!posLive) {
     const riskPerUnit = Math.abs(shareEntry - usedSl);
     const qty         = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));

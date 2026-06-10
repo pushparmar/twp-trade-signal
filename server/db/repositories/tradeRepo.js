@@ -29,6 +29,56 @@ const mongo = require('../../services/mongoClient');
 
 const COLLECTION = 'paper_trades';
 
+// ── Document mapper ───────────────────────────────────────────────────────────
+// Single source of truth for converting MongoDB documents to in-memory trade objects.
+// Used by getOpenTrades(), getRecentTrades(), and getByDate() to avoid duplication.
+
+function _mapTradeDocument(doc) {
+  return {
+    id:              doc.tradeId,
+    ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
+    source:          doc.source          ?? 'auto',
+    autoSource:      doc.autoSource      ?? null,
+    symbol:          doc.symbol          ?? '',
+    token:           doc.token           ?? null,
+    exchange:        doc.exchange        ?? 'NSE',
+    action:          doc.action          ?? 'BUY',
+    quantity:        doc.quantity        ?? 1,
+    lots:            doc.lots            ?? 1,
+    lotSize:         doc.lotSize         ?? 1,
+    entryPrice:      doc.entryPrice      ?? 0,
+    exitPrice:       doc.exitPrice       ?? null,
+    sl:              doc.sl              ?? null,
+    initialSl:       doc.initialSl       ?? doc.sl ?? null,
+    target:          doc.target          ?? null,
+    status:          doc.status          ?? 'OPEN',
+    pnl:             doc.pnl             ?? null,
+    closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
+    // Pattern + risk
+    patternId:       doc.patternId       ?? null,
+    patternLabel:    doc.patternLabel    ?? null,
+    signal:          doc.signal          ?? null,
+    interval:        doc.interval        ?? null,
+    tfLabel:         doc.tfLabel         ?? null,
+    riskPerUnit:     doc.riskPerUnit     ?? null,
+    rrRatio:         doc.rrRatio         ?? null,
+    potentialProfit: doc.potentialProfit ?? null,
+    targetSource:    doc.targetSource    ?? null,
+    tslActivated:    doc.tslActivated    ?? false,
+    peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
+    // Pending/trigger order fields
+    triggerPrice:    doc.triggerPrice    ?? null,
+    triggerDir:      doc.triggerDir      ?? null,
+    activatedTs:     doc.activatedTs     ?? null,
+    // Indicator snapshot
+    rsi14:           doc.rsi14           ?? null,
+    volumeConfirmed: doc.volumeConfirmed ?? null,
+    volumeRatio:     doc.volumeRatio     ?? null,
+    mtfAligned:      doc.mtfAligned      ?? false,
+    exitReason:      doc.exitReason      ?? null,
+  };
+}
+
 // ── Index bootstrap ───────────────────────────────────────────────────────────
 
 /**
@@ -67,7 +117,7 @@ function upsertTrade(trade) {
   // before giving up. This prevents silent data loss during Railway deploys
   // where autoTrader starts before db.init() resolves.
   if (!mongo.isReady()) {
-    _waitForReady(10_000).then((ready) => {
+    mongo.waitForReady(10_000).then((ready) => {
       if (!ready) {
         console.warn(`[tradeRepo] upsertTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
         return;
@@ -78,19 +128,6 @@ function upsertTrade(trade) {
   }
 
   _doUpsert(trade);
-}
-
-/** Wait for mongo.isReady() to become true, polling every 1s up to maxMs. */
-function _waitForReady(maxMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const check = () => {
-      if (mongo.isReady()) return resolve(true);
-      if (Date.now() - start >= maxMs) return resolve(false);
-      setTimeout(check, 1000);
-    };
-    check();
-  });
 }
 
 function _doUpsert(trade) {
@@ -182,7 +219,7 @@ function closeTrade(trade) {
   };
 
   if (!mongo.isReady()) {
-    _waitForReady(10_000).then((ready) => {
+    mongo.waitForReady(10_000).then((ready) => {
       if (!ready) {
         console.warn(`[tradeRepo] closeTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
         return;
@@ -216,44 +253,7 @@ async function getOpenTrades() {
       .sort({ openedAt: -1 })
       .toArray();
 
-    return docs.map((doc) => ({
-      id:              doc.tradeId,
-      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
-      source:          doc.source          ?? 'auto',
-      autoSource:      doc.autoSource      ?? null,
-      symbol:          doc.symbol          ?? '',
-      token:           doc.token           ?? null,
-      exchange:        doc.exchange        ?? 'NSE',
-      action:          doc.action          ?? 'BUY',
-      quantity:        doc.quantity        ?? 1,
-      lots:            doc.lots            ?? 1,
-      lotSize:         doc.lotSize         ?? 1,
-      entryPrice:      doc.entryPrice      ?? 0,
-      exitPrice:       doc.exitPrice       ?? null,
-      sl:              doc.sl              ?? null,
-      initialSl:       doc.initialSl       ?? doc.sl ?? null,
-      target:          doc.target          ?? null,
-      status:          'OPEN',
-      pnl:             null,
-      closedTs:        null,
-      // Pattern + risk
-      patternId:       doc.patternId       ?? null,
-      patternLabel:    doc.patternLabel    ?? null,
-      signal:          doc.signal          ?? null,
-      interval:        doc.interval        ?? null,
-      tfLabel:         doc.tfLabel         ?? null,
-      riskPerUnit:     doc.riskPerUnit     ?? null,
-      rrRatio:         doc.rrRatio         ?? null,
-      potentialProfit: doc.potentialProfit ?? null,
-      targetSource:    doc.targetSource    ?? null,
-      tslActivated:    doc.tslActivated    ?? false,
-      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
-      // Indicator snapshot
-      rsi14:           doc.rsi14           ?? null,
-      volumeConfirmed: doc.volumeConfirmed ?? null,
-      volumeRatio:     doc.volumeRatio     ?? null,
-      mtfAligned:      doc.mtfAligned      ?? false,
-    }));
+    return docs.map(_mapTradeDocument);
   } catch (err) {
     console.warn('[tradeRepo] getOpenTrades failed:', err.message);
     return [];
@@ -277,49 +277,7 @@ async function getRecentTrades(limit = 200) {
       .limit(limit)
       .toArray();
 
-    return docs.map((doc) => ({
-      id:              doc.tradeId,
-      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
-      source:          doc.source          ?? 'auto',
-      autoSource:      doc.autoSource      ?? null,
-      symbol:          doc.symbol          ?? '',
-      token:           doc.token           ?? null,
-      exchange:        doc.exchange        ?? 'NSE',
-      action:          doc.action          ?? 'BUY',
-      quantity:        doc.quantity        ?? 1,
-      lots:            doc.lots            ?? 1,
-      lotSize:         doc.lotSize         ?? 1,
-      entryPrice:      doc.entryPrice      ?? 0,
-      exitPrice:       doc.exitPrice       ?? null,
-      sl:              doc.sl              ?? null,
-      initialSl:       doc.initialSl       ?? doc.sl ?? null,
-      target:          doc.target          ?? null,
-      status:          doc.status          ?? 'OPEN',
-      pnl:             doc.pnl             ?? null,
-      closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
-      // Pattern + risk
-      patternId:       doc.patternId       ?? null,
-      patternLabel:    doc.patternLabel    ?? null,
-      signal:          doc.signal          ?? null,
-      interval:        doc.interval        ?? null,
-      tfLabel:         doc.tfLabel         ?? null,
-      riskPerUnit:     doc.riskPerUnit     ?? null,
-      rrRatio:         doc.rrRatio         ?? null,
-      potentialProfit: doc.potentialProfit ?? null,
-      targetSource:    doc.targetSource    ?? null,
-      tslActivated:    doc.tslActivated    ?? false,
-      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
-      // Pending/trigger order fields
-      triggerPrice:    doc.triggerPrice    ?? null,
-      triggerDir:      doc.triggerDir      ?? null,
-      activatedTs:     doc.activatedTs     ?? null,
-      // Indicator snapshot
-      rsi14:           doc.rsi14           ?? null,
-      volumeConfirmed: doc.volumeConfirmed ?? null,
-      volumeRatio:     doc.volumeRatio     ?? null,
-      mtfAligned:      doc.mtfAligned      ?? false,
-      exitReason:      doc.exitReason      ?? null,
-    }));
+    return docs.map(_mapTradeDocument);
   } catch (err) {
     console.warn('[tradeRepo] getRecentTrades failed:', err.message);
     return [];
@@ -446,46 +404,7 @@ async function getByDate(dateStr) {
       .sort({ openedAt: -1 })
       .toArray();
 
-    return docs.map((doc) => ({
-      id:              doc.tradeId,
-      ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
-      source:          doc.source          ?? 'auto',
-      autoSource:      doc.autoSource      ?? null,
-      symbol:          doc.symbol          ?? '',
-      token:           doc.token           ?? null,
-      exchange:        doc.exchange        ?? 'NSE',
-      action:          doc.action          ?? 'BUY',
-      quantity:        doc.quantity        ?? 1,
-      lots:            doc.lots            ?? 1,
-      lotSize:         doc.lotSize         ?? 1,
-      entryPrice:      doc.entryPrice      ?? 0,
-      exitPrice:       doc.exitPrice       ?? null,
-      sl:              doc.sl              ?? null,
-      initialSl:       doc.initialSl       ?? doc.sl ?? null,
-      target:          doc.target          ?? null,
-      status:          doc.status          ?? 'OPEN',
-      pnl:             doc.pnl             ?? null,
-      closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
-      patternId:       doc.patternId       ?? null,
-      patternLabel:    doc.patternLabel    ?? null,
-      signal:          doc.signal          ?? null,
-      interval:        doc.interval        ?? null,
-      tfLabel:         doc.tfLabel         ?? null,
-      riskPerUnit:     doc.riskPerUnit     ?? null,
-      rrRatio:         doc.rrRatio         ?? null,
-      potentialProfit: doc.potentialProfit ?? null,
-      targetSource:    doc.targetSource    ?? null,
-      tslActivated:    doc.tslActivated    ?? false,
-      peakPrice:       doc.peakPrice       ?? doc.entryPrice ?? null,
-      triggerPrice:    doc.triggerPrice    ?? null,
-      triggerDir:      doc.triggerDir      ?? null,
-      activatedTs:     doc.activatedTs     ?? null,
-      // Indicator snapshot
-      rsi14:           doc.rsi14           ?? null,
-      volumeConfirmed: doc.volumeConfirmed ?? null,
-      volumeRatio:     doc.volumeRatio     ?? null,
-      mtfAligned:      doc.mtfAligned      ?? false,
-    }));
+    return docs.map(_mapTradeDocument);
   } catch (err) {
     console.warn('[tradeRepo] getByDate failed:', err.message);
     return [];

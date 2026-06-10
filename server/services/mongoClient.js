@@ -317,4 +317,24 @@ async function close() {
   }
 }
 
-module.exports = { init, db, isReady, close };
+/**
+ * Wait for MongoDB to become ready, polling every 1s up to maxMs.
+ * Used by repos to handle boot-time race conditions where a trade is placed
+ * before db.init() completes.
+ *
+ * @param {number} maxMs - Maximum wait time in milliseconds
+ * @returns {Promise<boolean>} true when ready, false on timeout
+ */
+async function waitForReady(maxMs = 10000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      if (isReady()) return resolve(true);
+      if (Date.now() - start >= maxMs) return resolve(false);
+      setTimeout(check, 1000);
+    };
+    check();
+  });
+}
+
+module.exports = { init, db, isReady, close, waitForReady };

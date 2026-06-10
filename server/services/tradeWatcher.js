@@ -19,6 +19,7 @@ const store                        = require('../store');
 const { broadcast }                = require('../sseHub');
 const db                           = require('../db');
 const { isNseOpen, isMcxOpen }     = require('../utils/marketHours');
+const { normalizeToken }           = require('../utils/tokenHelpers');
 const kiteOrderBridge              = require('./kiteOrderBridge');
 
 function _ticker() {
@@ -161,13 +162,13 @@ function _closeTrade(trade, closeAt, reason) {
 
   // Unsubscribe the share token if no other trade or watchlist needs it
   try {
-    const tk = Number(closed.token);
+    const tk = normalizeToken(closed.token);
     const stillNeeded = store.getPaperTrades().some(
       (t) => (t.status === 'OPEN' || t.status === 'PENDING') &&
-             Number(t.token) === tk,
+             normalizeToken(t.token) === tk,
     );
     const inWatchlist = store.getWatchlist().some(
-      (w) => Number(w.instrumentToken) === tk,
+      (w) => normalizeToken(w.instrumentToken) === tk,
     );
     if (!stillNeeded && !inWatchlist) _ticker().unsubscribe([tk]);
   } catch { /* ticker may not be connected */ }
@@ -196,13 +197,13 @@ function _closeTrade(trade, closeAt, reason) {
 function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
-  const numToken = Number(token);
+  const numToken = normalizeToken(token);
 
   // ── Pending order activation (tick-based — limit orders fill immediately) ─
   const pendingTrades = store.getPaperTrades().filter(
     (t) =>
       t.status === 'PENDING' &&
-      Number(t.token) === numToken &&
+      normalizeToken(t.token) === numToken &&
       t.triggerPrice != null,
   );
   for (const trade of pendingTrades) {
@@ -244,7 +245,7 @@ function onTick(token, lastPrice) {
   const openTrades = store.getPaperTrades().filter(
     (t) =>
       t.status === 'OPEN' &&
-      Number(t.token) === numToken &&
+      normalizeToken(t.token) === numToken &&
       (t.source === 'auto' || t.source === 'scan'),
   );
   if (openTrades.length === 0) return;
@@ -270,7 +271,7 @@ function onTick(token, lastPrice) {
         // Broadcast warning so the UI can show an amber "SL pending" indicator.
         broadcast('paper_trade_tick', {
           id:         trade.id,
-          token:      Number(trade.token),
+          token:      normalizeToken(trade.token),
           ltp:        lastPrice,
           slBreached: true,
         });
@@ -298,7 +299,7 @@ function onTick(token, lastPrice) {
         : (trade.entryPrice - lastPrice) * (trade.quantity ?? 1) * lotMult;
       broadcast('paper_trade_tick', {
         id:            trade.id,
-        token:         Number(trade.token),
+        token:         normalizeToken(trade.token),
         ltp:           lastPrice,
         unrealizedPnl: +unrealizedPnl.toFixed(2),
       });
@@ -320,7 +321,7 @@ function onTick(token, lastPrice) {
 function onCandleClose(token, interval, candleClosePrice) {
   if (_slBreachMap.size === 0) return;
 
-  const numToken    = Number(token);
+  const numToken    = normalizeToken(token);
   // F6: Match the trade's own TF instead of hardcoding '15minute'.
   // Each trade stores its entry interval (e.g. '15minute', '60minute', '4h', 'day').
   // SL confirmation should happen on the same TF the signal was taken on — a
@@ -329,7 +330,7 @@ function onCandleClose(token, interval, candleClosePrice) {
   // no interval recorded (legacy trades).
   const pendingTrades = store.getPaperTrades().filter(
     (t) => t.status === 'OPEN' &&
-           Number(t.token) === numToken &&
+           normalizeToken(t.token) === numToken &&
            _slBreachMap.has(t.id) &&
            (t.interval ?? '15minute') === interval,
   );

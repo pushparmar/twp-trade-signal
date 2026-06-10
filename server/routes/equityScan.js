@@ -108,4 +108,22 @@ router.post('/clear-candle-cache', async (req, res) => {
   }
 });
 
+// ── Trim existing candle cache (reduce storage by ~80-90%) ────────────────────
+
+router.post('/trim-candle-cache', async (req, res) => {
+  try {
+    const result = await equityCandleCacheRepo.trimExistingCache();
+    return res.json({
+      ok:      true,
+      processed: result.processed,
+      trimmed:   result.trimmed,
+      savedMB:   (result.savedBytes / 1024 / 1024).toFixed(2),
+      message: `Trimmed ${result.trimmed}/${result.processed} cached entries. Saved ~${(result.savedBytes / 1024 / 1024).toFixed(2)} MB.`,
+    });
+  } catch (err) {
+    console.error('[equityScan] /trim-candle-cache error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
