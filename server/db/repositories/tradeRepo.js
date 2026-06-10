@@ -1,39 +1,17 @@
 /**
  * tradeRepo.js
  *
- * Write-through repository for paper trades.
- *
- * Every open/close action on a paper trade is mirrored here so we can later
- * correlate trades with the scan alerts that triggered them and measure
- * per-pattern win rates and average P&L.
- *
- * Design principles:
- *   • Fire-and-forget — all writes are non-blocking.  Errors are logged but
- *     never thrown so a DB outage cannot affect trade execution or balance
- *     calculations (those live in the in-memory store.js).
- *   • Upsert on tradeId — safe to call multiple times for the same trade
- *     (e.g. re-submitting a POST /api/paper/ after a network retry).
- *   • No balance logic — balances are computed from the live in-memory array;
- *     this repo only stores the raw trade events for offline analysis.
+ * Repository for paper trades (equity/commodity paper trading).
+ * Uses shared baseTradeRepo for CRUD and analytics.
  *
  * Collection: paper_trades
- *
- * Indexes (created once on first connection):
- *   { tradeId: 1 }        — unique; primary lookup key
- *   { status: 1 }         — filter OPEN vs CLOSED
- *   { patternId: 1 }      — pattern → P&L correlation
- *   { openedAt: -1 }      — chronological listing
  */
 
-const mongo = require('../../services/mongoClient');
+const { createTradeRepo } = require('./baseTradeRepo');
 
-const COLLECTION = 'paper_trades';
+// ── Document mapper: MongoDB doc → in-memory trade object ────────────────────
 
-// ── Document mapper ───────────────────────────────────────────────────────────
-// Single source of truth for converting MongoDB documents to in-memory trade objects.
-// Used by getOpenTrades(), getRecentTrades(), and getByDate() to avoid duplication.
-
-function _mapTradeDocument(doc) {
+function mapTradeDocument(doc) {
   return {
     id:              doc.tradeId,
     ts:              doc.openedAt instanceof Date ? doc.openedAt.getTime() : Date.now(),
@@ -54,6 +32,7 @@ function _mapTradeDocument(doc) {
     status:          doc.status          ?? 'OPEN',
     pnl:             doc.pnl             ?? null,
     closedTs:        doc.closedAt instanceof Date ? doc.closedAt.getTime() : null,
+    exitReason:      doc.exitReason      ?? null,
     // Pattern + risk
     patternId:       doc.patternId       ?? null,
     patternLabel:    doc.patternLabel    ?? null,
@@ -75,365 +54,67 @@ function _mapTradeDocument(doc) {
     volumeConfirmed: doc.volumeConfirmed ?? null,
     volumeRatio:     doc.volumeRatio     ?? null,
     mtfAligned:      doc.mtfAligned      ?? false,
-    exitReason:      doc.exitReason      ?? null,
   };
 }
 
-// ── Index bootstrap ───────────────────────────────────────────────────────────
+// ── Document builder: trade object → MongoDB doc ─────────────────────────────
 
-/**
- * Create indexes if they don't already exist.
- * Called once on first connection (from db/index.js).
- */
-async function createIndexes() {
-  if (!mongo.isReady()) return;
-  const col = mongo.db().collection(COLLECTION);
-  try {
-    await col.createIndex({ tradeId: 1 }, { unique: true });
-    await col.createIndex({ status: 1 });
-    await col.createIndex({ patternId: 1 });
-    await col.createIndex({ openedAt: -1 });
-    console.log(`[tradeRepo] Indexes ensured on "${COLLECTION}"`);
-  } catch (err) {
-    console.warn('[tradeRepo] createIndexes failed:', err.message);
-  }
-}
-
-// ── Write helpers ─────────────────────────────────────────────────────────────
-
-/**
- * Insert or update a trade record when a paper trade is opened.
- * Fire-and-forget — the caller must NOT await this function.
- *
- * @param {object} trade  The trade object from store.addPaperTrade().
- */
-function upsertTrade(trade) {
-  if (!trade?.id) {
-    console.warn('[tradeRepo] upsertTrade skipped — trade has no id');
-    return;
-  }
-
-  // If MongoDB isn't ready yet (boot race or transient blip), wait up to 10s
-  // before giving up. This prevents silent data loss during Railway deploys
-  // where autoTrader starts before db.init() resolves.
-  if (!mongo.isReady()) {
-    mongo.waitForReady(10_000).then((ready) => {
-      if (!ready) {
-        console.warn(`[tradeRepo] upsertTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
-        return;
-      }
-      _doUpsert(trade);
-    });
-    return;
-  }
-
-  _doUpsert(trade);
-}
-
-function _doUpsert(trade) {
-  const doc = {
-    tradeId:      trade.id,
+function buildTradeDocument(trade) {
+  return {
+    tradeId:         trade.id,
     // Instrument
-    symbol:       trade.symbol                   ?? null,
-    token:        trade.token ? Number(trade.token) : null,
-    exchange:     trade.exchange                 ?? null,
+    symbol:          trade.symbol                   ?? null,
+    token:           trade.token ? Number(trade.token) : null,
+    exchange:        trade.exchange                 ?? null,
     // Trade details
-    action:       trade.action                   ?? null,
-    lots:         trade.lots                     ?? 1,
-    lotSize:      trade.lotSize                  ?? 1,
-    quantity:     trade.quantity                 ?? null,
-    entryPrice:   trade.entryPrice               ?? null,
-    exitPrice:    trade.exitPrice                ?? null,
-    sl:           trade.sl                       ?? null,
-    target:       trade.target                   ?? null,
-    targetSource: trade.targetSource              ?? null,
-    status:       trade.status                   ?? 'OPEN',
-    pnl:          trade.pnl                      ?? null,
+    action:          trade.action                   ?? null,
+    lots:            trade.lots                     ?? 1,
+    lotSize:         trade.lotSize                  ?? 1,
+    quantity:        trade.quantity                 ?? null,
+    entryPrice:      trade.entryPrice               ?? null,
+    exitPrice:       trade.exitPrice                ?? null,
+    sl:              trade.sl                       ?? null,
+    initialSl:       trade.initialSl                ?? null,
+    target:          trade.target                   ?? null,
+    targetSource:    trade.targetSource             ?? null,
+    status:          trade.status                   ?? 'OPEN',
+    pnl:             trade.pnl                      ?? null,
+    exitReason:      trade.exitReason               ?? null,
     // Pattern context
-    patternId:    trade.patternId                ?? null,
-    patternLabel: trade.patternLabel             ?? null,
-    signal:          trade.signal          ?? null,
-    interval:        trade.interval        ?? null,
-    tfLabel:         trade.tfLabel         ?? null,
-    initialSl:       trade.initialSl       ?? null,
-    // Indicator snapshot — captured from the same candle array at scan time;
-    // no extra API call needed.
-    rsi14:           trade.rsi14           ?? null,
-    volumeConfirmed: trade.volumeConfirmed ?? null,
-    volumeRatio:     trade.volumeRatio     ?? null,
-    mtfAligned:      trade.mtfAligned      ?? false,
+    patternId:       trade.patternId                ?? null,
+    patternLabel:    trade.patternLabel             ?? null,
+    signal:          trade.signal                   ?? null,
+    interval:        trade.interval                 ?? null,
+    tfLabel:         trade.tfLabel                  ?? null,
+    // TSL fields
+    tslActivated:    trade.tslActivated             ?? false,
+    peakPrice:       trade.peakPrice                ?? null,
+    // Indicator snapshot
+    rsi14:           trade.rsi14                    ?? null,
+    volumeConfirmed: trade.volumeConfirmed          ?? null,
+    volumeRatio:     trade.volumeRatio              ?? null,
+    mtfAligned:      trade.mtfAligned               ?? false,
     // Source
-    source:       trade.source                   ?? null,
+    source:          trade.source                   ?? null,
+    autoSource:      trade.autoSource               ?? null,
     // Pending/trigger order fields
-    triggerPrice: trade.triggerPrice             ?? null,
-    triggerDir:   trade.triggerDir               ?? null,
-    activatedTs:  trade.activatedTs              ?? null,
+    triggerPrice:    trade.triggerPrice             ?? null,
+    triggerDir:      trade.triggerDir               ?? null,
+    activatedTs:     trade.activatedTs              ?? null,
     // Timestamps
-    openedAt:     new Date(trade.ts || Date.now()),
-    closedAt:     trade.closedTs ? new Date(trade.closedTs) : null,
-    updatedAt:    new Date(),
+    openedAt:        new Date(trade.ts || Date.now()),
+    closedAt:        trade.closedTs ? new Date(trade.closedTs) : null,
+    updatedAt:       new Date(),
   };
-
-  mongo.db().collection(COLLECTION)
-    .updateOne(
-      { tradeId: trade.id },
-      { $set: doc, $setOnInsert: { createdAt: new Date() } },
-      { upsert: true },
-    )
-    .then((r) => {
-      const action = r.upsertedCount > 0 ? 'inserted' : 'updated';
-      console.log(`[tradeRepo] ${action} ${trade.symbol} (${trade.id.slice(0,8)}…) → MongoDB`);
-    })
-    .catch((err) => {
-      console.warn('[tradeRepo] upsertTrade FAILED:', err.message);
-    });
 }
 
-/**
- * Mark a trade as CLOSED and record the exit price + P&L.
- * Fire-and-forget — the caller must NOT await this function.
- *
- * @param {object} trade  The closed trade object returned by store.closePaperTrade().
- */
-function closeTrade(trade) {
-  if (!trade?.id) return;
+// Create the repository using shared base
+const repo = createTradeRepo(
+  'paper_trades',
+  'tradeRepo',
+  mapTradeDocument,
+  buildTradeDocument,
+  [] // No extra indexes needed
+);
 
-  const doClose = () => {
-    mongo.db().collection(COLLECTION)
-      .updateOne(
-        { tradeId: trade.id },
-        {
-          $set: {
-            status:     'CLOSED',
-            exitPrice:  trade.exitPrice  ?? null,
-            exitReason: trade.exitReason ?? null,
-            pnl:        trade.pnl        ?? null,
-            closedAt:   trade.closedTs ? new Date(trade.closedTs) : new Date(),
-            updatedAt:  new Date(),
-          },
-        },
-      )
-      .catch((err) => {
-        console.warn('[tradeRepo] closeTrade failed:', err.message);
-      });
-  };
-
-  if (!mongo.isReady()) {
-    mongo.waitForReady(10_000).then((ready) => {
-      if (!ready) {
-        console.warn(`[tradeRepo] closeTrade skipped — MongoDB not ready after 10s wait (trade=${trade.id.slice(0, 8)}…)`);
-        return;
-      }
-      doClose();
-    });
-    return;
-  }
-  doClose();
-}
-
-// ── Read helpers ──────────────────────────────────────────────────────────────
-
-/**
- * Fetch all OPEN trades from MongoDB.
- *
- * Used on server boot to restore the in-memory trade list when
- * trades-current.json is missing (e.g. after a Railway redeploy without a
- * persistent volume, or an accidental file deletion).
- *
- * Returns the documents re-shaped to match the plain JS trade object used by
- * store.addPaperTrade() so the result can be dropped straight in.
- *
- * @returns {Promise<Array>}
- */
-async function getOpenTrades() {
-  if (!mongo.isReady()) return [];
-  try {
-    const docs = await mongo.db().collection(COLLECTION)
-      .find({ status: 'OPEN' })
-      .sort({ openedAt: -1 })
-      .toArray();
-
-    return docs.map(_mapTradeDocument);
-  } catch (err) {
-    console.warn('[tradeRepo] getOpenTrades failed:', err.message);
-    return [];
-  }
-}
-
-/**
- * Fetch the most recent trades (any status) from MongoDB.
- * Used on server boot and client sync to restore the full order book
- * — open AND closed — so every device sees the same state.
- *
- * @param {number} [limit=200]  Max number of records to return
- * @returns {Promise<Array>}
- */
-async function getRecentTrades(limit = 200) {
-  if (!mongo.isReady()) return [];
-  try {
-    const docs = await mongo.db().collection(COLLECTION)
-      .find({})
-      .sort({ openedAt: -1 })
-      .limit(limit)
-      .toArray();
-
-    return docs.map(_mapTradeDocument);
-  } catch (err) {
-    console.warn('[tradeRepo] getRecentTrades failed:', err.message);
-    return [];
-  }
-}
-
-// ── Analytics helpers ─────────────────────────────────────────────────────────
-
-/**
- * Aggregate daily P&L grouped by IST date.
- * Returns an array of { date, totalPnl, wins, losses, count }.
- *
- * @param {{ fromDate?: Date, toDate?: Date }} [opts]
- * @returns {Promise<Array>}
- */
-async function dailyPnl(opts = {}) {
-  if (!mongo.isReady()) return [];
-  try {
-    const match = { status: 'CLOSED', pnl: { $ne: null } };
-    if (opts.fromDate || opts.toDate) {
-      match.closedAt = {};
-      if (opts.fromDate) match.closedAt.$gte = opts.fromDate;
-      if (opts.toDate)   match.closedAt.$lte = opts.toDate;
-    }
-    // Filter by exchange when provided (e.g. 'MCX' or 'NSE')
-    if (opts.exchange) match.exchange = opts.exchange;
-    return await mongo.db().collection(COLLECTION).aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id:      { $dateToString: { format: '%Y-%m-%d', date: '$closedAt', timezone: '+05:30' } },
-          totalPnl: { $sum: '$pnl' },
-          wins:     { $sum: { $cond: [{ $gt: ['$pnl', 0] }, 1, 0] } },
-          losses:   { $sum: { $cond: [{ $lt: ['$pnl', 0] }, 1, 0] } },
-          count:    { $sum: 1 },
-        },
-      },
-      { $sort: { _id: -1 } },
-    ]).toArray();
-  } catch (err) {
-    console.warn('[tradeRepo] dailyPnl failed:', err.message);
-    return [];
-  }
-}
-
-/**
- * Pattern-level win rate: for each patternId, returns { count, wins, winRate, avgPnl }.
- * Helps identify which Ichimoku patterns produce the best paper-trade outcomes.
- *
- * @returns {Promise<Array>}
- */
-async function patternWinRate(opts = {}) {
-  if (!mongo.isReady()) return [];
-  try {
-    const match = { status: 'CLOSED', patternId: { $ne: null }, pnl: { $ne: null } };
-    if (opts.exchange) match.exchange = opts.exchange;
-    return await mongo.db().collection(COLLECTION).aggregate([
-      { $match: match },
-      {
-        $group: {
-          _id:    '$patternId',
-          count:  { $sum: 1 },
-          wins:   { $sum: { $cond: [{ $gt: ['$pnl', 0] }, 1, 0] } },
-          avgPnl: { $avg: '$pnl' },
-        },
-      },
-      {
-        $addFields: {
-          winRate: {
-            $cond: [
-              { $gt: ['$count', 0] },
-              { $divide: ['$wins', '$count'] },
-              0,
-            ],
-          },
-        },
-      },
-      { $sort: { winRate: -1 } },
-    ]).toArray();
-  } catch (err) {
-    console.warn('[tradeRepo] patternWinRate failed:', err.message);
-    return [];
-  }
-}
-
-/**
- * Sum of realized PnL across all CLOSED trades in MongoDB.
- * Used on startup to restore the in-memory cumulative PnL counter so the
- * paper balance is accurate even after Railway redeploys or config.json loss.
- *
- * @returns {Promise<number>}
- */
-async function getCumulativePnl() {
-  if (!mongo.isReady()) return null; // null = not available, caller uses fallback
-  try {
-    const rows = await mongo.db().collection(COLLECTION).aggregate([
-      { $match: { status: 'CLOSED', pnl: { $ne: null } } },
-      { $group: { _id: null, total: { $sum: '$pnl' } } },
-    ]).toArray();
-    return Math.round((rows[0]?.total ?? 0) * 100) / 100;
-  } catch (err) {
-    console.warn('[tradeRepo] getCumulativePnl failed:', err.message);
-    return null;
-  }
-}
-
-/**
- * Fetch all trades (any status) closed on a specific IST calendar date.
- *
- * @param {string} dateStr  IST date in "YYYY-MM-DD" format, e.g. "2026-05-21"
- * @returns {Promise<Array>}
- */
-async function getByDate(dateStr) {
-  if (!mongo.isReady()) return [];
-  try {
-    // Build IST day boundaries as UTC Date objects.
-    // IST = UTC+5:30, so IST midnight = UTC 18:30 the previous day.
-    const [y, m, d] = dateStr.split('-').map(Number);
-    const fromUtc = new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - 5.5 * 60 * 60 * 1000);
-    const toUtc   = new Date(Date.UTC(y, m - 1, d, 23, 59, 59, 999) - 5.5 * 60 * 60 * 1000);
-
-    const docs = await mongo.db().collection(COLLECTION)
-      .find({ openedAt: { $gte: fromUtc, $lte: toUtc } })
-      .sort({ openedAt: -1 })
-      .toArray();
-
-    return docs.map(_mapTradeDocument);
-  } catch (err) {
-    console.warn('[tradeRepo] getByDate failed:', err.message);
-    return [];
-  }
-}
-
-/**
- * Return all distinct IST dates that have at least one trade (any status).
- * Used to populate a date picker with only valid trading days.
- * Returns an array of "YYYY-MM-DD" strings, newest first.
- *
- * @returns {Promise<string[]>}
- */
-async function getTradingDates() {
-  if (!mongo.isReady()) return [];
-  try {
-    const rows = await mongo.db().collection(COLLECTION).aggregate([
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$openedAt', timezone: '+05:30' } },
-        },
-      },
-      { $sort: { _id: -1 } },
-    ]).toArray();
-    return rows.map((r) => r._id).filter(Boolean);
-  } catch (err) {
-    console.warn('[tradeRepo] getTradingDates failed:', err.message);
-    return [];
-  }
-}
-
-module.exports = { createIndexes, upsertTrade, closeTrade, getOpenTrades, getRecentTrades, getCumulativePnl, dailyPnl, patternWinRate, getByDate, getTradingDates };
+module.exports = repo;

@@ -125,6 +125,8 @@ function addTrade(tradeData) {
   _trades.unshift(trade);
   if (_trades.length > 500) _trades.pop();
 
+  console.log(`[IdxTradeStore] addTrade: ${trade.symbol} id=${trade.id.slice(0, 8)}… — calling db.indexTradeRepo.upsertTrade`);
+
   // Persist to MongoDB via repository
   db.indexTradeRepo.upsertTrade(trade);
 
@@ -152,6 +154,8 @@ function closeTrade(id, exitPrice, exitReason = 'manual') {
   trade.pnl = Math.round(pnl * 100) / 100;
   trade.exitReason = exitReason;
   trade.closedTs = Date.now();
+
+  console.log(`[IdxTradeStore] closeTrade: ${trade.symbol} id=${trade.id.slice(0, 8)}… pnl=${trade.pnl} — calling db.indexTradeRepo.closeTrade`);
 
   // Persist to MongoDB via repository
   db.indexTradeRepo.closeTrade(trade);
