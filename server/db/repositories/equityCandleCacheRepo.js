@@ -32,9 +32,9 @@ const COLLECTION = 'equity_candle_cache';
 
 // ── Ichimoku-specific storage optimization ───────────────────────────────────
 // Ichimoku requires minimum 52 bars (Senkou B) + 26 (Chikou) = 78 bars.
-// Store 90 bars (15% buffer) instead of 400-1200 → 80-90% storage reduction.
+// Store 100 bars (28% buffer) instead of 400-1200 → 75-90% storage reduction.
 const ICHIMOKU_MIN_BARS = 78;
-const STORAGE_BARS = 90;  // small buffer above minimum
+const STORAGE_BARS = 100;  // buffer above minimum for pattern variations
 
 /**
  * Trim candle array to only what's needed for Ichimoku calculations.

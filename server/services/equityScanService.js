@@ -36,24 +36,28 @@ const { to4H }              = require('./ichimoku');
 const MIN_BARS = 52;
 
 /**
- * Candle bars to STORE in MongoDB cache per SOURCE interval.
+ * Candle storage optimization for Ichimoku patterns.
  *
- * Ichimoku needs 52 candles; we store 100 as buffer for each TARGET TF.
+ * Ichimoku requires minimum 78 candles (52 SenkouB + 26 Chikou).
+ * We store 100 candles as buffer for each TARGET TF.
  *
- * Storage optimization (per stock):
- *   60minute: 400 bars → to4H() → ~100 4h candles ✓
- *   day:      100 bars → direct day candles ✓
+ * Storage strategy:
+ *   - For 4H scan: need 100 4h candles → requires 400 1h bars (4 bars per 4h candle)
+ *   - For 1D scan: need 100 day candles → store 100 day bars
  *
- * Weekly scan NOT supported (would need 500 day bars = too much storage).
- * Total per stock: 400 + 100 = 500 candle records (vs 850 before).
+ * FETCH from Kite: 400 1h + 100 day = 500 bars
+ * STORE in MongoDB: 100 1h + 100 day = 200 bars (repo trims to 100 each)
+ *
+ * Total per stock: ~200 candle records
+ * ~1200 stocks × 200 = ~240K records
  */
-const STORE_BARS = {
-  '60minute': 400,  // → ~100 4h candles
-  'day':      100,  // → 100 day candles
+const FETCH_BARS = {
+  '60minute': 400,  // fetch 400 → to4H() → ~100 4h candles for pattern scan
+  'day':      100,  // fetch 100 day candles
 };
 
-/** Candle bars to FETCH from Kite API (same as store - no excess). */
-const FETCH_BARS = { ...STORE_BARS };
+// Note: equityCandleCacheRepo trims to 90-100 bars before storing to MongoDB
+// So we fetch what's needed for pattern synthesis but store only what's needed
 
 /** Human-readable TF label for each interval. */
 const TF_LABELS = { '4h': '4H', 'day': '1D' };
@@ -349,7 +353,7 @@ async function _runScan(scanDate) {
       return [
         candleStore.getCandles(inst.instrumentToken, '60minute', INCR_BARS['60minute'])
           .then((recent) => {
-            const merged = _mergeCandles(e60.candles, recent, STORE_BARS['60minute']);
+            const merged = _mergeCandles(e60.candles, recent, FETCH_BARS['60minute']);
             candleStore.seed(Number(inst.instrumentToken), '60minute', merged);
             return { token: Number(inst.instrumentToken), interval: '60minute', candles: merged };
           })
@@ -357,7 +361,7 @@ async function _runScan(scanDate) {
 
         candleStore.getCandles(inst.instrumentToken, 'day', INCR_BARS['day'])
           .then((recent) => {
-            const merged = _mergeCandles(eDay.candles, recent, STORE_BARS['day']);
+            const merged = _mergeCandles(eDay.candles, recent, FETCH_BARS['day']);
             candleStore.seed(Number(inst.instrumentToken), 'day', merged);
             return { token: Number(inst.instrumentToken), interval: 'day', candles: merged };
           })
@@ -389,8 +393,8 @@ async function _runScan(scanDate) {
     );
 
     const fetchPromises = missingInsts.flatMap((inst) => [
-      candleStore.getCandles(inst.instrumentToken, '60minute', STORE_BARS['60minute']).catch(() => null),
-      candleStore.getCandles(inst.instrumentToken, 'day',      STORE_BARS['day']).catch(() => null),
+      candleStore.getCandles(inst.instrumentToken, '60minute', FETCH_BARS['60minute']).catch(() => null),
+      candleStore.getCandles(inst.instrumentToken, 'day',      FETCH_BARS['day']).catch(() => null),
     ]);
 
     await Promise.all(fetchPromises);
