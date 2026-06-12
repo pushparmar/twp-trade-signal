@@ -600,4 +600,150 @@ function getUniverse() {
   };
 }
 
-module.exports = { run, getStatus, getResults, isCachedToday, toWeekly, _forceRun, getUniverse };
+// ── Cache-only scan (no Kite API calls) ───────────────────────────────────────
+
+/**
+ * Run a filtered scan ONLY from MongoDB cached candles — zero Kite API calls.
+ *
+ * Use case: After an initial full scan caches all candle data, subsequent
+ * filtered scans (e.g. specific pattern + timeframe) run instantly from cache.
+ *
+ * @param {object} opts
+ * @param {string[]} [opts.patternIds]  Array of pattern IDs to run (default: all)
+ * @param {string[]} [opts.intervals]   Array of intervals ['4h', 'day', 'week'] (default: all)
+ * @returns {Promise<object[]>}  Scan results (NOT stored to MongoDB — returned directly)
+ */
+async function runCacheOnly(opts = {}) {
+  const { patternIds = null, intervals = ['4h', 'day', 'week'] } = opts;
+
+  console.log(`[EquityScan] Cache-only scan: patterns=${patternIds?.join(',') || 'all'}, TF=${intervals.join(',')}`);
+
+  // ── Load all cached candles from MongoDB ────────────────────────────────────
+  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
+
+  if (cachedCandles.size === 0) {
+    console.log('[EquityScan] Cache-only scan: no cached candles found — run full scan first');
+    return { results: [], error: 'No cached candles. Run full scan first.' };
+  }
+
+  // ── Get instrument metadata ─────────────────────────────────────────────────
+  const instruments = instrumentCache.getAllEquity();
+  const instMap = new Map(instruments.map(i => [Number(i.instrumentToken), i]));
+
+  // ── Determine which patterns to run ─────────────────────────────────────────
+  const allPatterns = patternRegistry.list();
+  const patterns = patternIds
+    ? allPatterns.filter(p => patternIds.includes(p.id))
+    : allPatterns;
+
+  if (patterns.length === 0) {
+    return { results: [], error: 'No matching patterns found' };
+  }
+
+  console.log(`[EquityScan] Cache-only: ${cachedCandles.size / 2} instruments, ${patterns.length} patterns, ${intervals.length} TFs`);
+
+  // ── Scan from cache ─────────────────────────────────────────────────────────
+  const results = [];
+  const _dedup = new Set();
+
+  // Get unique tokens from cache
+  const tokens = new Set();
+  for (const key of cachedCandles.keys()) {
+    const [tokenStr] = key.split(':');
+    tokens.add(Number(tokenStr));
+  }
+
+  for (const token of tokens) {
+    const inst = instMap.get(token);
+    if (!inst) continue;
+
+    const label = inst.name ?? inst.tradingsymbol;
+    const e60 = cachedCandles.get(`${token}:60minute`);
+    const eDay = cachedCandles.get(`${token}:day`);
+
+    for (const interval of intervals) {
+      // ── Build candles from cache ──────────────────────────────────────────
+      let candles;
+      try {
+        if (interval === '4h') {
+          const c1h = e60?.candles;
+          candles = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
+        } else if (interval === 'week') {
+          const cDay = eDay?.candles;
+          candles = (cDay && cDay.length >= 30) ? toWeekly(cDay) : null;
+        } else if (interval === 'day') {
+          candles = eDay?.candles;
+        }
+      } catch {
+        continue;
+      }
+
+      if (!candles || candles.length < MIN_BARS) continue;
+
+      // ── Run selected patterns ─────────────────────────────────────────────
+      for (const { id: patternId, label: patternLabel } of patterns) {
+        const patternDef = patternRegistry.get(patternId);
+        if (!patternDef) continue;
+
+        let result;
+        try {
+          result = patternDef.run(candles, { ...patternDef.defaultOpts, interval });
+        } catch {
+          continue;
+        }
+
+        if (!result?.matched || !result.signal) continue;
+
+        // Per-run dedup
+        const dedupKey = `${token}:${interval}:${patternId}:${result.signal}`;
+        if (_dedup.has(dedupKey)) continue;
+        _dedup.add(dedupKey);
+
+        const firedAt = new Date();
+        const firedAtIST = _istTimeStr(firedAt);
+
+        results.push({
+          token: Number(token),
+          tradingsymbol: inst.tradingsymbol,
+          label,
+          exchange: inst.exchange ?? 'NSE',
+          patternId,
+          patternLabel,
+          signal: result.signal,
+          interval,
+          tfLabel: TF_LABELS[interval],
+          score: result.score ?? null,
+          close: result.close ?? null,
+          sl: result.sl ?? null,
+          target: result.target ?? null,
+          targetSource: result.targetSource ?? null,
+          cloudPosition: result.cloudPosition ?? null,
+          strength: result.strength ?? null,
+          volumeRatio: result.volumeRatio ?? null,
+          volumeConfirmed: result.volumeConfirmed ?? null,
+          rsi14: result.rsi14 ?? null,
+          atr14: result.atr ?? null,
+          mtfAligned: false,
+          firedAt,
+          firedAtIST,
+        });
+      }
+    }
+  }
+
+  // Sort by score descending
+  results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+  console.log(`[EquityScan] Cache-only scan complete: ${results.length} signals found`);
+  return { results, count: results.length };
+}
+
+/**
+ * Get list of all available patterns for dropdown.
+ * @returns {Array<{id: string, label: string}>}
+ */
+function getPatternList() {
+  return patternRegistry.list().map(p => ({ id: p.id, label: p.label }));
+}
+
+module.exports = { run, getStatus, getResults, isCachedToday, toWeekly, _forceRun, getUniverse, runCacheOnly, getPatternList };

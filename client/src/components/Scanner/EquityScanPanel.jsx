@@ -182,6 +182,13 @@ const TF_OPTIONS = [
     { id: "week", label: "1W" }
 ];
 
+// TF options for cache-scan dropdown (no "all" option — must select specific TF)
+const CACHE_TF_OPTIONS = [
+    { id: "4h", label: "4H" },
+    { id: "day", label: "1D" },
+    { id: "week", label: "1W" }
+];
+
 const MIN_RR_OPTIONS = [
     { value: 0, label: "Any R:R" },
     { value: 1.5, label: "≥ 1:1.5" },
@@ -201,6 +208,12 @@ export default function EquityScanPanel({ inline = false }) {
     const [loading, setLoading] = useState(false);
     const [universe, setUniverse] = useState(null); // equity universe info
     const pollRef = useRef(null);
+
+    // ── Cache-scan state (filtered scan on cached data) ──────────────────────
+    const [availablePatterns, setAvailablePatterns] = useState([]); // patterns from server
+    const [cacheScanPattern, setCacheScanPattern] = useLocalState("eqscan:cacheScanPattern", "all");
+    const [cacheScanTF, setCacheScanTF] = useLocalState("eqscan:cacheScanTF", "day");
+    const [cacheScanLoading, setCacheScanLoading] = useState(false);
 
     // ── Filter state ─────────────────────────────────────────────────────────
     const [tfFilter, setTfFilter] = useLocalState("eqscan:tfFilter", "all");
@@ -231,11 +244,15 @@ export default function EquityScanPanel({ inline = false }) {
         };
     }, []);
 
-    // ── Load universe + status + results on mount ─────────────────────────────
+    // ── Load universe + status + results + patterns on mount ───────────────────
     useEffect(() => {
         async function init() {
             try {
-                // First, fetch the equity universe (all stocks to be scanned)
+                // Fetch patterns list for cache-scan dropdown
+                const { data: patternsData } = await api.get("/equity-scan/patterns");
+                setAvailablePatterns(patternsData || []);
+
+                // Fetch the equity universe (all stocks to be scanned)
                 const { data: universeData } = await api.get("/equity-scan/universe");
                 setUniverse(universeData);
 
@@ -316,6 +333,30 @@ export default function EquityScanPanel({ inline = false }) {
             // ignore
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ── Cache-only scan handler (no Kite API calls) ───────────────────────────
+    const handleCacheScan = useCallback(async () => {
+        if (cacheScanLoading) return;
+        setCacheScanLoading(true);
+        try {
+            const body = {
+                intervals: [cacheScanTF],
+                patternIds: cacheScanPattern === "all" ? null : [cacheScanPattern]
+            };
+            const { data } = await api.post("/equity-scan/cache-scan", body);
+            if (data.error) {
+                console.warn("[EquityScanPanel] Cache scan error:", data.error);
+                alert(data.error);
+            } else {
+                setResults(data.results || []);
+                console.log(`[EquityScanPanel] Cache scan: ${data.count} results`);
+            }
+        } catch (err) {
+            console.error("[EquityScanPanel] Cache scan failed:", err);
+        } finally {
+            setCacheScanLoading(false);
+        }
+    }, [cacheScanLoading, cacheScanTF, cacheScanPattern]);
 
     // ── Derived state ─────────────────────────────────────────────────────────
     const isRunning = scanStatus?.running ?? false;
@@ -520,6 +561,83 @@ export default function EquityScanPanel({ inline = false }) {
                             Re-run
                         </button>
                     )}
+                </div>
+
+                {/* ── Cache-only scan section ── */}
+                <div style={{
+                    marginTop: 16,
+                    padding: "12px 14px",
+                    borderRadius: 8,
+                    background: "var(--bg-secondary)",
+                    border: "1px solid var(--border)"
+                }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text-secondary)" }}>
+                        Quick Scan (from cached data — no API calls)
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                        {/* Pattern dropdown */}
+                        <select
+                            value={cacheScanPattern}
+                            onChange={e => setCacheScanPattern(e.target.value)}
+                            style={{
+                                fontSize: 12,
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid var(--border)",
+                                background: "var(--bg-tertiary)",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                                minWidth: 160
+                            }}
+                        >
+                            <option value="all">All Patterns</option>
+                            {availablePatterns.map(p => (
+                                <option key={p.id} value={p.id}>{p.label}</option>
+                            ))}
+                        </select>
+
+                        {/* TF dropdown */}
+                        <select
+                            value={cacheScanTF}
+                            onChange={e => setCacheScanTF(e.target.value)}
+                            style={{
+                                fontSize: 12,
+                                padding: "6px 10px",
+                                borderRadius: 6,
+                                border: "1px solid var(--border)",
+                                background: "var(--bg-tertiary)",
+                                color: "var(--text-primary)",
+                                cursor: "pointer",
+                                minWidth: 80
+                            }}
+                        >
+                            {CACHE_TF_OPTIONS.map(tf => (
+                                <option key={tf.id} value={tf.id}>{tf.label}</option>
+                            ))}
+                        </select>
+
+                        {/* Run button */}
+                        <button
+                            onClick={handleCacheScan}
+                            disabled={cacheScanLoading}
+                            style={{
+                                fontSize: 12,
+                                padding: "6px 14px",
+                                borderRadius: 6,
+                                border: "none",
+                                background: cacheScanLoading ? "var(--border)" : "var(--accent)",
+                                color: "#fff",
+                                cursor: cacheScanLoading ? "wait" : "pointer",
+                                fontWeight: 600
+                            }}
+                        >
+                            {cacheScanLoading ? "Scanning…" : "▶ Run"}
+                        </button>
+
+                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                            Scans {universe?.total || "~1200"} stocks from MongoDB cache
+                        </span>
+                    </div>
                 </div>
             </div>
 

@@ -17,6 +17,14 @@
  * POST /api/equity-scan/rerun
  *   Force re-run even if already cached today (clears in-memory date guard).
  *
+ * POST /api/equity-scan/cache-scan
+ *   Run a filtered scan on CACHED candles only — zero Kite API calls.
+ *   Body: { patternIds?: string[], intervals?: string[] }
+ *   Returns results directly (not stored to MongoDB).
+ *
+ * GET /api/equity-scan/patterns
+ *   Returns list of all available patterns for dropdown selection.
+ *
  * POST /api/equity-scan/clear-candle-cache
  *   Delete all stored candle history from MongoDB (equity_candle_cache collection).
  *   The next scan run will re-fetch everything from the Kite historical API and
@@ -86,6 +94,31 @@ router.get('/universe', (req, res) => {
     return res.json(universe);
   } catch (err) {
     console.error('[equityScan] /universe error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Get available patterns for dropdown ───────────────────────────────────────
+
+router.get('/patterns', (req, res) => {
+  try {
+    const patterns = equityScan.getPatternList();
+    return res.json(patterns);
+  } catch (err) {
+    console.error('[equityScan] /patterns error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Cache-only scan (no Kite API calls) ───────────────────────────────────────
+
+router.post('/cache-scan', async (req, res) => {
+  try {
+    const { patternIds, intervals } = req.body || {};
+    const result = await equityScan.runCacheOnly({ patternIds, intervals });
+    return res.json(result);
+  } catch (err) {
+    console.error('[equityScan] /cache-scan error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
