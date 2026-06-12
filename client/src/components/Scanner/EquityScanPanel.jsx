@@ -271,6 +271,26 @@ export default function EquityScanPanel({ inline = false }) {
         return () => stopPolling();
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // ── Resume polling when tab becomes visible again ─────────────────────────
+    useEffect(() => {
+        function handleVisibilityChange() {
+            if (document.visibilityState === "visible") {
+                // Tab became visible — check if scan is still running
+                api.get("/equity-scan/status").then(({ data: status }) => {
+                    setScanStatus(status);
+                    if (status.running && !pollRef.current) {
+                        startPolling();
+                    } else if (!status.running && status.cachedToday && results.length === 0) {
+                        // Scan finished while we were away — fetch results
+                        api.get("/equity-scan/results").then(({ data: rows }) => setResults(rows)).catch(() => {});
+                    }
+                }).catch(() => {});
+            }
+        }
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }, [results.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
     // ── Polling ───────────────────────────────────────────────────────────────
     function startPolling() {
         if (pollRef.current) return;
