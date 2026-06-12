@@ -178,15 +178,13 @@ function EqScanRow({ alert }) {
 const TF_OPTIONS = [
     { id: "all", label: "All TF" },
     { id: "4h", label: "4H" },
-    { id: "day", label: "1D" },
-    { id: "week", label: "1W" }
+    { id: "day", label: "1D" }
 ];
 
 // TF options for cache-scan dropdown (no "all" option — must select specific TF)
 const CACHE_TF_OPTIONS = [
     { id: "4h", label: "4H" },
-    { id: "day", label: "1D" },
-    { id: "week", label: "1W" }
+    { id: "day", label: "1D" }
 ];
 
 const MIN_RR_OPTIONS = [
@@ -492,7 +490,7 @@ export default function EquityScanPanel({ inline = false }) {
                     <span className="mw-detail-name" style={{ fontSize: 16, fontWeight: 700 }}>
                         Equity Scan
                     </span>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>All NSE + BSE EQ · 4H / 1D / 1W</span>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>All NSE + BSE EQ · 4H / 1D</span>
                 </div>
 
                 {/* Universe Info */}
@@ -921,7 +919,7 @@ export default function EquityScanPanel({ inline = false }) {
             <div className="page-header">
                 <div>
                     <h2 className="page-title">Equity Scan</h2>
-                    <p className="page-sub">On-demand scan · All NSE + BSE stocks · 4H / 1D / 1W · Cached daily</p>
+                    <p className="page-sub">On-demand scan · All NSE + BSE stocks · 4H / 1D · Cached daily</p>
                 </div>
             </div>
             {inner}

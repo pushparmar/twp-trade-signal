@@ -35,15 +35,32 @@ const { to4H }              = require('./ichimoku');
 /** Minimum candle bars needed for valid Ichimoku (52 for SenkouB + 26 chikou = 78 minimum). */
 const MIN_BARS = 52;
 
-/** Candle bars to fetch per interval. */
-const CANDLE_BARS = {
-  '4h':   450,   // 1h bars → to4H → ~75 4h candles
-  'day':  200,   // ~286 trading days
-  'week': 400,   // daily bars → toWeekly → ~80 weekly candles
+/**
+ * Candle bars to STORE in MongoDB cache per SOURCE interval.
+ *
+ * Ichimoku needs 52 candles; we store 100 as buffer for each TARGET TF.
+ *
+ * Storage optimization (per stock):
+ *   60minute: 400 bars → to4H() → ~100 4h candles ✓
+ *   day:      100 bars → direct day candles ✓
+ *
+ * Weekly scan NOT supported (would need 500 day bars = too much storage).
+ * Total per stock: 400 + 100 = 500 candle records (vs 850 before).
+ */
+const STORE_BARS = {
+  '60minute': 400,  // → ~100 4h candles
+  'day':      100,  // → 100 day candles
 };
 
+/** Candle bars to FETCH from Kite API (same as store - no excess). */
+const FETCH_BARS = { ...STORE_BARS };
+
 /** Human-readable TF label for each interval. */
-const TF_LABELS = { '4h': '4H', 'day': '1D', 'week': '1W' };
+const TF_LABELS = { '4h': '4H', 'day': '1D' };
+
+/** Supported scan intervals (weekly removed - not enough bars). */
+const SCAN_INTERVALS = ['4h', 'day'];
+
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -215,7 +232,7 @@ async function _runScan(scanDate) {
   // ── Phase -1: Fetch and list ALL NSE + BSE equity instruments first ───────────
   const instruments = instrumentCache.getAllEquity(); // ALL NSE + BSE EQ
   const patterns    = patternRegistry.list();
-  const intervals   = ['4h', 'day', 'week'];
+  const intervals   = SCAN_INTERVALS; // ['4h', 'day'] - no weekly (storage optimization)
 
   // Classify by exchange and F&O status
   const foStockRegistry = require('./foStockRegistry');
@@ -317,8 +334,7 @@ async function _runScan(scanDate) {
   //
   // Fetch only a small recent window from Kite (10 day bars / 20 hourly bars —
   // enough to cover any multi-day gap including weekends and holidays).
-  // Merge new bars onto the end of the existing MongoDB history so the full
-  // 400–450 bar depth is always available for pattern detection.
+  // Merge new bars onto the end of the existing MongoDB history.
   // The merged arrays are upserted back to MongoDB so the next run sees them
   // as "fresh" and skips Kite entirely.
   const INCR_BARS = { '60minute': 20, 'day': 10 };
@@ -333,7 +349,7 @@ async function _runScan(scanDate) {
       return [
         candleStore.getCandles(inst.instrumentToken, '60minute', INCR_BARS['60minute'])
           .then((recent) => {
-            const merged = _mergeCandles(e60.candles, recent, CANDLE_BARS['4h']);
+            const merged = _mergeCandles(e60.candles, recent, STORE_BARS['60minute']);
             candleStore.seed(Number(inst.instrumentToken), '60minute', merged);
             return { token: Number(inst.instrumentToken), interval: '60minute', candles: merged };
           })
@@ -341,7 +357,7 @@ async function _runScan(scanDate) {
 
         candleStore.getCandles(inst.instrumentToken, 'day', INCR_BARS['day'])
           .then((recent) => {
-            const merged = _mergeCandles(eDay.candles, recent, CANDLE_BARS['week']);
+            const merged = _mergeCandles(eDay.candles, recent, STORE_BARS['day']);
             candleStore.seed(Number(inst.instrumentToken), 'day', merged);
             return { token: Number(inst.instrumentToken), interval: 'day', candles: merged };
           })
@@ -373,8 +389,8 @@ async function _runScan(scanDate) {
     );
 
     const fetchPromises = missingInsts.flatMap((inst) => [
-      candleStore.getCandles(inst.instrumentToken, '60minute', CANDLE_BARS['4h']).catch(() => null),
-      candleStore.getCandles(inst.instrumentToken, 'day',      CANDLE_BARS['week']).catch(() => null),
+      candleStore.getCandles(inst.instrumentToken, '60minute', STORE_BARS['60minute']).catch(() => null),
+      candleStore.getCandles(inst.instrumentToken, 'day',      STORE_BARS['day']).catch(() => null),
     ]);
 
     await Promise.all(fetchPromises);
@@ -428,9 +444,6 @@ async function _runScan(scanDate) {
         if (interval === '4h') {
           const c1h = candleStore.getCandlesSync(inst.instrumentToken, '60minute');
           candles   = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
-        } else if (interval === 'week') {
-          const cDay = candleStore.getCandlesSync(inst.instrumentToken, 'day');
-          candles    = (cDay && cDay.length >= 30) ? toWeekly(cDay) : null;
         } else {
           // 'day' interval — buffer was seeded by the 'day' prefetch above
           candles = candleStore.getCandlesSync(inst.instrumentToken, interval);
@@ -610,11 +623,11 @@ function getUniverse() {
  *
  * @param {object} opts
  * @param {string[]} [opts.patternIds]  Array of pattern IDs to run (default: all)
- * @param {string[]} [opts.intervals]   Array of intervals ['4h', 'day', 'week'] (default: all)
+ * @param {string[]} [opts.intervals]   Array of intervals ['4h', 'day'] (default: all)
  * @returns {Promise<object[]>}  Scan results (NOT stored to MongoDB — returned directly)
  */
 async function runCacheOnly(opts = {}) {
-  const { patternIds = null, intervals = ['4h', 'day', 'week'] } = opts;
+  const { patternIds = null, intervals = SCAN_INTERVALS } = opts;
 
   console.log(`[EquityScan] Cache-only scan: patterns=${patternIds?.join(',') || 'all'}, TF=${intervals.join(',')}`);
 
@@ -668,9 +681,6 @@ async function runCacheOnly(opts = {}) {
         if (interval === '4h') {
           const c1h = e60?.candles;
           candles = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
-        } else if (interval === 'week') {
-          const cDay = eDay?.candles;
-          candles = (cDay && cDay.length >= 30) ? toWeekly(cDay) : null;
         } else if (interval === 'day') {
           candles = eDay?.candles;
         }
@@ -746,4 +756,4 @@ function getPatternList() {
   return patternRegistry.list().map(p => ({ id: p.id, label: p.label }));
 }
 
-module.exports = { run, getStatus, getResults, isCachedToday, toWeekly, _forceRun, getUniverse, runCacheOnly, getPatternList };
+module.exports = { run, getStatus, getResults, isCachedToday, _forceRun, getUniverse, runCacheOnly, getPatternList };
