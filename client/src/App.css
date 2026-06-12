@@ -2021,7 +2021,7 @@ body {
     gap: 4px;
     flex: 1;
     justify-content: space-around;
-    overflow-x: scoll;
+    overflow-x: scroll;
   }
 
   .sidebar-nav-item {
@@ -5149,13 +5149,26 @@ body {
   .header-strip {
     padding: 8px 10px;
     gap: 0;
-    top:45px;
+    top: 45px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+  }
+  .header-strip::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
   }
   .hdr-item {
     padding: 2px 8px;
     flex-direction: column;
     align-items: flex-start;
     gap: 1px;
+    flex-shrink: 0; /* Prevent items from shrinking */
+    min-width: max-content; /* Keep items at their natural width */
+  }
+  .hdr-divider {
+    flex-shrink: 0;
   }
   .hdr-value--big { font-size: 17px; font-weight: 800; }
   .hdr-value { font-size: 15px; }
