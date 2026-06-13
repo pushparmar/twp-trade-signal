@@ -315,6 +315,8 @@ const PATTERNS = {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
       if (!result) return { matched: false };
       if (result.signal === null) return { matched: false };
+      // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
+      if (!_tkAligned(result)) return { matched: false };
 
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
       const trailingAnchor = result.tenkan ?? null;
@@ -394,6 +396,8 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getKumoBaseEntry(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
+      // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
+      if (!_tkAligned(result)) return { matched: false };
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
       const trailingAnchor = result.tenkan ?? null;
       return {
@@ -444,6 +448,8 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getCloudExit(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.matched) return { matched: false };
+      // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
+      if (!_tkAligned(result)) return { matched: false };
 
       // R7: Volume check on exit candle — cloud exit on low volume fails ~50% of the time
       const volFields = _volumeFields(candles);
@@ -499,6 +505,8 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getKijunRetest(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.matched) return { matched: false };
+      // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
+      if (!_tkAligned(result)) return { matched: false };
       // SL = Kijun itself (if price closes through it, the retest failed)
       const { sl, target, atr, targetSource } = computeSLTarget('kijun-bounce', result.signal, result, candles, opts.interval);
       const trailingAnchor = result.kijun ?? result.kijunValue ?? null;
@@ -605,6 +613,8 @@ const PATTERNS = {
     run(candles, opts = {}) {
       const result = getSenkouCross(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
+      // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
+      if (!_tkAligned(result)) return { matched: false };
 
       const { sl, target, atr, targetSource } = computeSLTarget(
         this.id, result.signal, result, candles, opts.interval,
