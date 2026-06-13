@@ -134,7 +134,7 @@ export default function SettingsPanel() {
         setEquityCacheMsg('');
         try {
             const r = await api.post('/equity-scan/clear-candle-cache');
-            setEquityCacheMsg(`✅ Cleared ${r.data.deleted} entries`);
+            setEquityCacheMsg(`✅ Cleared ${r.data.deleted} DB + ${r.data.memCleared} memory`);
         } catch (err) {
             setEquityCacheMsg(`❌ ${err.response?.data?.error || err.message}`);
         } finally {

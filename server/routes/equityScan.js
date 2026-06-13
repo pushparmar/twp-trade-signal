@@ -34,6 +34,7 @@
 const express               = require('express');
 const equityScan            = require('../services/equityScanService');
 const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
+const candleStore           = require('../services/candleStore');
 
 const router = express.Router();
 
@@ -127,13 +128,17 @@ router.post('/cache-scan', async (req, res) => {
 
 router.post('/clear-candle-cache', async (req, res) => {
   try {
+    // Clear MongoDB candle cache
     const deleted = await equityCandleCacheRepo.clearAll();
+    // Clear in-memory candle store (important! otherwise scan uses stale memory data)
+    const memCleared = candleStore.clearAll();
     // Also reset the in-memory date guard so the next run() doesn't skip
     equityScan._forceRun();
     return res.json({
       ok:      true,
       deleted,
-      message: `Cleared ${deleted} candle cache entries. Next scan will re-fetch from Kite.`,
+      memCleared,
+      message: `Cleared ${deleted} MongoDB entries + ${memCleared} in-memory buffers. Next scan will re-fetch from Kite.`,
     });
   } catch (err) {
     console.error('[equityScan] /clear-candle-cache error:', err.message);
