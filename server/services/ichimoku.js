@@ -2250,7 +2250,10 @@ function getKijunRetest(candles, opts = {}) {
  * @returns {object|null}
  */
 function getTKReversion(candles, opts = {}) {
-  const minSpreadPct   = opts.minSpreadPct   ?? 0.5;
+  // minSpreadPct: Minimum gap between Tenkan and Kijun as % of current price.
+  // Default 5% — requires significant TK divergence before reversion triggers.
+  // Example: If price is ₹100, TK gap must be at least ₹5 (5%).
+  const minSpreadPct   = opts.minSpreadPct   ?? 5.0;
   const lookback       = opts.lookback       ?? 3;
   const spreadLookback = opts.spreadLookback ?? 10;
 
@@ -2278,7 +2281,7 @@ function getTKReversion(candles, opts = {}) {
   const tkSpread = Math.abs(tenkan - kijun);
   const spreadPct = (tkSpread / close) * 100;
 
-  // Must have wide enough TK spread
+  // Must have wide enough TK spread (minimum 5% of current price)
   if (spreadPct < minSpreadPct) return null;
 
   const tkHigh = Math.max(tenkan, kijun);

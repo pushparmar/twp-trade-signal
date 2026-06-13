@@ -509,9 +509,9 @@ const PATTERNS = {
   'tk-reversion': {
     id:          'tk-reversion',
     label:       'TK Reversion',
-    description: 'After a fast move widened the Tenkan–Kijun spread, price crosses Tenkan in the direction of Kijun — mean reversion toward Kijun or cloud.',
+    description: 'After a fast move widened the Tenkan–Kijun spread (min 5% gap), price crosses Tenkan in the direction of Kijun — mean reversion toward Kijun or cloud.',
     maxScore:    5,
-    defaultOpts: { lookback: 3, minSpreadPct: 0.5, spreadLookback: 10 },
+    defaultOpts: { lookback: 3, minSpreadPct: 5.0, spreadLookback: 10 },
 
     run(candles, opts = {}) {
       const result = getTKReversion(candles, { ...this.defaultOpts, ...opts });
