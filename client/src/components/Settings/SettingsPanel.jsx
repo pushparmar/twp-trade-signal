@@ -127,14 +127,14 @@ export default function SettingsPanel() {
     }
 
     async function clearEquityCache() {
-        if (!window.confirm('Clear all equity candle cache? Next scan will re-fetch from Kite API.')) {
+        if (!window.confirm('Clear equity scan results? Patterns will be recalculated on next scan.')) {
             return;
         }
         setClearingEquityCache(true);
         setEquityCacheMsg('');
         try {
-            const r = await api.post('/equity-scan/clear-candle-cache');
-            setEquityCacheMsg(`✅ Cleared ${r.data.deleted} DB + ${r.data.memCleared} memory`);
+            const r = await api.post('/equity-scan/clear-scan-results');
+            setEquityCacheMsg(`✅ Cleared ${r.data.deleted} scan results`);
         } catch (err) {
             setEquityCacheMsg(`❌ ${err.response?.data?.error || err.message}`);
         } finally {
@@ -293,14 +293,14 @@ export default function SettingsPanel() {
 
                     {/* Clear equity candle cache */}
                     <div className="diag-row" style={{ marginTop: 10 }}>
-                        <span className="diag-label">Equity candle cache</span>
+                        <span className="diag-label">Equity scan results</span>
                         <button
                             className="btn btn-sm btn-secondary"
                             onClick={clearEquityCache}
                             disabled={clearingEquityCache}
-                            title="Clear cached candles for equity scan. Next scan will re-fetch from Kite API."
+                            title="Clear stored scan results. Next scan will recalculate all patterns from cached candles."
                         >
-                            {clearingEquityCache ? 'Clearing…' : 'Clear cache'}
+                            {clearingEquityCache ? 'Clearing…' : 'Clear & rescan'}
                         </button>
                     </div>
                     {equityCacheMsg && (

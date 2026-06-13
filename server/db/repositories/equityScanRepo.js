@@ -111,4 +111,25 @@ async function createIndexes() {
   }
 }
 
-module.exports = { insert, getByDate, hasResultsForDate, createIndexes };
+/**
+ * Delete all scan results from the collection.
+ * Call this to force a fresh recalculation on the next scan run.
+ *
+ * @returns {Promise<number>} number of documents deleted
+ */
+async function clearAll() {
+  if (!mongo.isReady()) {
+    console.warn('[equityScanRepo] MongoDB not ready — skipping clearAll');
+    return 0;
+  }
+  try {
+    const result = await mongo.db().collection(COLLECTION).deleteMany({});
+    console.log(`[equityScanRepo] Cleared ${result.deletedCount} scan result documents`);
+    return result.deletedCount;
+  } catch (err) {
+    console.warn('[equityScanRepo] clearAll failed:', err.message);
+    return 0;
+  }
+}
+
+module.exports = { insert, getByDate, hasResultsForDate, clearAll, createIndexes };

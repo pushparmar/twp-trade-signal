@@ -34,6 +34,7 @@
 const express               = require('express');
 const equityScan            = require('../services/equityScanService');
 const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
+const equityScanRepo        = require('../db/repositories/equityScanRepo');
 const candleStore           = require('../services/candleStore');
 
 const router = express.Router();
@@ -142,6 +143,25 @@ router.post('/clear-candle-cache', async (req, res) => {
     });
   } catch (err) {
     console.error('[equityScan] /clear-candle-cache error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Clear scan results (force recalculation on next scan) ────────────────────
+
+router.post('/clear-scan-results', async (req, res) => {
+  try {
+    // Clear scan results from MongoDB
+    const deleted = await equityScanRepo.clearAll();
+    // Reset the in-memory date guard so the next run() recalculates
+    equityScan._forceRun();
+    return res.json({
+      ok:      true,
+      deleted,
+      message: `Cleared ${deleted} scan results. Next scan will recalculate patterns.`,
+    });
+  } catch (err) {
+    console.error('[equityScan] /clear-scan-results error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
