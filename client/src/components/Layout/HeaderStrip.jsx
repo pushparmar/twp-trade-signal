@@ -5,10 +5,12 @@
  * Zustand store every render and surfaces:
  *
  *   ⏱  Today P&L      realized + unrealized of all scan/auto trades
- *   📂 Open trades    count, broken down by Auto vs Scan
+ *   📂 Open trades    count, broken down by Auto vs Scan (manual)
  *   ⚠  Live risk      Σ |entry - currentSl| × qty across open positions
- *   🤖 Auto trader    ON/OFF (lazy-loaded from /api/auto-trader/settings)
  *   🟢 Market         open / closed / pre-open / post-close
+ *
+ * NOTE: Auto-trader for equity is DISABLED. Users add trades manually from
+ * Scanner UI. Index-trade module has its own auto-trade via orderManager.js.
  *
  * The bar is sticky inside .main-area so it stays visible while users scroll
  * long pages (Scanner, Analytics).  All math runs synchronously on tick state
@@ -16,7 +18,7 @@
  */
 
 import { useEffect, useState } from "react";
-import api from "../../api";
+// import api from "../../api";  // DISABLED — auto-trader status polling removed
 import useAppStore from "../../store/appStore";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -66,7 +68,6 @@ export default function HeaderStrip() {
     // tradeTicks is server-throttled to 500 ms per trade — safe to use as a
     // React selector. Never subscribe to s.ticks here; it fires 50+ times/sec.
     const tradeTicks  = useAppStore(s => s.tradeTicks);
-    const [autoEnabled, setAutoEnabled] = useState(null);
     const [mkt, setMkt] = useState(marketState());
 
     // Refresh market state once per minute (cheap; no need for ticker)
@@ -75,24 +76,23 @@ export default function HeaderStrip() {
         return () => clearInterval(id);
     }, []);
 
-    // Lazy-load auto-trader status; refresh every 30s so the toggle reflects
-    // settings changes made in another tab.
-    useEffect(() => {
-        let cancelled = false;
-        function load() {
-            api.get("/auto-trader/settings")
-                .then(r => {
-                    if (!cancelled) setAutoEnabled(!!r.data?.enabled);
-                })
-                .catch(() => {});
-        }
-        load();
-        const id = setInterval(load, 30_000);
-        return () => {
-            cancelled = true;
-            clearInterval(id);
-        };
-    }, []);
+    // Auto-trader status loading — DISABLED (equity auto-trade removed)
+    // useEffect(() => {
+    //     let cancelled = false;
+    //     function load() {
+    //         api.get("/auto-trader/settings")
+    //             .then(r => {
+    //                 if (!cancelled) setAutoEnabled(!!r.data?.enabled);
+    //             })
+    //             .catch(() => {});
+    //     }
+    //     load();
+    //     const id = setInterval(load, 30_000);
+    //     return () => {
+    //         cancelled = true;
+    //         clearInterval(id);
+    //     };
+    // }, []);
 
     // ── Compute aggregates synchronously on every tick / trade change ──────────
     const openTrades = paperTrades.filter(t => t.status === "OPEN" && (t.source === "scan" || t.source === "auto"));

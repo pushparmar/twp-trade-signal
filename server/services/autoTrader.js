@@ -658,14 +658,20 @@ async function _onAlert(alert, source) {
 
 /** Start listening for scan alerts. Call once after store is loaded. */
 function start() {
-  alertBus.on('alert', (alert, source) => {
-    // _onAlert is async (LTP fetch); attach .catch() so a rejected promise never
-    // becomes an unhandled rejection and crashes the process.
-    _onAlert(alert, source).catch(err =>
-      console.error('[AutoTrader] _onAlert error:', err.message),
-    );
-  });
-  console.log('[AutoTrader] Started — will auto-place paper trades on scan alerts');
+  // ── EQUITY AUTO-TRADE DISABLED ────────────────────────────────────────────
+  // Background scans still run and track outcomes via signalOutcomeTracker,
+  // but no auto paper trades are placed for equity. Users can manually add
+  // trades from the Scanner UI. Index-trade module has its own separate
+  // auto-trade flow via orderManager.js.
+  //
+  // alertBus.on('alert', (alert, source) => {
+  //   // _onAlert is async (LTP fetch); attach .catch() so a rejected promise never
+  //   // becomes an unhandled rejection and crashes the process.
+  //   _onAlert(alert, source).catch(err =>
+  //     console.error('[AutoTrader] _onAlert error:', err.message),
+  //   );
+  // });
+  console.log('[AutoTrader] DISABLED — equity auto-trade removed; signalOutcomeTracker still tracks all alerts');
 }
 
 /** Stop listening — called on graceful shutdown. */

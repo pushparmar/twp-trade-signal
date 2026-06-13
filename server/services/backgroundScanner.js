@@ -442,6 +442,12 @@ async function _runScanForInterval(interval) {
   // every trigger attempt, not just the ones that proceeded past the guard.
   _lastRunAt[interval] = Date.now();
 
+  // Check module config — skip if backgroundScan was disabled while running
+  if (!store.isModuleEnabled('backgroundScan')) {
+    console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (module disabled)`);
+    return;
+  }
+
   if (!isAnyMarketOpen()) {
     console.log(`[BgScanner] ${TF_LABEL[interval] || interval} — skipped (market closed)`);
     return;
@@ -902,8 +908,15 @@ function _scheduleNext(interval) {
  * boundary and then re-schedules itself indefinitely.
  *
  * Should be called once after instrumentCache.load() succeeds.
+ * Respects module config — if backgroundScan is disabled, logs and returns.
  */
 function start() {
+  // Check module config — skip if backgroundScan is disabled
+  if (!store.isModuleEnabled('backgroundScan')) {
+    console.log('[BgScanner] Module disabled via settings — not starting');
+    return;
+  }
+
   if (_running) {
     console.log('[BgScanner] Already running — ignoring duplicate start()');
     return;

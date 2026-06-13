@@ -507,6 +507,96 @@ async function loadQualityScoreConfigFromMongo() {
     }
 }
 
+// ── Module Config ───────────────────────────────────────────────────────────────
+// Controls which modules/features are enabled at both server and UI level.
+// Each module can be independently toggled ON/OFF.
+
+const MODULE_DEFAULTS = {
+    // Server-side features
+    backgroundScan:      { enabled: true,  label: 'Background Scanner',    category: 'server', description: 'Auto-scan F&O stocks at candle close (15m/1h/4h/day)' },
+    telegramAlerts:      { enabled: true,  label: 'Telegram Alerts',       category: 'server', description: 'Send pattern alerts to Telegram' },
+    signalTracking:      { enabled: true,  label: 'Signal Outcome Tracking', category: 'server', description: 'Track signal outcomes (MFE/MAE) for 20 bars' },
+    indexTrade:          { enabled: true,  label: 'Index Trade Auto',      category: 'server', description: 'Auto-trade NIFTY/SENSEX options' },
+    telegramPolling:     { enabled: true,  label: 'Telegram Polling',      category: 'server', description: 'Poll Telegram for incoming signals' },
+    // UI pages/tabs
+    uiDashboard:         { enabled: true,  label: 'Dashboard',             category: 'ui',     description: 'Paper trading dashboard' },
+    uiMarketWatch:       { enabled: false, label: 'Market Watch',          category: 'ui',     description: 'Real-time market watch with Ichimoku signals' },
+    uiScanner:           { enabled: true,  label: 'Scanner',               category: 'ui',     description: 'Live scan alerts from background scanner' },
+    uiAnalytics:         { enabled: false, label: 'Analytics',             category: 'ui',     description: 'Trade and signal analytics' },
+    uiBacktest:          { enabled: false, label: 'Backtest',              category: 'ui',     description: 'Pattern backtesting' },
+    uiIndexTrade:        { enabled: true,  label: 'Index Trade',           category: 'ui',     description: 'Index options trading panel' },
+    uiEquityScan:        { enabled: true,  label: 'Equity Scan',           category: 'ui',     description: 'Manual equity scan panel' },
+};
+
+function getModuleConfig() {
+    const config = readConfig();
+    const stored = config.moduleConfig ?? {};
+    // Merge with defaults so new modules get default values
+    const merged = {};
+    for (const [moduleId, defaults] of Object.entries(MODULE_DEFAULTS)) {
+        merged[moduleId] = {
+            ...defaults,
+            enabled: stored[moduleId]?.enabled ?? defaults.enabled,
+        };
+    }
+    return merged;
+}
+
+function setModuleConfig(updates) {
+    const config = readConfig();
+    const current = config.moduleConfig ?? {};
+    // Only store enabled state, not the full metadata
+    for (const [moduleId, val] of Object.entries(updates)) {
+        if (MODULE_DEFAULTS[moduleId]) {
+            current[moduleId] = { enabled: !!val.enabled };
+        }
+    }
+    config.moduleConfig = current;
+    writeConfig(config);
+    // Persist to MongoDB so config survives Railway redeploys
+    try {
+        const db = require('./db');
+        if (db.settingsRepo) {
+            db.settingsRepo.set('moduleConfig', current).catch(() => {});
+        }
+    } catch { /* DB not initialized yet — skip */ }
+    return getModuleConfig();
+}
+
+/**
+ * Check if a specific module is enabled.
+ * @param {string} moduleId
+ * @returns {boolean}
+ */
+function isModuleEnabled(moduleId) {
+    const mc = getModuleConfig();
+    return mc[moduleId]?.enabled !== false;
+}
+
+/**
+ * Load module config from MongoDB on boot.
+ * MongoDB is source of truth — overrides config.json.
+ */
+async function loadModuleConfigFromMongo() {
+    try {
+        const db = require('./db');
+        const mongoConfig = await db.settingsRepo.get('moduleConfig');
+        if (mongoConfig && typeof mongoConfig === 'object') {
+            const config = readConfig();
+            config.moduleConfig = mongoConfig;
+            writeConfig(config);
+            const enabledCount = Object.values(mongoConfig).filter(m => m.enabled).length;
+            console.log(`[store] Loaded moduleConfig from MongoDB (${enabledCount}/${Object.keys(mongoConfig).length} enabled)`);
+            return true;
+        }
+        console.log('[store] No moduleConfig in MongoDB — using defaults');
+        return false;
+    } catch (err) {
+        console.warn('[store] loadModuleConfigFromMongo failed:', err.message);
+        return false;
+    }
+}
+
 module.exports = {
     getConfig,
     setAccessToken,
@@ -547,4 +637,8 @@ module.exports = {
     getQualityScoreConfig,
     setQualityScoreConfig,
     loadQualityScoreConfigFromMongo,
+    getModuleConfig,
+    setModuleConfig,
+    isModuleEnabled,
+    loadModuleConfigFromMongo,
 };

@@ -49,7 +49,13 @@
       "Bash(curl -s -m 5 \"http://localhost:3001/api/equity-scan/results\")",
       "Bash(curl -s \"http://localhost:3001/api/equity-scan/universe\")",
       "Bash(npx eslint *)",
-      "Bash(npx acorn *)"
+      "Bash(npx acorn *)",
+      "Bash(node -c server/store.js)",
+      "Bash(node -c server/routes/settings.js)",
+      "Bash(node -c server/services/backgroundScanner.js)",
+      "Bash(node -c server/index-trade/index.js)",
+      "Bash(node -c server/services/signalOutcomeTracker.js)",
+      "Bash(node -c server/services/telegramPoller.js)"
     ]
   }
 }

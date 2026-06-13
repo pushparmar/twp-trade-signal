@@ -1,6 +1,7 @@
 const express = require('express');
-const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken, getPatternConfig, setPatternConfig, getQualityScoreConfig, setQualityScoreConfig } = require('../store');
+const { getTradingDefaults, setTradingDefaults, getTelegramChatId, setTelegramChatId, getTelegramBotToken, setTelegramBotToken, getPatternConfig, setPatternConfig, getQualityScoreConfig, setQualityScoreConfig, getModuleConfig, setModuleConfig, isModuleEnabled } = require('../store');
 const patternRegistry = require('../services/patternRegistry');
+const { broadcast } = require('../sseHub');
 
 const router = express.Router();
 
@@ -86,6 +87,36 @@ router.post('/quality-score', (req, res) => {
   }
   const saved = setQualityScoreConfig(updates);
   res.json(saved);
+});
+
+// ── Module Config ────────────────────────────────────────────────────────────
+// GET  /api/settings/modules → current module config (all modules with metadata)
+// POST /api/settings/modules → update module enabled states
+
+router.get('/modules', (_req, res) => {
+  res.json(getModuleConfig());
+});
+
+router.post('/modules', (req, res) => {
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object') {
+    return res.status(400).json({ error: 'Body must be an object of moduleId → { enabled: bool }' });
+  }
+  const saved = setModuleConfig(updates);
+  // Broadcast to all connected clients so UI updates immediately
+  broadcast('module_config', saved);
+  console.log(`[Settings] Module config updated:`, Object.entries(updates).map(([k, v]) => `${k}=${v.enabled}`).join(', '));
+  res.json(saved);
+});
+
+// Convenience endpoint to check single module status (used by services)
+router.get('/modules/:moduleId', (req, res) => {
+  const { moduleId } = req.params;
+  const config = getModuleConfig();
+  if (!config[moduleId]) {
+    return res.status(404).json({ error: `Unknown module: ${moduleId}` });
+  }
+  res.json({ moduleId, enabled: config[moduleId].enabled });
 });
 
 module.exports = router;

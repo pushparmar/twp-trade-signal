@@ -214,6 +214,7 @@ app.listen(PORT, async () => {
     // enable/disable settings survive Railway redeploys.
     await store.loadPatternConfigFromMongo();
     await store.loadQualityScoreConfigFromMongo();
+    await store.loadModuleConfigFromMongo();
 
     // ── Backfill: any trades already in memory but not yet in MongoDB ───────
     // Covers the race where a trade was placed during the brief window
@@ -249,13 +250,15 @@ app.listen(PORT, async () => {
     console.warn('[TradeArchiver] Could not start:', err.message);
   }
 
-  // Auto-trader — listens for scan alerts and places paper trades automatically.
-  // Disabled by default; user must enable via Dashboard toggle or POST /api/auto-trader/settings.
-  try {
-    autoTrader.start();
-  } catch (err) {
-    console.warn('[AutoTrader] Could not start:', err.message);
-  }
+  // Auto-trader for EQUITY — DISABLED
+  // Equity scans still run and track outcomes via signalOutcomeTracker, but no
+  // auto paper trades are placed. Users can manually add trades from Scanner UI.
+  // Index-trade module has its own separate auto-trade flow via orderManager.js.
+  // try {
+  //   autoTrader.start();
+  // } catch (err) {
+  //   console.warn('[AutoTrader] Could not start:', err.message);
+  // }
 
   // Phase 2 data collection — signal outcome tracker + daily market snapshots.
   // signalOutcomeTracker recovers pending observations from MongoDB on start,
@@ -385,7 +388,7 @@ function _gracefulShutdown(signal) {
   console.log(`[Server] ${signal} received — shutting down gracefully`);
   telegramPoller.stop();
   backgroundScanner.stop();
-  autoTrader.stop();
+  // autoTrader.stop();  // DISABLED — equity auto-trade removed
   dailySnapshotJob.stop();
   indexTrade.stop();
   // Close MongoDB connection so any in-flight writes complete before exit

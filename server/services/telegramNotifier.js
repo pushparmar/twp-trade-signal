@@ -2,6 +2,12 @@ const axios = require('axios');
 const store = require('../store');
 
 async function sendMessage(chatId, text) {
+  // Check module config — skip if telegramAlerts is disabled
+  if (!store.isModuleEnabled('telegramAlerts')) {
+    console.log('[TelegramNotifier] Module disabled — message not sent');
+    return { ok: true, skipped: true, reason: 'module_disabled' };
+  }
+
   const { telegram } = store.getConfig();
   if (!telegram.botToken) throw new Error('Telegram bot token not configured');
   if (!chatId) throw new Error('Chat ID is required');

@@ -274,6 +274,11 @@ function AppShell() {
       .then((r) => setTradingDefaults(r.data))
       .catch(() => {});
 
+    // Load module config — controls which UI pages are visible
+    api.get('/settings/modules')
+      .then((r) => useAppStore.getState().setModuleConfig(r.data))
+      .catch(() => {});
+
     const params = new URLSearchParams(window.location.search);
     if (params.get('kite') === 'connected') {
       setKiteConnected(true);

@@ -981,7 +981,8 @@ export default function PaperTradingPanel() {
 
     return (
         <div className="paper-trading-panel">
-            <AutoTraderSettings />
+            {/* AutoTraderSettings — DISABLED for equity; users add trades manually from Scanner UI */}
+            {/* <AutoTraderSettings /> */}
             <BalanceCard balance={paperBalance} />
 
             <div className="paper-source-filter">

@@ -204,6 +204,14 @@ const useAppStore = create(
   setScreenerStatus:     (status) => set({ screenerStatus: status }),
   setScreenerStatusKind: (kind)   => set({ screenerStatusKind: kind }),
 
+  // ── Module Config — controls which features are enabled ─────────────────────
+  moduleConfig: {},
+  setModuleConfig:     (moduleConfig) => set({ moduleConfig }),
+  isModuleEnabled:     (moduleId) => {
+    const state = useAppStore.getState();
+    return state.moduleConfig[moduleId]?.enabled !== false;
+  },
+
   // ── Equity Scan — progressive results via SSE ────────────────────────────────
   equityScanResults: [],
   equityScanProgress: { done: 0, total: 0, matched: 0 },

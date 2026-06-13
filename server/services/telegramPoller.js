@@ -30,6 +30,12 @@ function getStatus() {
 }
 
 async function start() {
+  // Check module config — skip if telegramPolling is disabled
+  if (!store.isModuleEnabled('telegramPolling')) {
+    console.log('[Telegram] Polling module disabled via settings — not starting');
+    return;
+  }
+
   if (isPolling) throw new Error('Telegram polling is already running');
   const { telegram } = store.getConfig();
   if (!telegram.botToken) throw new Error('Telegram bot token is not configured');

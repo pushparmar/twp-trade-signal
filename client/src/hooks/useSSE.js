@@ -27,6 +27,7 @@ export default function useSSE() {
     addEquityScanBatch: useAppStore.getState().addEquityScanBatch,
     setEquityScanProgress: useAppStore.getState().setEquityScanProgress,
     setEquityScanComplete: useAppStore.getState().setEquityScanComplete,
+    setModuleConfig: useAppStore.getState().setModuleConfig,
   };
 
   useEffect(() => {
@@ -75,6 +76,9 @@ export default function useSSE() {
     es.addEventListener('equity_scan_batch', (e) => h.addEquityScanBatch(JSON.parse(e.data)));
     es.addEventListener('equity_scan_progress', (e) => h.setEquityScanProgress(JSON.parse(e.data)));
     es.addEventListener('equity_scan_complete', (e) => h.setEquityScanComplete(JSON.parse(e.data)));
+
+    // Module config updates — broadcast when settings change
+    es.addEventListener('module_config', (e) => h.setModuleConfig(JSON.parse(e.data)));
 
     return () => es.close();
   }, []); // Empty dependency array - SSE connection stays stable

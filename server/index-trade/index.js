@@ -19,7 +19,16 @@ const orderManager      = require('./orderManager');
 const priceBroadcaster  = require('./priceBroadcaster');
 const tradeStore        = require('./tradeStore');
 
+// Lazy require to avoid circular dependency
+function _store() { return require('../store'); }
+
 async function start() {
+  // Check module config — skip if indexTrade is disabled
+  if (!_store().isModuleEnabled('indexTrade')) {
+    console.log('[IndexTrade] Module disabled via settings — not starting');
+    return;
+  }
+
   // Restore open trades from MongoDB (indexes are created by db/index.js on boot)
   await tradeStore.restore();
 

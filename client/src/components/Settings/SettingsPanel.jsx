@@ -341,12 +341,220 @@ export default function SettingsPanel() {
                     )}
                 </div>
 
+                {/* Module Config */}
+                <ModuleConfigPanel />
+
                 {/* Quality Score Config */}
                 <QualityScoreConfigPanel />
 
                 {/* Pattern Config */}
                 <PatternConfigPanel />
             </div>
+        </div>
+    );
+}
+
+// ── Module Config Panel ──────────────────────────────────────────────────────
+// Controls which server-side services run and which UI pages are visible.
+
+function ModuleConfigPanel() {
+    const [modules, setModules] = useState({});
+    const [draft, setDraft] = useState({});
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [saveMsg, setSaveMsg] = useState('');
+    const [open, setOpen] = useState(true);
+
+    useEffect(() => {
+        api.get('/settings/modules')
+            .then(r => { setModules(r.data); setDraft(r.data); })
+            .catch(() => {})
+            .finally(() => setLoading(false));
+    }, []);
+
+    const hasChanges = JSON.stringify(
+        Object.fromEntries(Object.entries(draft).map(([k, v]) => [k, v.enabled]))
+    ) !== JSON.stringify(
+        Object.fromEntries(Object.entries(modules).map(([k, v]) => [k, v.enabled]))
+    );
+
+    function toggle(moduleId) {
+        setDraft(prev => ({
+            ...prev,
+            [moduleId]: { ...prev[moduleId], enabled: !prev[moduleId].enabled }
+        }));
+        setSaveMsg('');
+    }
+
+    async function save() {
+        setSaving(true);
+        setSaveMsg('');
+        try {
+            // Only send enabled state changes
+            const updates = {};
+            for (const [moduleId, val] of Object.entries(draft)) {
+                if (val.enabled !== modules[moduleId]?.enabled) {
+                    updates[moduleId] = { enabled: val.enabled };
+                }
+            }
+            const r = await api.post('/settings/modules', updates);
+            setModules(r.data);
+            setDraft(r.data);
+            setSaveMsg('✅ Saved — some changes may require page refresh');
+            setTimeout(() => setSaveMsg(''), 5000);
+        } catch (err) {
+            setSaveMsg('❌ Save failed: ' + (err.response?.data?.error || err.message));
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    function reset() {
+        setDraft(modules);
+        setSaveMsg('');
+    }
+
+    if (loading) return null;
+
+    // Group modules by category
+    const serverModules = Object.entries(draft).filter(([_, m]) => m.category === 'server');
+    const uiModules = Object.entries(draft).filter(([_, m]) => m.category === 'ui');
+
+    const enabledCount = Object.values(draft).filter(m => m.enabled).length;
+    const totalCount = Object.keys(draft).length;
+
+    return (
+        <div className="settings-group" style={{ marginTop: 20 }}>
+            <div
+                onClick={() => setOpen(!open)}
+                style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    cursor: 'pointer', marginBottom: open ? 12 : 0,
+                }}
+            >
+                <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    ⚙️ Module Configuration
+                    <span style={{
+                        fontSize: 11, padding: '2px 8px', borderRadius: 10,
+                        background: '#228be6', color: '#fff',
+                    }}>{enabledCount}/{totalCount} enabled</span>
+                </h3>
+                <span style={{ fontSize: 12, color: '#868e96' }}>{open ? '▼' : '▶'}</span>
+            </div>
+
+            {open && (
+                <>
+                    <p className="diag-hint" style={{ marginBottom: 12 }}>
+                        Toggle which features run on the server and which tabs appear in the UI.
+                        {hasChanges && <span style={{ color: '#ffd43b', marginLeft: 8 }}>● Unsaved changes</span>}
+                    </p>
+
+                    {/* Server-side modules */}
+                    <div style={{ marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#868e96', marginBottom: 8 }}>
+                            🖥️ Server-side Services
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 8 }}>
+                            {serverModules.map(([moduleId, mod]) => {
+                                const changed = mod.enabled !== modules[moduleId]?.enabled;
+                                return (
+                                    <div
+                                        key={moduleId}
+                                        onClick={() => toggle(moduleId)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: 10,
+                                            padding: '8px 12px', borderRadius: 6,
+                                            background: mod.enabled ? 'rgba(81, 207, 102, 0.1)' : 'var(--bg-secondary)',
+                                            border: `1px solid ${mod.enabled ? '#51cf66' : 'var(--border)'}`,
+                                            cursor: 'pointer',
+                                            outline: changed ? '2px solid #ffd43b' : 'none',
+                                            outlineOffset: 1,
+                                        }}
+                                    >
+                                        <span style={{
+                                            width: 20, height: 20, borderRadius: 4,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            background: mod.enabled ? '#51cf66' : 'var(--border)',
+                                            color: mod.enabled ? '#fff' : 'var(--text-muted)',
+                                            fontSize: 12, fontWeight: 600,
+                                        }}>
+                                            {mod.enabled ? '✓' : '×'}
+                                        </span>
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontSize: 13, fontWeight: 500 }}>{mod.label}</div>
+                                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{mod.description}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* UI modules */}
+                    <div style={{ marginBottom: 16 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: '#868e96', marginBottom: 8 }}>
+                            📱 UI Pages / Tabs
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
+                            {uiModules.map(([moduleId, mod]) => {
+                                const changed = mod.enabled !== modules[moduleId]?.enabled;
+                                return (
+                                    <div
+                                        key={moduleId}
+                                        onClick={() => toggle(moduleId)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: 10,
+                                            padding: '8px 12px', borderRadius: 6,
+                                            background: mod.enabled ? 'rgba(77, 171, 247, 0.1)' : 'var(--bg-secondary)',
+                                            border: `1px solid ${mod.enabled ? '#4dabf7' : 'var(--border)'}`,
+                                            cursor: 'pointer',
+                                            outline: changed ? '2px solid #ffd43b' : 'none',
+                                            outlineOffset: 1,
+                                        }}
+                                    >
+                                        <span style={{
+                                            width: 20, height: 20, borderRadius: 4,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            background: mod.enabled ? '#4dabf7' : 'var(--border)',
+                                            color: mod.enabled ? '#fff' : 'var(--text-muted)',
+                                            fontSize: 12, fontWeight: 600,
+                                        }}>
+                                            {mod.enabled ? '✓' : '×'}
+                                        </span>
+                                        <div>
+                                            <div style={{ fontSize: 13, fontWeight: 500 }}>{mod.label}</div>
+                                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{mod.description}</div>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Save / Reset buttons */}
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <button
+                            className="btn btn-primary btn-sm"
+                            onClick={save}
+                            disabled={!hasChanges || saving}
+                        >
+                            {saving ? 'Saving…' : 'Save'}
+                        </button>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={reset}
+                            disabled={!hasChanges || saving}
+                        >
+                            Reset
+                        </button>
+                        {saveMsg && (
+                            <span style={{ fontSize: 12, color: saveMsg.startsWith('✅') ? '#51cf66' : '#ff6b6b' }}>
+                                {saveMsg}
+                            </span>
+                        )}
+                    </div>
+                </>
+            )}
         </div>
     );
 }

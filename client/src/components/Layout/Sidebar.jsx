@@ -47,10 +47,12 @@ function InstItem({ token, label, sublabel, active, onClick }) {
 }
 
 // ── Nav items ─────────────────────────────────────────────────────────────────
+// moduleId maps to the server-side module config key
 const NAV_ITEMS = [
     {
         id: "dashboard",
         label: "Dashboard",
+        moduleId: "uiDashboard",
         icon: (
             <svg
                 width="18"
@@ -72,6 +74,7 @@ const NAV_ITEMS = [
     {
         id: "market",
         label: "Market Watch",
+        moduleId: "uiMarketWatch",
         icon: (
             <svg
                 width="18"
@@ -91,6 +94,7 @@ const NAV_ITEMS = [
     {
         id: "scanner",
         label: "Scanner",
+        moduleId: "uiScanner",
         icon: (
             <svg
                 width="18"
@@ -111,6 +115,7 @@ const NAV_ITEMS = [
     {
         id: "analytics",
         label: "Analytics",
+        moduleId: "uiAnalytics",
         icon: (
             <svg
                 width="18"
@@ -131,6 +136,7 @@ const NAV_ITEMS = [
     {
         id: "backtest",
         label: "Backtest",
+        moduleId: "uiBacktest",
         icon: (
             <svg
                 width="18"
@@ -150,6 +156,7 @@ const NAV_ITEMS = [
     {
         id: "index-trade",
         label: "Index Trade",
+        moduleId: "uiIndexTrade",
         icon: (
             <svg
                 width="18"
@@ -169,6 +176,7 @@ const NAV_ITEMS = [
     {
         id: "equity-scan",
         label: "Equity Scan",
+        moduleId: "uiEquityScan",
         icon: (
             <svg
                 width="18"
@@ -226,9 +234,19 @@ export default function Sidebar({
 }) {
     const isLive = pollingStatus === "running";
     const isMarket = activePage === "market";
-    // Settings tab is hidden by default (visible only when ?setting=1 is in the URL).
-    // All other tabs — including analytics — are always visible.
-    const visibleNav = NAV_ITEMS.filter(item => item.id !== "settings" || showSettings);
+    const moduleConfig = useAppStore(s => s.moduleConfig);
+    // Filter nav items based on:
+    // 1. Settings tab — hidden unless ?setting=1 is in URL
+    // 2. Module config — hide if the UI module is disabled
+    const visibleNav = NAV_ITEMS.filter(item => {
+        // Settings is always available when showSettings is true
+        if (item.id === "settings") return showSettings;
+        // Check module config for other items
+        if (item.moduleId && moduleConfig[item.moduleId]) {
+            return moduleConfig[item.moduleId].enabled !== false;
+        }
+        return true; // Show by default if no moduleId or config not loaded yet
+    });
     const scanAlerts = useAppStore(s => s.scanAlerts);
     const scanCount = scanAlerts.length;
 

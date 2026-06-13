@@ -335,11 +335,21 @@ function onCandleClose(token, interval) {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+// Lazy require to avoid circular dependency
+function _store() { return require('../store'); }
+
 /**
  * Start the tracker — recover pending observations from MongoDB, then
  * subscribe to alertBus for new signals.
+ * Respects module config — if signalTracking is disabled, logs and returns.
  */
 async function start() {
+  // Check module config — skip if signalTracking is disabled
+  if (!_store().isModuleEnabled('signalTracking')) {
+    console.log('[SignalOutcomeTracker] Module disabled via settings — not starting');
+    return;
+  }
+
   await _recoverPending();
   alertBus.on('alert', _onAlert);
   console.log('[SignalOutcomeTracker] ✅ Started — listening on alertBus');
