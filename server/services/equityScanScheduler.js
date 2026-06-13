@@ -1,11 +1,12 @@
 /**
  * equityScanScheduler.js
  *
- * Schedules the equity scan to run once daily at 11:55 PM IST.
+ * Simple daily equity scan scheduler:
  *
- * The scan runs on:
- * - Manual trigger via API endpoint
- * - Scheduled at 23:55 IST (11:55 PM) every night
+ * 1. Daily at 11:55 PM IST → Update candles (fetch latest from Kite, merge FIFO)
+ * 2. Then run scan on updated candles → Store results to MongoDB
+ *
+ * UI requests just read cached results — no live scanning needed.
  */
 
 const equityScanService = require('./equityScanService');
@@ -15,7 +16,7 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 let _scheduledTimeout = null;
 
 /**
- * Schedule the next scan run at 11:55 PM IST.
+ * Schedule the next daily update at 11:55 PM IST.
  */
 function _scheduleNext() {
   if (_scheduledTimeout) {
@@ -38,16 +39,25 @@ function _scheduleNext() {
   const hours = Math.floor(delayMs / (60 * 60 * 1000));
   const mins = Math.floor((delayMs % (60 * 60 * 1000)) / (60 * 1000));
 
-  console.log(`[EquityScanScheduler] Next scan scheduled in ${hours}h ${mins}m (11:55 PM IST)`);
+  console.log(`[EquityScanScheduler] Next daily update in ${hours}h ${mins}m (11:55 PM IST)`);
 
   _scheduledTimeout = setTimeout(async () => {
-    console.log('[EquityScanScheduler] Running scheduled equity scan at 11:55 PM IST');
+    console.log('[EquityScanScheduler] ═══════════════════════════════════════════════════════════════');
+    console.log('[EquityScanScheduler] Starting daily equity update at 11:55 PM IST');
     try {
-      await equityScanService.run();
-      console.log('[EquityScanScheduler] Scheduled scan started successfully');
+      // Step 1: Update candles (fetch latest from Kite, merge FIFO into MongoDB)
+      console.log('[EquityScanScheduler] Step 1: Updating candle cache...');
+      await equityScanService.updateCandles();
+
+      // Step 2: Run scan on updated candles + store results
+      console.log('[EquityScanScheduler] Step 2: Running pattern scan...');
+      await equityScanService.runAndStore();
+
+      console.log('[EquityScanScheduler] Daily update complete');
     } catch (err) {
-      console.error('[EquityScanScheduler] Scheduled scan failed:', err.message);
+      console.error('[EquityScanScheduler] Daily update failed:', err.message);
     }
+    console.log('[EquityScanScheduler] ═══════════════════════════════════════════════════════════════');
     // Schedule the next run (tomorrow at 11:55 PM)
     _scheduleNext();
   }, delayMs);

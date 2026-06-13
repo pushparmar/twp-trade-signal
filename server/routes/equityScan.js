@@ -1,45 +1,67 @@
 /**
  * routes/equityScan.js
  *
- * On-demand equity scan API.
- *
- * POST /api/equity-scan/run
- *   Triggers a full NSE equity scan (4H / 1D / 1W).
- *   Non-blocking — returns immediately with { status: 'started'|'cached'|'running' }.
- *   If the scan was already run today the cached status is returned, no re-scan.
- *
- * GET /api/equity-scan/status
- *   Returns current scan state: running, progress, resultCount, cachedToday.
+ * Simplified equity scan API:
  *
  * GET /api/equity-scan/results
- *   Returns stored results for today (or ?date=YYYY-MM-DD for a previous day).
+ *   Returns cached scan results for today (or ?date=YYYY-MM-DD).
+ *   This is the main endpoint — UI just reads cached results.
+ *
+ * GET /api/equity-scan/status
+ *   Returns: { scanDate, hasResults, resultCount }
+ *
+ * POST /api/equity-scan/run
+ *   Manual trigger: update candles + run scan + store results.
+ *   Returns cached status if already scanned today.
  *
  * POST /api/equity-scan/rerun
- *   Force re-run even if already cached today (clears in-memory date guard).
+ *   Force re-run (bypass today's cache check).
  *
- * POST /api/equity-scan/cache-scan
- *   Run a filtered scan on CACHED candles only — zero Kite API calls.
- *   Body: { patternIds?: string[], intervals?: string[] }
- *   Returns results directly (not stored to MongoDB).
+ * GET /api/equity-scan/universe
+ *   Returns stock counts (NSE, BSE, F&O, non-F&O).
  *
  * GET /api/equity-scan/patterns
- *   Returns list of all available patterns for dropdown selection.
+ *   Returns list of available patterns for filter dropdown.
  *
  * POST /api/equity-scan/clear-candle-cache
- *   Delete all stored candle history from MongoDB (equity_candle_cache collection).
- *   The next scan run will re-fetch everything from the Kite historical API and
- *   rebuild the cache from scratch.  Useful when candle data looks stale or corrupt.
+ *   Delete candle history — next scan re-fetches everything from Kite.
+ *
+ * POST /api/equity-scan/clear-scan-results
+ *   Delete scan results — next scan regenerates patterns.
  */
 
 const express               = require('express');
 const equityScan            = require('../services/equityScanService');
 const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
 const equityScanRepo        = require('../db/repositories/equityScanRepo');
-const candleStore           = require('../services/candleStore');
 
 const router = express.Router();
 
-// ── Trigger scan ──────────────────────────────────────────────────────────────
+// ── Main endpoint: Get cached results ─────────────────────────────────────────
+
+router.get('/results', async (req, res) => {
+  try {
+    const { date } = req.query; // optional YYYY-MM-DD
+    const results = await equityScan.getResults(date ?? undefined);
+    return res.json(results);
+  } catch (err) {
+    console.error('[equityScan] /results error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Status check ──────────────────────────────────────────────────────────────
+
+router.get('/status', async (req, res) => {
+  try {
+    const status = await equityScan.getStatus();
+    return res.json(status);
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Manual trigger: update candles + run scan ─────────────────────────────────
 
 router.post('/run', async (req, res) => {
   try {
@@ -55,9 +77,7 @@ router.post('/run', async (req, res) => {
 
 router.post('/rerun', async (req, res) => {
   try {
-    // Clear in-memory date guard so the next run() ignores today's cache
-    equityScan._forceRun();
-    const result = await equityScan.run();
+    const result = await equityScan.rerun();
     return res.json(result);
   } catch (err) {
     console.error('[equityScan] /rerun error:', err.message);
@@ -65,30 +85,7 @@ router.post('/rerun', async (req, res) => {
   }
 });
 
-// ── Poll status ───────────────────────────────────────────────────────────────
-
-router.get('/status', (req, res) => {
-  try {
-    return res.json(equityScan.getStatus());
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Fetch results ─────────────────────────────────────────────────────────────
-
-router.get('/results', async (req, res) => {
-  try {
-    const { date } = req.query; // optional YYYY-MM-DD
-    const results  = await equityScan.getResults(date ?? undefined);
-    return res.json(results);
-  } catch (err) {
-    console.error('[equityScan] /results error:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Get universe (all stocks to be scanned) ───────────────────────────────────
+// ── Get universe (stock counts) ───────────────────────────────────────────────
 
 router.get('/universe', (req, res) => {
   try {
@@ -112,34 +109,15 @@ router.get('/patterns', (req, res) => {
   }
 });
 
-// ── Cache-only scan (no Kite API calls) ───────────────────────────────────────
-
-router.post('/cache-scan', async (req, res) => {
-  try {
-    const { patternIds, intervals } = req.body || {};
-    const result = await equityScan.runCacheOnly({ patternIds, intervals });
-    return res.json(result);
-  } catch (err) {
-    console.error('[equityScan] /cache-scan error:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Clear candle cache (force full re-fetch on next scan) ─────────────────────
+// ── Clear candle cache ────────────────────────────────────────────────────────
 
 router.post('/clear-candle-cache', async (req, res) => {
   try {
-    // Clear MongoDB candle cache
     const deleted = await equityCandleCacheRepo.clearAll();
-    // Clear in-memory candle store (important! otherwise scan uses stale memory data)
-    const memCleared = candleStore.clearAll();
-    // Also reset the in-memory date guard so the next run() doesn't skip
-    equityScan._forceRun();
     return res.json({
-      ok:      true,
+      ok: true,
       deleted,
-      memCleared,
-      message: `Cleared ${deleted} MongoDB entries + ${memCleared} in-memory buffers. Next scan will re-fetch from Kite.`,
+      message: `Cleared ${deleted} candle entries. Next scan will re-fetch from Kite.`,
     });
   } catch (err) {
     console.error('[equityScan] /clear-candle-cache error:', err.message);
@@ -147,39 +125,18 @@ router.post('/clear-candle-cache', async (req, res) => {
   }
 });
 
-// ── Clear scan results (force recalculation on next scan) ────────────────────
+// ── Clear scan results ────────────────────────────────────────────────────────
 
 router.post('/clear-scan-results', async (req, res) => {
   try {
-    // Clear scan results from MongoDB
     const deleted = await equityScanRepo.clearAll();
-    // Reset the in-memory date guard so the next run() recalculates
-    equityScan._forceRun();
     return res.json({
-      ok:      true,
+      ok: true,
       deleted,
-      message: `Cleared ${deleted} scan results. Next scan will recalculate patterns.`,
+      message: `Cleared ${deleted} scan results. Next scan will regenerate.`,
     });
   } catch (err) {
     console.error('[equityScan] /clear-scan-results error:', err.message);
-    return res.status(500).json({ error: err.message });
-  }
-});
-
-// ── Trim existing candle cache (reduce storage by ~80-90%) ────────────────────
-
-router.post('/trim-candle-cache', async (req, res) => {
-  try {
-    const result = await equityCandleCacheRepo.trimExistingCache();
-    return res.json({
-      ok:      true,
-      processed: result.processed,
-      trimmed:   result.trimmed,
-      savedMB:   (result.savedBytes / 1024 / 1024).toFixed(2),
-      message: `Trimmed ${result.trimmed}/${result.processed} cached entries. Saved ~${(result.savedBytes / 1024 / 1024).toFixed(2)} MB.`,
-    });
-  } catch (err) {
-    console.error('[equityScan] /trim-candle-cache error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });

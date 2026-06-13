@@ -1,12 +1,14 @@
 /**
  * EquityScanPanel.jsx
  *
- * On-demand, once-a-day full equity scan panel — shown in the Manage Stocks tab.
+ * Simple equity scan UI:
  *
- * Scans ALL NSE EQ stocks (F&O + non-F&O) across 4H / 1D / 1W timeframes.
- * Results are cached in MongoDB for the day — no re-fetching.
+ * 1. On mount → fetch cached results from /api/equity-scan/results
+ * 2. Display results in table with client-side filters
+ * 3. "Refresh" button → fetch latest cached results
+ * 4. "Run Scan" button → trigger server scan (if no results today)
  *
- * Mirrors the table style of ScanAlertsPage but is completely standalone.
+ * All filtering is client-side — no server calls for filter changes.
  */
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
@@ -28,18 +30,6 @@ function relativeTime(ts) {
     if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
     if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
     return `${Math.floor(diffSec / 86400)}d ago`;
-}
-
-function fmtTime(isoStr) {
-    if (!isoStr) return "—";
-    // isoStr may be ISO date string from DB
-    const d = new Date(isoStr);
-    if (isNaN(d)) return "—";
-    const IST_MS = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(d.getTime() + IST_MS);
-    const h = String(ist.getUTCHours()).padStart(2, "0");
-    const m = String(ist.getUTCMinutes()).padStart(2, "0");
-    return `${h}:${m}`;
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -167,7 +157,6 @@ function EqScanRow({ alert }) {
                     </span>
                 )}
             </td>
-            {/* Entry / SL / Target columns */}
             <td className="scan-cell scan-cell--price" style={{ color: "var(--text-primary)" }}>
                 {alert.close != null ? fmt(alert.close) : "—"}
             </td>
@@ -190,12 +179,6 @@ const TF_OPTIONS = [
     { id: "day", label: "1D" }
 ];
 
-// TF options for cache-scan dropdown (no "all" option — must select specific TF)
-const CACHE_TF_OPTIONS = [
-    { id: "4h", label: "4H" },
-    { id: "day", label: "1D" }
-];
-
 const MIN_RR_OPTIONS = [
     { value: 0, label: "Any R:R" },
     { value: 1.5, label: "≥ 1:1.5" },
@@ -203,26 +186,15 @@ const MIN_RR_OPTIONS = [
     { value: 3, label: "≥ 1:3" }
 ];
 
-/**
- * @param {boolean} [inline=false]  When true, renders without page chrome
- *   (used when embedded inside another panel like MarketWatch).
- *   When false (default), wraps in the standard page container.
- */
 export default function EquityScanPanel({ inline = false }) {
-    // ── Scan state ───────────────────────────────────────────────────────────
-    const [scanStatus, setScanStatus] = useState(null); // server status object
+    // ── State ─────────────────────────────────────────────────────────────────
     const [results, setResults] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [universe, setUniverse] = useState(null); // equity universe info
+    const [scanning, setScanning] = useState(false);
+    const [universe, setUniverse] = useState(null);
+    const [status, setStatus] = useState(null);
 
-
-    // ── Cache-scan state (filtered scan on cached data) ──────────────────────
-    const [availablePatterns, setAvailablePatterns] = useState([]); // patterns from server
-    const [cacheScanPattern, setCacheScanPattern] = useLocalState("eqscan:cacheScanPattern", "all");
-    const [cacheScanTF, setCacheScanTF] = useLocalState("eqscan:cacheScanTF", "day");
-    const [cacheScanLoading, setCacheScanLoading] = useState(false);
-
-    // ── Filter state ─────────────────────────────────────────────────────────
+    // ── Filter state (all client-side) ────────────────────────────────────────
     const [tfFilter, setTfFilter] = useLocalState("eqscan:tfFilter", "all");
     const [signalFilter, setSignalFilter] = useLocalState("eqscan:signalFilter", "all");
     const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "all");
@@ -232,6 +204,7 @@ export default function EquityScanPanel({ inline = false }) {
 
     // ── Token subscription for live LTP ──────────────────────────────────────
     const subscribedRef = useRef(new Set());
+
     useEffect(() => {
         const tokens = results.map(r => Number(r.token)).filter(Boolean);
         const newTokens = [...new Set(tokens)].filter(t => !subscribedRef.current.has(t));
@@ -251,121 +224,88 @@ export default function EquityScanPanel({ inline = false }) {
         };
     }, []);
 
-
-    // ── Load universe + patterns on mount ───────────────────────────────────────
+    // ── Load cached results on mount ──────────────────────────────────────────
     useEffect(() => {
-        async function init() {
+        async function loadData() {
+            setLoading(true);
             try {
-                // Fetch patterns list for filter dropdown
-                const { data: patternsData } = await api.get("/equity-scan/patterns");
-                setAvailablePatterns(patternsData || []);
-
-                // Fetch the equity universe info (stock counts)
-                const { data: universeData } = await api.get("/equity-scan/universe");
-                setUniverse(universeData);
+                const [resultsRes, universeRes, statusRes] = await Promise.all([
+                    api.get("/equity-scan/results"),
+                    api.get("/equity-scan/universe"),
+                    api.get("/equity-scan/status"),
+                ]);
+                setResults(resultsRes.data || []);
+                setUniverse(universeRes.data);
+                setStatus(statusRes.data);
             } catch {
-                // Server not reachable — show neutral state
+                // Server not reachable
+            } finally {
+                setLoading(false);
             }
         }
-        init();
+        loadData();
     }, []);
 
-
     // ── Handlers ──────────────────────────────────────────────────────────────
-    // ── Main scan handler — runs patterns on cached candles from MongoDB ────────
-    // Simple flow: Load candles from DB → Run patterns → Return results directly
-    // No SSE, no polling, no separate results storage needed
-    const handleRun = useCallback(async () => {
-        if (loading) return;
+
+    // Refresh: just re-fetch cached results
+    const handleRefresh = useCallback(async () => {
         setLoading(true);
-        setResults([]);
         try {
-            // Use cache-scan — runs patterns on cached candles, returns results directly
-            const { data } = await api.post("/equity-scan/cache-scan", {
-                intervals: ["4h", "day"],
-                patternIds: null // all patterns
-            });
-            if (data.error) {
-                alert(data.error);
-                return;
-            }
-            setResults(data.results || []);
-            setScanStatus(prev => ({
-                ...prev,
-                cachedToday: true,
-                resultCount: data.count || data.results?.length || 0
-            }));
+            const { data } = await api.get("/equity-scan/results");
+            setResults(data || []);
         } catch (err) {
-            const errMsg = err.response?.data?.error || err.response?.data?.message || err.message;
-            alert(errMsg || "Scan failed");
+            console.error("Refresh failed:", err);
         } finally {
             setLoading(false);
         }
-    }, [loading]);
+    }, []);
 
-    // ── Re-run handler (clears cache first) ─────────────────────────────────────
+    // Run scan: trigger server to update candles + run patterns
+    const handleRunScan = useCallback(async () => {
+        if (scanning) return;
+        setScanning(true);
+        try {
+            const { data } = await api.post("/equity-scan/run");
+            if (data.error) {
+                alert(data.error);
+            } else if (data.status === "cached") {
+                // Already have results, just refresh
+                await handleRefresh();
+            } else if (data.status === "complete") {
+                // Scan complete, fetch results
+                await handleRefresh();
+            }
+        } catch (err) {
+            alert(err.response?.data?.error || err.message || "Scan failed");
+        } finally {
+            setScanning(false);
+        }
+    }, [scanning, handleRefresh]);
+
+    // Force re-run
     const handleRerun = useCallback(async () => {
-        if (loading) return;
-        setLoading(true);
-        setResults([]);
+        if (scanning) return;
+        setScanning(true);
         try {
-            await api.post("/equity-scan/rerun"); // clears cached candles
-            // Then run fresh scan
-            const { data } = await api.post("/equity-scan/cache-scan", {
-                intervals: ["4h", "day"],
-                patternIds: null
-            });
+            const { data } = await api.post("/equity-scan/rerun");
             if (data.error) {
-                alert(data.error);
-                return;
-            }
-            setResults(data.results || []);
-            setScanStatus(prev => ({
-                ...prev,
-                cachedToday: true,
-                resultCount: data.count || data.results?.length || 0
-            }));
-        } catch (err) {
-            const errMsg = err.response?.data?.error || err.response?.data?.message || err.message;
-            alert(errMsg || "Re-run failed");
-        } finally {
-            setLoading(false);
-        }
-    }, [loading]);
-
-    // ── Cache-only scan handler (no Kite API calls) ───────────────────────────
-    const handleCacheScan = useCallback(async () => {
-        if (cacheScanLoading) return;
-        setCacheScanLoading(true);
-        try {
-            const body = {
-                intervals: [cacheScanTF],
-                patternIds: cacheScanPattern === "all" ? null : [cacheScanPattern]
-            };
-            const { data } = await api.post("/equity-scan/cache-scan", body);
-            if (data.error) {
-                console.warn("[EquityScanPanel] Cache scan error:", data.error);
                 alert(data.error);
             } else {
-                setResults(data.results || []);
-                console.log(`[EquityScanPanel] Cache scan: ${data.count} results`);
+                await handleRefresh();
             }
         } catch (err) {
-            console.error("[EquityScanPanel] Cache scan failed:", err);
+            alert(err.response?.data?.error || err.message || "Re-run failed");
         } finally {
-            setCacheScanLoading(false);
+            setScanning(false);
         }
-    }, [cacheScanLoading, cacheScanTF, cacheScanPattern]);
+    }, [scanning, handleRefresh]);
 
     // ── Derived state ─────────────────────────────────────────────────────────
-    const isRunning = scanStatus?.running ?? false;
-    const isPrefetching = scanStatus?.prefetching ?? false;
-    const isCached = scanStatus?.cachedToday ?? false;
-    const progress = scanStatus?.progress ?? { done: 0, total: 0 };
-    const resultCount = scanStatus?.resultCount ?? results.length;
-    const completedAt = scanStatus?.completedAt;
 
-    // Pattern options for dropdown
+    const hasResults = results.length > 0;
+
+    // Pattern options for dropdown (derived from results)
     const patternOptions = useMemo(() => {
         const seen = new Map();
         for (const r of results) {
@@ -379,7 +319,7 @@ export default function EquityScanPanel({ inline = false }) {
         ];
     }, [results]);
 
-    // Filter results
+    // Filter results (all client-side)
     const filtered = useMemo(() => {
         let list = results.filter(r => {
             if (tfFilter !== "all" && r.interval !== tfFilter) return false;
@@ -409,80 +349,8 @@ export default function EquityScanPanel({ inline = false }) {
         return list;
     }, [results, tfFilter, signalFilter, patternFilter, volOnly, minRR, dedup]);
 
-    // ── Status chip ───────────────────────────────────────────────────────────
-    function renderStatusChip() {
-        if (isRunning) {
-            // Phase 1: downloading candles for all stocks (may take several minutes)
-            if (isPrefetching || progress.total === 0) {
-                return (
-                    <span
-                        style={{
-                            padding: "3px 10px",
-                            borderRadius: 12,
-                            fontSize: 12,
-                            fontWeight: 600,
-                            background: "#f08c001a",
-                            color: "#fab005",
-                            border: "1px solid #fab00540"
-                        }}
-                    >
-                        ⟳ Downloading candles for all NSE stocks…
-                    </span>
-                );
-            }
-            // Phase 2: pattern matching (progress counter active)
-            const pct = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
-            return (
-                <span
-                    style={{
-                        padding: "3px 10px",
-                        borderRadius: 12,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        background: "#f08c001a",
-                        color: "#fab005",
-                        border: "1px solid #fab00540"
-                    }}
-                >
-                    ⟳ Scanning patterns… {progress.done}/{progress.total} stocks ({pct}%)
-                </span>
-            );
-        }
-        if (isCached) {
-            return (
-                <span
-                    style={{
-                        padding: "3px 10px",
-                        borderRadius: 12,
-                        fontSize: 12,
-                        fontWeight: 600,
-                        background: "#2f9e441a",
-                        color: "#51cf66",
-                        border: "1px solid #51cf6640"
-                    }}
-                >
-                    ✓ {resultCount} signals · Scanned today {completedAt ? fmtTime(completedAt) : ""}
-                </span>
-            );
-        }
-        return (
-            <span
-                style={{
-                    padding: "3px 10px",
-                    borderRadius: 12,
-                    fontSize: 12,
-                    fontWeight: 500,
-                    background: "var(--bg-secondary)",
-                    color: "var(--text-muted)",
-                    border: "1px solid var(--border)"
-                }}
-            >
-                Not scanned today
-            </span>
-        );
-    }
-
     // ── Render ────────────────────────────────────────────────────────────────
+
     const inner = (
         <div style={{ paddingBottom: 32 }}>
             {/* ── Header ── */}
@@ -529,119 +397,69 @@ export default function EquityScanPanel({ inline = false }) {
                     </div>
                 )}
 
+                {/* Action buttons */}
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    {renderStatusChip()}
+                    {/* Status chip */}
+                    <span
+                        style={{
+                            padding: "3px 10px",
+                            borderRadius: 12,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            background: hasResults ? "#2f9e441a" : "var(--bg-secondary)",
+                            color: hasResults ? "#51cf66" : "var(--text-muted)",
+                            border: `1px solid ${hasResults ? "#51cf6640" : "var(--border)"}`
+                        }}
+                    >
+                        {loading ? "Loading…" : hasResults ? `✓ ${results.length} signals` : "No results"}
+                    </span>
 
-                    {!isRunning && !isCached && (
+                    {/* Refresh button */}
+                    <button
+                        className="mw-subscribe-btn"
+                        onClick={handleRefresh}
+                        disabled={loading}
+                        style={{ fontWeight: 500 }}
+                    >
+                        {loading ? "…" : "↻ Refresh"}
+                    </button>
+
+                    {/* Run scan button (only show if no results) */}
+                    {!hasResults && (
                         <button
                             className="mw-subscribe-btn"
-                            onClick={handleRun}
-                            disabled={loading}
+                            onClick={handleRunScan}
+                            disabled={scanning || loading}
                             style={{ fontWeight: 600 }}
                         >
-                            {loading ? "…" : "▶ Run Full Equity Scan"}
+                            {scanning ? "Scanning…" : "▶ Run Scan"}
                         </button>
                     )}
 
-                    {!isRunning && isCached && (
+                    {/* Re-run link */}
+                    {hasResults && (
                         <button
                             onClick={handleRerun}
+                            disabled={scanning}
                             style={{
                                 fontSize: 11,
                                 background: "none",
                                 border: "none",
                                 color: "var(--text-muted)",
-                                cursor: "pointer",
+                                cursor: scanning ? "wait" : "pointer",
                                 textDecoration: "underline",
                                 padding: 0
                             }}
-                            title="Force re-run today's scan"
+                            title="Force re-run scan"
                         >
-                            Re-run
+                            {scanning ? "Scanning…" : "Re-run"}
                         </button>
                     )}
-                </div>
-
-                {/* ── Cache-only scan section ── */}
-                <div style={{
-                    marginTop: 16,
-                    padding: "12px 14px",
-                    borderRadius: 8,
-                    background: "var(--bg-secondary)",
-                    border: "1px solid var(--border)"
-                }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, color: "var(--text-secondary)" }}>
-                        Quick Scan (from cached data — no API calls)
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                        {/* Pattern dropdown */}
-                        <select
-                            value={cacheScanPattern}
-                            onChange={e => setCacheScanPattern(e.target.value)}
-                            style={{
-                                fontSize: 12,
-                                padding: "6px 10px",
-                                borderRadius: 6,
-                                border: "1px solid var(--border)",
-                                background: "var(--bg-tertiary)",
-                                color: "var(--text-primary)",
-                                cursor: "pointer",
-                                minWidth: 160
-                            }}
-                        >
-                            <option value="all">All Patterns</option>
-                            {availablePatterns.map(p => (
-                                <option key={p.id} value={p.id}>{p.label}</option>
-                            ))}
-                        </select>
-
-                        {/* TF dropdown */}
-                        <select
-                            value={cacheScanTF}
-                            onChange={e => setCacheScanTF(e.target.value)}
-                            style={{
-                                fontSize: 12,
-                                padding: "6px 10px",
-                                borderRadius: 6,
-                                border: "1px solid var(--border)",
-                                background: "var(--bg-tertiary)",
-                                color: "var(--text-primary)",
-                                cursor: "pointer",
-                                minWidth: 80
-                            }}
-                        >
-                            {CACHE_TF_OPTIONS.map(tf => (
-                                <option key={tf.id} value={tf.id}>{tf.label}</option>
-                            ))}
-                        </select>
-
-                        {/* Run button */}
-                        <button
-                            onClick={handleCacheScan}
-                            disabled={cacheScanLoading}
-                            style={{
-                                fontSize: 12,
-                                padding: "6px 14px",
-                                borderRadius: 6,
-                                border: "none",
-                                background: cacheScanLoading ? "var(--border)" : "var(--accent)",
-                                color: "#fff",
-                                cursor: cacheScanLoading ? "wait" : "pointer",
-                                fontWeight: 600
-                            }}
-                        >
-                            {cacheScanLoading ? "Scanning…" : "▶ Run"}
-                        </button>
-
-                        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                            Scans {universe?.total || "~1200"} stocks from MongoDB cache
-                        </span>
-                    </div>
                 </div>
             </div>
 
             {/* ── Filters (only show when results exist) ── */}
-            {(results.length > 0 || isCached) && (
+            {hasResults && (
                 <div
                     style={{
                         display: "flex",
@@ -796,44 +614,8 @@ export default function EquityScanPanel({ inline = false }) {
                 </div>
             )}
 
-            {/* ── Progress bar ── */}
-            {isRunning && (
-                <div
-                    style={{
-                        height: 4,
-                        borderRadius: 2,
-                        background: "var(--border)",
-                        marginBottom: 16,
-                        overflow: "hidden"
-                    }}
-                >
-                    {/* Indeterminate pulse during prefetch, determinate during scan */}
-                    {isPrefetching || progress.total === 0 ? (
-                        <div
-                            style={{
-                                height: "100%",
-                                borderRadius: 2,
-                                background: "#fab005",
-                                width: "40%",
-                                animation: "eq-scan-indeterminate 1.5s ease-in-out infinite"
-                            }}
-                        />
-                    ) : (
-                        <div
-                            style={{
-                                height: "100%",
-                                borderRadius: 2,
-                                background: "#fab005",
-                                width: `${Math.round((progress.done / progress.total) * 100)}%`,
-                                transition: "width 0.3s ease"
-                            }}
-                        />
-                    )}
-                </div>
-            )}
-
             {/* ── Empty state ── */}
-            {!isRunning && results.length === 0 && (
+            {!loading && !hasResults && (
                 <div className="scan-empty">
                     <div className="scan-empty-icon">
                         <svg
@@ -854,32 +636,19 @@ export default function EquityScanPanel({ inline = false }) {
                         </svg>
                     </div>
                     <p className="scan-empty-text">
-                        {isCached
-                            ? "No signals matched today. Try different filters."
-                            : 'Click "Run Full Equity Scan" above to scan all NSE stocks across 4H / 1D / 1W timeframes. Results are cached for the day.'}
+                        No scan results for today. Click "Run Scan" to scan all stocks.
+                    </p>
+                    <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
+                        Scans run automatically at 11:55 PM IST daily.
                     </p>
                 </div>
             )}
 
-            {/* ── Scanning placeholder ── */}
-            {isRunning && results.length === 0 && (
+            {/* ── Loading state ── */}
+            {loading && results.length === 0 && (
                 <div style={{ textAlign: "center", padding: "32px 0", color: "var(--text-muted)" }}>
                     <div style={{ fontSize: 28, marginBottom: 8 }}>⟳</div>
-                    {isPrefetching || progress.total === 0 ? (
-                        <>
-                            <div style={{ fontSize: 14 }}>Downloading candles for all NSE stocks…</div>
-                            <div style={{ fontSize: 12, marginTop: 4 }}>
-                                This may take 5–9 minutes for the first run (non-F&O stocks need historical data)
-                            </div>
-                        </>
-                    ) : (
-                        <>
-                            <div style={{ fontSize: 14 }}>
-                                Scanning patterns… {progress.done} / {progress.total} stocks
-                            </div>
-                            <div style={{ fontSize: 12, marginTop: 4 }}>Results will appear here when complete</div>
-                        </>
-                    )}
+                    <div style={{ fontSize: 14 }}>Loading scan results…</div>
                 </div>
             )}
 
@@ -922,7 +691,7 @@ export default function EquityScanPanel({ inline = false }) {
             <div className="page-header">
                 <div>
                     <h2 className="page-title">Equity Scan</h2>
-                    <p className="page-sub">On-demand scan · All NSE + BSE stocks · 4H / 1D · Cached daily</p>
+                    <p className="page-sub">Daily scan · All NSE + BSE stocks · 4H / 1D</p>
                 </div>
             </div>
             {inner}

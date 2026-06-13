@@ -112,6 +112,30 @@ async function createIndexes() {
 }
 
 /**
+ * Delete scan results for a specific date.
+ * Used before inserting fresh results for the same day.
+ *
+ * @param {string} dateIST  e.g. '2026-05-27'
+ * @returns {Promise<number>} number of documents deleted
+ */
+async function clearForDate(dateIST) {
+  if (!mongo.isReady()) {
+    console.warn('[equityScanRepo] MongoDB not ready — skipping clearForDate');
+    return 0;
+  }
+  try {
+    const result = await mongo.db().collection(COLLECTION).deleteMany({
+      firedAtIST: { $regex: `^${dateIST}` }
+    });
+    console.log(`[equityScanRepo] Cleared ${result.deletedCount} results for ${dateIST}`);
+    return result.deletedCount;
+  } catch (err) {
+    console.warn('[equityScanRepo] clearForDate failed:', err.message);
+    return 0;
+  }
+}
+
+/**
  * Delete all scan results from the collection.
  * Call this to force a fresh recalculation on the next scan run.
  *
@@ -132,4 +156,4 @@ async function clearAll() {
   }
 }
 
-module.exports = { insert, getByDate, hasResultsForDate, clearAll, createIndexes };
+module.exports = { insert, getByDate, hasResultsForDate, clearForDate, clearAll, createIndexes };
