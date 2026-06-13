@@ -38,7 +38,8 @@
       "Bash(node -c server/routes/equityScan.js)",
       "Bash(npm run *)",
       "Bash(node -e \"const db = require\\('./server/db'\\); console.log\\('indexTradeRepo exists:', !!db.indexTradeRepo\\); console.log\\('upsertTrade fn:', typeof db.indexTradeRepo?.upsertTrade\\);\")",
-      "Bash(timeout 5 node index.js)"
+      "Bash(timeout 5 node index.js)",
+      "Bash(curl -X POST http://localhost:3001/api/equity-scan/clear-candle-cache)"
     ]
   }
 }

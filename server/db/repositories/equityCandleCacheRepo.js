@@ -182,11 +182,16 @@ async function createIndexes() {
  * @returns {Promise<number>} number of documents deleted
  */
 async function clearAll() {
+  console.log(`[equityCandleCache] clearAll() called, MongoDB ready: ${mongo.isReady()}`);
   if (!mongo.isReady()) {
     console.warn('[equityCandleCache] MongoDB not ready — skipping clearAll');
     return 0;
   }
   try {
+    // First count how many documents exist
+    const countBefore = await mongo.db().collection(COLLECTION).countDocuments();
+    console.log(`[equityCandleCache] Collection "${COLLECTION}" has ${countBefore} documents before clear`);
+
     const result = await mongo.db().collection(COLLECTION).deleteMany({});
     console.log(`[equityCandleCache] Cleared ${result.deletedCount} candle cache documents`);
     return result.deletedCount;
