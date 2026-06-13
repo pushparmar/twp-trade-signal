@@ -39,6 +39,8 @@ export default function SettingsPanel() {
     const [tgTestMsg, setTgTestMsg] = useState('');
     const [tgTesting, setTgTesting] = useState(false);
     const [clearingDedup, setClearingDedup] = useState(false);
+    const [clearingEquityCache, setClearingEquityCache] = useState(false);
+    const [equityCacheMsg, setEquityCacheMsg] = useState('');
 
     const isRunning = pollingStatus === "running";
     const form = defaultsForm ?? tradingDefaults;
@@ -121,6 +123,22 @@ export default function SettingsPanel() {
             await loadScanStatus();
         } catch { /* ignore */ } finally {
             setClearingDedup(false);
+        }
+    }
+
+    async function clearEquityCache() {
+        if (!window.confirm('Clear all equity candle cache? Next scan will re-fetch from Kite API.')) {
+            return;
+        }
+        setClearingEquityCache(true);
+        setEquityCacheMsg('');
+        try {
+            const r = await api.post('/equity-scan/clear-candle-cache');
+            setEquityCacheMsg(`✅ Cleared ${r.data.deleted} entries`);
+        } catch (err) {
+            setEquityCacheMsg(`❌ ${err.response?.data?.error || err.message}`);
+        } finally {
+            setClearingEquityCache(false);
         }
     }
 
@@ -270,6 +288,24 @@ export default function SettingsPanel() {
                     {scanStatus && (
                         <p className="diag-hint">
                             {scanStatus.dedupSize} dedup entries · scanner {scanStatus.running ? '🟢 running' : '🔴 stopped'}
+                        </p>
+                    )}
+
+                    {/* Clear equity candle cache */}
+                    <div className="diag-row" style={{ marginTop: 10 }}>
+                        <span className="diag-label">Equity candle cache</span>
+                        <button
+                            className="btn btn-sm btn-secondary"
+                            onClick={clearEquityCache}
+                            disabled={clearingEquityCache}
+                            title="Clear cached candles for equity scan. Next scan will re-fetch from Kite API."
+                        >
+                            {clearingEquityCache ? 'Clearing…' : 'Clear cache'}
+                        </button>
+                    </div>
+                    {equityCacheMsg && (
+                        <p className={`diag-result ${equityCacheMsg.startsWith('✅') ? 'diag-result--ok' : 'diag-result--err'}`}>
+                            {equityCacheMsg}
                         </p>
                     )}
 
