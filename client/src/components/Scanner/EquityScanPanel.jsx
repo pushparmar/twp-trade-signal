@@ -216,6 +216,12 @@ export default function EquityScanPanel({ inline = false }) {
     const [universe, setUniverse] = useState(null); // equity universe info
     const pollRef = useRef(null);
 
+    // ── SSE progressive results from store ───────────────────────────────────
+    const equityScanResults = useAppStore(s => s.equityScanResults);
+    const equityScanProgress = useAppStore(s => s.equityScanProgress);
+    const equityScanComplete = useAppStore(s => s.equityScanComplete);
+    const clearEquityScanResults = useAppStore(s => s.clearEquityScanResults);
+
     // ── Cache-scan state (filtered scan on cached data) ──────────────────────
     const [availablePatterns, setAvailablePatterns] = useState([]); // patterns from server
     const [cacheScanPattern, setCacheScanPattern] = useLocalState("eqscan:cacheScanPattern", "all");
@@ -251,6 +257,39 @@ export default function EquityScanPanel({ inline = false }) {
         };
     }, []);
 
+    // ── Polling functions (defined before useEffects that use them) ───────────
+    const startPolling = useCallback(() => {
+        if (pollRef.current) return;
+        pollRef.current = setInterval(async () => {
+            try {
+                const { data: status } = await api.get("/equity-scan/status");
+                setScanStatus(status);
+                if (!status.running) {
+                    if (pollRef.current) {
+                        clearInterval(pollRef.current);
+                        pollRef.current = null;
+                    }
+                    if (status.cachedToday) {
+                        const { data: rows } = await api.get("/equity-scan/results");
+                        setResults(rows);
+                    }
+                }
+            } catch {
+                if (pollRef.current) {
+                    clearInterval(pollRef.current);
+                    pollRef.current = null;
+                }
+            }
+        }, 2000);
+    }, []);
+
+    const stopPolling = useCallback(() => {
+        if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+        }
+    }, []);
+
     // ── Load universe + status + results + patterns on mount ───────────────────
     useEffect(() => {
         async function init() {
@@ -278,7 +317,26 @@ export default function EquityScanPanel({ inline = false }) {
         }
         init();
         return () => stopPolling();
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [startPolling, stopPolling]);
+
+    // ── Sync SSE results to local state ─────────────────────────────────────────
+    useEffect(() => {
+        if (equityScanResults.length > 0) {
+            setResults(equityScanResults);
+        }
+    }, [equityScanResults]);
+
+    // ── Update progress from SSE ──────────────────────────────────────────────
+    useEffect(() => {
+        if (equityScanProgress.done > 0 || equityScanProgress.total > 0) {
+            setScanStatus(prev => ({
+                ...prev,
+                running: !equityScanComplete,
+                progress: { done: equityScanProgress.done, total: equityScanProgress.total },
+                resultCount: equityScanProgress.matched,
+            }));
+        }
+    }, [equityScanProgress, equityScanComplete]);
 
     // ── Resume polling when tab becomes visible again ─────────────────────────
     useEffect(() => {
@@ -298,66 +356,54 @@ export default function EquityScanPanel({ inline = false }) {
         }
         document.addEventListener("visibilitychange", handleVisibilityChange);
         return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-    }, [results.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // ── Polling ───────────────────────────────────────────────────────────────
-    function startPolling() {
-        if (pollRef.current) return;
-        pollRef.current = setInterval(async () => {
-            try {
-                const { data: status } = await api.get("/equity-scan/status");
-                setScanStatus(status);
-                if (!status.running) {
-                    stopPolling();
-                    if (status.cachedToday) {
-                        const { data: rows } = await api.get("/equity-scan/results");
-                        setResults(rows);
-                    }
-                }
-            } catch {
-                stopPolling();
-            }
-        }, 2000);
-    }
-
-    function stopPolling() {
-        if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
-        }
-    }
+    }, [results.length, startPolling]);
 
     // ── Handlers ──────────────────────────────────────────────────────────────
     const handleRun = useCallback(async () => {
         if (loading) return;
         setLoading(true);
+        clearEquityScanResults(); // Clear SSE results before starting
+        setResults([]);
         try {
             const { data } = await api.post("/equity-scan/run");
+            // Handle error status from server
+            if (data.status === "error") {
+                alert(data.error || "Scan failed");
+                return;
+            }
             setScanStatus(prev => ({ ...prev, running: data.status === "started" || data.status === "running" }));
             if (data.status === "started") {
-                startPolling();
+                // Results will stream via SSE — no polling needed
             } else if (data.status === "cached") {
                 const { data: rows } = await api.get("/equity-scan/results");
                 setResults(rows);
             }
-        } catch {
-            // ignore
+        } catch (err) {
+            const errMsg = err.response?.data?.error || err.response?.data?.message || err.message;
+            alert(errMsg || "Scan failed");
         } finally {
             setLoading(false);
         }
-    }, [loading]); // eslint-disable-line react-hooks/exhaustive-dep
+    }, [loading, clearEquityScanResults]); // eslint-disable-line react-hooks/exhaustive-dep
 
     const handleRerun = useCallback(async () => {
+        clearEquityScanResults(); // Clear SSE results before starting
+        setResults([]);
         try {
             await api.post("/equity-scan/rerun");
             const { data } = await api.post("/equity-scan/run");
+            // Handle error status from server
+            if (data.status === "error") {
+                alert(data.error || "Scan failed");
+                return;
+            }
             setScanStatus(prev => ({ ...prev, running: true }));
             if (data.status === "started") {
-                setResults([]);
-                startPolling();
+                // Results will stream via SSE — no polling needed
             }
-        } catch {
-            // ignore
+        } catch (err) {
+            const errMsg = err.response?.data?.error || err.response?.data?.message || err.message;
+            alert(errMsg || "Rerun failed");
         }
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

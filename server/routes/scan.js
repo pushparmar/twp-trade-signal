@@ -45,6 +45,7 @@ const instrumentCache  = require('../services/instrumentCache');
 const foStockRegistry  = require('../services/foStockRegistry');
 const db               = require('../db');
 const alertBus         = require('../services/alertBus');
+const { getConfig }    = require('../services/config');
 
 /**
  * Return the scan universe of F&O-eligible stocks.
@@ -400,6 +401,15 @@ router.post('/reset', (req, res) => {
 
 // ── POST /api/scan ────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
+  // ── Check Kite authentication before starting ─────────────────────────────────
+  const { kite } = getConfig();
+  if (!kite.apiKey || !kite.accessToken) {
+    return res.status(401).json({
+      error: 'Kite not authenticated',
+      message: 'Please login to Kite first from Settings page.'
+    });
+  }
+
   // The default scope ('all') scans ~250 NFO futures × 4 intervals ≈ 1000 pairs.
   // historicalCache enforces ~5.7 req/s — so the first scan can take ~3 minutes
   // before any per-instrument cache hits. Disable the default socket timeout so

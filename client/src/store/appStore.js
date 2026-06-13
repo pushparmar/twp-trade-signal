@@ -203,6 +203,29 @@ const useAppStore = create(
   screenerStatusKind: '',
   setScreenerStatus:     (status) => set({ screenerStatus: status }),
   setScreenerStatusKind: (kind)   => set({ screenerStatusKind: kind }),
+
+  // ── Equity Scan — progressive results via SSE ────────────────────────────────
+  equityScanResults: [],
+  equityScanProgress: { done: 0, total: 0, matched: 0 },
+  equityScanComplete: false,
+
+  addEquityScanBatch: (data) =>
+    set((s) => ({
+      equityScanResults: [...s.equityScanResults, ...data.results],
+      equityScanProgress: data.progress,
+    })),
+
+  setEquityScanProgress: (progress) =>
+    set({ equityScanProgress: progress }),
+
+  setEquityScanComplete: (data) =>
+    set({
+      equityScanComplete: true,
+      equityScanProgress: { done: data.scanned, total: data.scanned, matched: data.resultCount },
+    }),
+
+  clearEquityScanResults: () =>
+    set({ equityScanResults: [], equityScanProgress: { done: 0, total: 0, matched: 0 }, equityScanComplete: false }),
   }),
 );
 

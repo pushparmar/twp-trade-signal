@@ -39,7 +39,17 @@
       "Bash(npm run *)",
       "Bash(node -e \"const db = require\\('./server/db'\\); console.log\\('indexTradeRepo exists:', !!db.indexTradeRepo\\); console.log\\('upsertTrade fn:', typeof db.indexTradeRepo?.upsertTrade\\);\")",
       "Bash(timeout 5 node index.js)",
-      "Bash(curl -X POST http://localhost:3001/api/equity-scan/clear-candle-cache)"
+      "Bash(curl -X POST http://localhost:3001/api/equity-scan/clear-candle-cache)",
+      "Bash(curl -s http://localhost:3001/api/equity-scan/status)",
+      "Bash(curl -s http://localhost:3001/api/equity-scan/results)",
+      "Bash(curl -s http://localhost:3001/api/equity-scan/cache-scan -X POST -H \"Content-Type: application/json\" -d '{\"intervals\":[\"day\"]}')",
+      "Bash(curl -s http://localhost:3001/api/kite/auth/status)",
+      "Bash(curl -s http://localhost:3001/api/equity-scan/run -X POST)",
+      "Bash(curl -s -m 5 http://localhost:3001/api/scan -X POST -H \"Content-Type: application/json\" -d '{\"patternId\":\"kumo-breakout\",\"intervals\":[\"day\"],\"scope\":\"macros\"}')",
+      "Bash(curl -s -m 5 \"http://localhost:3001/api/equity-scan/results\")",
+      "Bash(curl -s \"http://localhost:3001/api/equity-scan/universe\")",
+      "Bash(npx eslint *)",
+      "Bash(npx acorn *)"
     ]
   }
 }

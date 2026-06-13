@@ -25,6 +25,8 @@ const instrumentCache       = require('./instrumentCache');
 const equityScanRepo        = require('../db/repositories/equityScanRepo');
 const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
 const { to4H }              = require('./ichimoku');
+const { getConfig }         = require('./config');
+const { broadcast }         = require('../sseHub');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -65,6 +67,9 @@ const TF_LABELS = { '4h': '4H', 'day': '1D' };
 /** Supported scan intervals (weekly removed - not enough bars). */
 const SCAN_INTERVALS = ['4h', 'day'];
 
+/** Progressive scan settings - stream results in batches to avoid UI freeze */
+const BATCH_SIZE = 50;           // Process 50 instruments at a time
+const BATCH_DELAY_MS = 100;      // 100ms pause between batches for UI breathing room
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -174,6 +179,14 @@ async function isCachedToday() {
 async function run() {
   if (_state.running) {
     return { status: 'running', progress: _state.progress };
+  }
+
+  // ── Check Kite authentication before starting ─────────────────────────────────
+  const { kite } = getConfig();
+  if (!kite.apiKey || !kite.accessToken) {
+    const errMsg = 'Kite not authenticated. Please login to Kite first.';
+    console.error(`[EquityScan] ${errMsg}`);
+    return { status: 'error', error: errMsg };
   }
 
   const today = _istDateStr();
@@ -425,41 +438,42 @@ async function _runScan(scanDate) {
   }
 
   _state.prefetching = false;
-  console.log(`[EquityScan] Starting pattern scan on ${instruments.length} instruments…`);
+  console.log(`[EquityScan] Starting pattern scan on ${instruments.length} instruments (batch size: ${BATCH_SIZE})…`);
 
-  // ── Phase 2: Pattern scan from buffer (no API calls) ──────────────────────
+  // ── Phase 2: Progressive pattern scan with SSE streaming ──────────────────
+  //
+  // Process instruments in batches of BATCH_SIZE, streaming results via SSE
+  // as they're found. This prevents UI freeze on large scans.
 
-  const batch     = [];           // collect all signal docs — bulk insert at end
-  const _dedup    = new Set();    // own dedup, isolated from backgroundScanner
+  const allResults = [];         // collect all signal docs for final DB insert
+  const _dedup     = new Set();  // own dedup, isolated from backgroundScanner
 
   let scanned = 0;
   let matched = 0;
-  let nonFOMatched = 0;  // Track non-F&O matches separately
+  let nonFOMatched = 0;
 
-  for (const inst of instruments) {
+  // Helper to process a single instrument
+  function _scanInstrument(inst) {
     const label = inst.name ?? inst.tradingsymbol;
     const isFO = foTokens.has(Number(inst.instrumentToken));
-    _state.progress.done++;                      // increment per stock, not per interval
+    const batchResults = [];
 
     for (const interval of intervals) {
-      // ── Read candles from buffer (prefetched above — no API calls) ────────
       let candles;
       try {
         if (interval === '4h') {
           const c1h = candleStore.getCandlesSync(inst.instrumentToken, '60minute');
-          candles   = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
+          candles = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
         } else {
-          // 'day' interval — buffer was seeded by the 'day' prefetch above
           candles = candleStore.getCandlesSync(inst.instrumentToken, interval);
         }
-      } catch (err) {
-        // Candle read failed — skip this instrument × interval silently
+      } catch {
+        continue;
       }
 
       if (!candles || candles.length < MIN_BARS) continue;
       scanned++;
 
-      // ── Run all patterns ──────────────────────────────────────────────────
       for (const { id: patternId, label: patternLabel } of patterns) {
         const patternDef = patternRegistry.get(patternId);
         if (!patternDef) continue;
@@ -467,77 +481,122 @@ async function _runScan(scanDate) {
         let result;
         try {
           result = patternDef.run(candles, { ...patternDef.defaultOpts, interval });
-        } catch (err) {
-          // Pattern run error — skip silently
+        } catch {
           continue;
         }
 
         if (!result?.matched || !result.signal) continue;
 
-        // Per-run dedup: at most one signal per (token, interval, pattern, direction)
         const dedupKey = `${inst.instrumentToken}:${interval}:${patternId}:${result.signal}`;
         if (_dedup.has(dedupKey)) continue;
         _dedup.add(dedupKey);
 
         matched++;
-        if (!isFO) {
-          nonFOMatched++;
-          const exch = inst.exchange || 'NSE';
-          console.log(`[EquityScan] ✅ Non-F&O match: ${exch}:${label} (${TF_LABELS[interval]}) ${result.signal} ${patternId}`);
-        }
+        if (!isFO) nonFOMatched++;
 
-        // ── Build result document (same shape as scan_alerts) ─────────────
-        const firedAt    = new Date();
+        const firedAt = new Date();
         const firedAtIST = _istTimeStr(firedAt);
 
-        batch.push({
-          token:          Number(inst.instrumentToken),
-          tradingsymbol:  inst.tradingsymbol,
+        batchResults.push({
+          token:           Number(inst.instrumentToken),
+          tradingsymbol:   inst.tradingsymbol,
           label,
-          exchange:       inst.exchange ?? 'NSE',
+          exchange:        inst.exchange ?? 'NSE',
           patternId,
           patternLabel,
-          signal:         result.signal,
+          signal:          result.signal,
           interval,
-          tfLabel:        TF_LABELS[interval],
-          score:          result.score          ?? null,
-          close:          result.close          ?? null,
-          sl:             result.sl             ?? null,
-          target:         result.target         ?? null,
-          targetSource:   result.targetSource   ?? null,
-          cloudPosition:  result.cloudPosition  ?? null,
-          strength:       result.strength       ?? null,
-          volumeRatio:    result.volumeRatio     ?? null,
-          volumeConfirmed:result.volumeConfirmed ?? null,
-          rsi14:          result.rsi14           ?? null,
-          atr14:          result.atr             ?? null,
-          mtfAligned:     false,                        // no MTF in standalone scan
+          tfLabel:         TF_LABELS[interval],
+          score:           result.score ?? null,
+          close:           result.close ?? null,
+          sl:              result.sl ?? null,
+          target:          result.target ?? null,
+          targetSource:    result.targetSource ?? null,
+          cloudPosition:   result.cloudPosition ?? null,
+          strength:        result.strength ?? null,
+          volumeRatio:     result.volumeRatio ?? null,
+          volumeConfirmed: result.volumeConfirmed ?? null,
+          rsi14:           result.rsi14 ?? null,
+          atr14:           result.atr ?? null,
+          mtfAligned:      false,
           firedAt,
           firedAtIST,
         });
       }
     }
+    return batchResults;
   }
 
-  // ── Bulk insert to MongoDB ─────────────────────────────────────────────────
-  if (batch.length > 0) {
-    await equityScanRepo.insert(batch);
+  // Process in batches with delay between each
+  const totalBatches = Math.ceil(instruments.length / BATCH_SIZE);
+
+  for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
+    const start = batchIdx * BATCH_SIZE;
+    const end = Math.min(start + BATCH_SIZE, instruments.length);
+    const batchInstruments = instruments.slice(start, end);
+    const batchResults = [];
+
+    for (const inst of batchInstruments) {
+      const results = _scanInstrument(inst);
+      if (results.length > 0) {
+        batchResults.push(...results);
+        allResults.push(...results);
+      }
+      _state.progress.done++;
+    }
+
+    // Stream batch results via SSE if any matches found
+    if (batchResults.length > 0) {
+      broadcast('equity_scan_batch', {
+        results: batchResults,
+        progress: { done: _state.progress.done, total: _state.progress.total },
+        batchIdx: batchIdx + 1,
+        totalBatches,
+      });
+    }
+
+    // Update progress via SSE
+    broadcast('equity_scan_progress', {
+      done: _state.progress.done,
+      total: _state.progress.total,
+      matched: allResults.length,
+      batchIdx: batchIdx + 1,
+      totalBatches,
+    });
+
+    // Pause between batches to let UI breathe (except for last batch)
+    if (batchIdx < totalBatches - 1) {
+      await new Promise(resolve => setTimeout(resolve, BATCH_DELAY_MS));
+    }
   }
 
-  _state.resultCount = batch.length;
+  // ── Bulk insert all results to MongoDB ─────────────────────────────────────
+  if (allResults.length > 0) {
+    await equityScanRepo.insert(allResults);
+  }
+
+  _state.resultCount = allResults.length;
   _state.running     = false;
   _state.prefetching = false;
   _state.completedAt = new Date().toISOString();
 
+  // Broadcast completion
+  broadcast('equity_scan_complete', {
+    resultCount: allResults.length,
+    scanned,
+    matched,
+    completedAt: _state.completedAt,
+  });
+
   // Count NSE vs BSE signals
-  const nseSignals = batch.filter(s => s.exchange === 'NSE').length;
-  const bseSignals = batch.filter(s => s.exchange === 'BSE').length;
+  const nseSignals = allResults.filter(s => s.exchange === 'NSE').length;
+  const bseSignals = allResults.filter(s => s.exchange === 'BSE').length;
 
   console.log(`[EquityScan] ═══════════════════════════════════════════════════════════════`);
   console.log(`[EquityScan] SCAN COMPLETE for ${scanDate}`);
   console.log(`[EquityScan]   Instruments scanned: ${scanned}`);
   console.log(`[EquityScan]   Total signals found: ${matched}`);
-  console.log(`[EquityScan]   Signals stored:      ${batch.length}`);
+  console.log(`[EquityScan]   Signals stored:      ${allResults.length}`);
   console.log(`[EquityScan]   ─────────────────────`);
   console.log(`[EquityScan]   F&O signals:     ${matched - nonFOMatched}`);
   console.log(`[EquityScan]   Non-F&O signals: ${nonFOMatched}`);
@@ -588,8 +647,8 @@ function _forceRun() {
 
 /**
  * Get the equity universe that will be scanned.
- * Returns all NSE + BSE equity instruments with their details.
- * @returns {object} Universe breakdown and instrument list
+ * Returns counts only (not full instrument list to avoid 2MB+ responses).
+ * @returns {object} Universe breakdown
  */
 function getUniverse() {
   const instruments = instrumentCache.getAllEquity();
@@ -601,19 +660,13 @@ function getUniverse() {
   const bseStocks = instruments.filter(i => i.exchange === 'BSE');
   const foCount = instruments.filter(i => foTokens.has(Number(i.instrumentToken))).length;
 
+  // Return counts only - full list was ~2MB and caused HTTP2 protocol errors
   return {
     total: instruments.length,
     nseCount: nseStocks.length,
     bseCount: bseStocks.length,
     foCount: foCount,
     nonFoCount: instruments.length - foCount,
-    instruments: instruments.map(i => ({
-      token: i.instrumentToken,
-      symbol: i.tradingsymbol,
-      name: i.name,
-      exchange: i.exchange,
-      isFO: foTokens.has(Number(i.instrumentToken))
-    }))
   };
 }
 

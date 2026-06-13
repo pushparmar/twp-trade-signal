@@ -1129,6 +1129,7 @@ function ScreenerToolbar({ onTfResults, onClear }) {
         let ivScanned = 0;
         let anySucceeded = false;
         let lastErr = null;
+        let isAuthError = false;
 
         for (const r of results) {
           if (r.status === 'fulfilled') {
@@ -1141,9 +1142,21 @@ function ScreenerToolbar({ onTfResults, onClear }) {
             if (matches.length) onTfResults(matches);
           } else {
             const err = r.reason;
-            lastErr = err.response?.data?.error || err.message || 'Request failed';
+            // Check for 401 auth error
+            if (err.response?.status === 401) {
+              isAuthError = true;
+              lastErr = err.response?.data?.message || 'Kite not authenticated. Please login from Settings.';
+            } else {
+              lastErr = err.response?.data?.error || err.message || 'Request failed';
+            }
             console.warn(`[Scan] ${interval} pattern failed:`, lastErr);
           }
+        }
+
+        // If auth error, show prominent message and stop all TFs
+        if (isAuthError) {
+          setStatus(lastErr);
+          setStatusKind('err');
         }
 
         totalMatches += ivMatches;

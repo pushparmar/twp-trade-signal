@@ -24,6 +24,9 @@ export default function useSSE() {
     setMacroData: useAppStore.getState().setMacroData,
     addScanAlert: useAppStore.getState().addScanAlert,
     updateTradeTick: useAppStore.getState().updateTradeTick,
+    addEquityScanBatch: useAppStore.getState().addEquityScanBatch,
+    setEquityScanProgress: useAppStore.getState().setEquityScanProgress,
+    setEquityScanComplete: useAppStore.getState().setEquityScanComplete,
   };
 
   useEffect(() => {
@@ -67,6 +70,11 @@ export default function useSSE() {
     // to 500 ms per trade by tradeWatcher.js. Only fires for OPEN trades whose
     // token is subscribed to the Kite WebSocket.
     es.addEventListener('paper_trade_tick', (e) => h.updateTradeTick(JSON.parse(e.data)));
+
+    // Equity scan progressive results — streamed in batches of 50
+    es.addEventListener('equity_scan_batch', (e) => h.addEquityScanBatch(JSON.parse(e.data)));
+    es.addEventListener('equity_scan_progress', (e) => h.setEquityScanProgress(JSON.parse(e.data)));
+    es.addEventListener('equity_scan_complete', (e) => h.setEquityScanComplete(JSON.parse(e.data)));
 
     return () => es.close();
   }, []); // Empty dependency array - SSE connection stays stable
