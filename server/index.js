@@ -250,15 +250,14 @@ app.listen(PORT, async () => {
     console.warn('[TradeArchiver] Could not start:', err.message);
   }
 
-  // Auto-trader for EQUITY — DISABLED
-  // Equity scans still run and track outcomes via signalOutcomeTracker, but no
-  // auto paper trades are placed. Users can manually add trades from Scanner UI.
-  // Index-trade module has its own separate auto-trade flow via orderManager.js.
-  // try {
-  //   autoTrader.start();
-  // } catch (err) {
-  //   console.warn('[AutoTrader] Could not start:', err.message);
-  // }
+  // Auto-trader for EQUITY — controlled by Module Config (equityAutoTrade)
+  // When enabled, auto-trades patterns where "Order" column is ON in Pattern Config.
+  // Disabled by default — enable in Settings → Module Configuration.
+  try {
+    autoTrader.start();
+  } catch (err) {
+    console.warn('[AutoTrader] Could not start:', err.message);
+  }
 
   // Phase 2 data collection — signal outcome tracker + daily market snapshots.
   // signalOutcomeTracker recovers pending observations from MongoDB on start,

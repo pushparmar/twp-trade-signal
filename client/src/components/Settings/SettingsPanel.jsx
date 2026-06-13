@@ -344,6 +344,9 @@ export default function SettingsPanel() {
                 {/* Module Config */}
                 <ModuleConfigPanel />
 
+                {/* Index Trade Settings */}
+                <IndexTradeSettingsPanel />
+
                 {/* Quality Score Config */}
                 <QualityScoreConfigPanel />
 
@@ -351,6 +354,322 @@ export default function SettingsPanel() {
                 <PatternConfigPanel />
             </div>
         </div>
+    );
+}
+
+// ── Index Trade Settings Panel ───────────────────────────────────────────────
+// Moved from IndexTradePage - contains Trading Window, Pattern Trade, LP Scalper, RSI Filter settings
+
+function IndexTradeSettingsPanel() {
+    const [config, setConfig] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [open, setOpen] = useState(false);
+
+    useEffect(() => {
+        api.get('/index-trade/config')
+            .then(r => setConfig(r.data))
+            .catch(() => {})
+            .finally(() => setLoading(false));
+    }, []);
+
+    async function updateConfig(updates) {
+        try {
+            const r = await api.post('/index-trade/config', updates);
+            setConfig(r.data);
+        } catch (err) {
+            console.error('Failed to update index trade config:', err.message);
+        }
+    }
+
+    if (loading) return <div className="settings-group"><p>Loading index trade settings...</p></div>;
+    if (!config) return null;
+
+    return (
+        <div className="settings-group" style={{ marginTop: 20 }}>
+            <div
+                onClick={() => setOpen(!open)}
+                style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    cursor: 'pointer', marginBottom: open ? 12 : 0,
+                }}
+            >
+                <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    📊 Index Trade Settings
+                    <span style={{
+                        fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                        background: config.enabled ? '#51cf6622' : '#ff6b6b22',
+                        color: config.enabled ? '#51cf66' : '#ff6b6b',
+                    }}>
+                        {config.enabled ? 'SCANNER ON' : 'SCANNER OFF'}
+                    </span>
+                </h3>
+                <span style={{ fontSize: 12, color: '#868e96' }}>{open ? '▼' : '▶'}</span>
+            </div>
+
+            {open && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    {/* Time Filter */}
+                    <TimeFilterConfig config={config} onUpdate={updateConfig} />
+
+                    {/* Pattern Trade Settings */}
+                    <PatternTradeConfig config={config} onUpdate={updateConfig} />
+
+                    {/* Low Premium Scalper */}
+                    <LowPremiumConfig config={config} onUpdate={updateConfig} />
+
+                    {/* RSI Filter */}
+                    <RsiFilterConfig config={config} onUpdate={updateConfig} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+// ── Time Filter Config ────────────────────────────────────────────────────────
+
+function TimeFilterConfig({ config, onUpdate }) {
+    if (!config) return null;
+
+    const startTime = config.tradeStartHHMM ?? '09:20';
+    const endTime   = config.tradeEndHHMM   ?? '15:15';
+    const eodTime   = config.eodCloseHHMM   ?? '15:25';
+
+    function handleChange(key, val) {
+        if (/^\d{2}:\d{2}$/.test(val)) onUpdate({ [key]: val });
+    }
+
+    return (
+        <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                ⏰ Trading Time Window
+                <span style={{ fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#51cf6622', color: '#51cf66' }}>
+                    {startTime} – {endTime} IST
+                </span>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12 }}>
+                No new entries outside this window. All trades force-closed at EOD time.
+            </p>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>No entry before</span>
+                    <input type="time" className="screener-input" value={startTime}
+                        onChange={e => handleChange('tradeStartHHMM', e.target.value)}
+                        style={{ width: 100, fontSize: 12 }} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>No entry after</span>
+                    <input type="time" className="screener-input" value={endTime}
+                        onChange={e => handleChange('tradeEndHHMM', e.target.value)}
+                        style={{ width: 100, fontSize: 12 }} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-muted)' }}>EOD close</span>
+                    <input type="time" className="screener-input" value={eodTime}
+                        onChange={e => handleChange('eodCloseHHMM', e.target.value)}
+                        style={{ width: 100, fontSize: 12 }} />
+                </label>
+            </div>
+        </div>
+    );
+}
+
+// ── Pattern Trade Config ────────────────────────────────────────────────────
+
+function PatternTradeConfig({ config, onUpdate }) {
+    if (!config) return null;
+
+    const c = {
+        maxPatternTrades: config.maxPatternTrades ?? 2,
+        niftyLots:        config.niftyLots        ?? 3,
+        sensexLots:       config.sensexLots       ?? 5,
+        bankniftyLots:    config.bankniftyLots    ?? 3,
+        tslEnabled:       config.tslEnabled       ?? true,
+        tslTriggerPct:    config.tslTriggerPct    ?? 80,
+        tslTrailPct:      config.tslTrailPct      ?? 70,
+    };
+
+    function handleNum(key, raw) {
+        const val = parseInt(raw, 10);
+        if (!isNaN(val) && val >= 0) onUpdate({ [key]: val });
+    }
+
+    return (
+        <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
+                📈 Pattern Trade Settings
+                <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8 }}>
+                    max {c.maxPatternTrades} · NIFTY ×{c.niftyLots} · SENSEX ×{c.sensexLots}
+                </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: 12 }}>
+                <SettingsField label="Max Trades" value={c.maxPatternTrades} onChange={v => handleNum('maxPatternTrades', v)} />
+                <SettingsField label="NIFTY Lots" value={c.niftyLots} onChange={v => handleNum('niftyLots', v)} />
+                <SettingsField label="SENSEX Lots" value={c.sensexLots} onChange={v => handleNum('sensexLots', v)} />
+                <SettingsField label="BANKNIFTY Lots" value={c.bankniftyLots} onChange={v => handleNum('bankniftyLots', v)} />
+            </div>
+            <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ fontSize: 12 }}>
+                    <input type="checkbox" checked={c.tslEnabled}
+                        onChange={() => onUpdate({ tslEnabled: !c.tslEnabled })} style={{ marginRight: 6 }} />
+                    Enable TSL
+                </label>
+                {c.tslEnabled && (
+                    <>
+                        <SettingsField label="Trigger %" value={c.tslTriggerPct} onChange={v => handleNum('tslTriggerPct', v)} width={70} />
+                        <SettingsField label="Trail %" value={c.tslTrailPct} onChange={v => handleNum('tslTrailPct', v)} width={70} />
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+// ── Low Premium Scalper Config ──────────────────────────────────────────────
+
+function LowPremiumConfig({ config, onUpdate }) {
+    if (!config) return null;
+
+    const lp = {
+        lowPremiumEnabled: config.lowPremiumEnabled ?? false,
+        lpEntryMin:        config.lpEntryMin        ?? 5,
+        lpEntryMax:        config.lpEntryMax        ?? 10,
+        lpTarget:          config.lpTarget          ?? 15,
+        lpTslTrigger:      config.lpTslTrigger      ?? 12,
+        lpTslInitialSl:    config.lpTslInitialSl    ?? 8,
+        lpTslTrailPct:     config.lpTslTrailPct     ?? 0.70,
+        lpAvgDownPct:      config.lpAvgDownPct      ?? 0.60,
+        lpAvgDownSlPct:    config.lpAvgDownSlPct    ?? 0.50,
+        lpMaxPositions:    config.lpMaxPositions    ?? 4,
+    };
+
+    function handleField(key, raw) {
+        const val = key === 'lowPremiumEnabled' ? raw : parseFloat(raw);
+        if (key !== 'lowPremiumEnabled' && isNaN(val)) return;
+        onUpdate({ [key]: val });
+    }
+
+    return (
+        <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                💰 Low Premium Scalper
+                <span style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                    background: lp.lowPremiumEnabled ? '#51cf6622' : '#ff6b6b22',
+                    color: lp.lowPremiumEnabled ? '#51cf66' : '#ff6b6b',
+                }}>
+                    {lp.lowPremiumEnabled ? 'ON' : 'OFF'}
+                </span>
+            </div>
+            <label style={{ fontSize: 12, marginBottom: 12, display: 'block' }}>
+                <input type="checkbox" checked={lp.lowPremiumEnabled}
+                    onChange={e => handleField('lowPremiumEnabled', e.target.checked)} style={{ marginRight: 6 }} />
+                Enable LP Scalper
+            </label>
+            {lp.lowPremiumEnabled && (
+                <>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Entry Settings</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 8, marginBottom: 12 }}>
+                        <SettingsField label="Min ₹" value={lp.lpEntryMin} onChange={v => handleField('lpEntryMin', v)} />
+                        <SettingsField label="Max ₹" value={lp.lpEntryMax} onChange={v => handleField('lpEntryMax', v)} />
+                        <SettingsField label="Target ₹" value={lp.lpTarget} onChange={v => handleField('lpTarget', v)} />
+                        <SettingsField label="Max Pos" value={lp.lpMaxPositions} onChange={v => handleField('lpMaxPositions', v)} />
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Avg-Down & TSL</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 8 }}>
+                        <SettingsField label="Drop %" value={lp.lpAvgDownPct} step="0.05" onChange={v => handleField('lpAvgDownPct', v)} />
+                        <SettingsField label="SL Factor" value={lp.lpAvgDownSlPct} step="0.05" onChange={v => handleField('lpAvgDownSlPct', v)} />
+                        <SettingsField label="TSL Trig ₹" value={lp.lpTslTrigger} onChange={v => handleField('lpTslTrigger', v)} />
+                        <SettingsField label="TSL Init ₹" value={lp.lpTslInitialSl} onChange={v => handleField('lpTslInitialSl', v)} />
+                        <SettingsField label="Trail %" value={lp.lpTslTrailPct} step="0.05" onChange={v => handleField('lpTslTrailPct', v)} />
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+// ── RSI Filter Config ────────────────────────────────────────────────────────
+
+function RsiFilterConfig({ config, onUpdate }) {
+    if (!config) return null;
+
+    const c = {
+        rsiFilterEnabled: config.rsiFilterEnabled ?? false,
+        rsiFilterScan:    config.rsiFilterScan    ?? true,
+        rsiFilterOrder:   config.rsiFilterOrder   ?? true,
+        rsiBullishMin:    config.rsiBullishMin    ?? 50,
+        rsiBullishMax:    config.rsiBullishMax    ?? 65,
+        rsiBearishMin:    config.rsiBearishMin    ?? 35,
+        rsiBearishMax:    config.rsiBearishMax    ?? 50,
+    };
+
+    function handleToggle(key) { onUpdate({ [key]: !c[key] }); }
+    function handleNum(key, raw) {
+        const val = parseFloat(raw);
+        if (!isNaN(val)) onUpdate({ [key]: val });
+    }
+
+    return (
+        <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                📊 RSI Filter
+                <span style={{
+                    fontSize: 10, padding: '2px 6px', borderRadius: 4,
+                    background: c.rsiFilterEnabled ? '#51cf6622' : '#ff6b6b22',
+                    color: c.rsiFilterEnabled ? '#51cf66' : '#ff6b6b',
+                }}>
+                    {c.rsiFilterEnabled ? 'ON' : 'OFF'}
+                </span>
+            </div>
+            <label style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
+                <input type="checkbox" checked={c.rsiFilterEnabled}
+                    onChange={() => handleToggle('rsiFilterEnabled')} style={{ marginRight: 6 }} />
+                Enable RSI Filter
+            </label>
+            {c.rsiFilterEnabled && (
+                <>
+                    <div style={{ display: 'flex', gap: 16, marginBottom: 12, fontSize: 12 }}>
+                        <label>
+                            <input type="checkbox" checked={c.rsiFilterScan} onChange={() => handleToggle('rsiFilterScan')} /> Scan Gate
+                        </label>
+                        <label>
+                            <input type="checkbox" checked={c.rsiFilterOrder} onChange={() => handleToggle('rsiFilterOrder')} /> Order Gate
+                        </label>
+                    </div>
+                    <div style={{ display: 'flex', gap: 16, fontSize: 11 }}>
+                        <span>Long:
+                            <input type="number" value={c.rsiBullishMin} onChange={e => handleNum('rsiBullishMin', e.target.value)}
+                                style={{ width: 40, marginLeft: 4, background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', padding: '2px 4px' }} />
+                            –<input type="number" value={c.rsiBullishMax} onChange={e => handleNum('rsiBullishMax', e.target.value)}
+                                style={{ width: 40, background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', padding: '2px 4px' }} />
+                        </span>
+                        <span>Short:
+                            <input type="number" value={c.rsiBearishMin} onChange={e => handleNum('rsiBearishMin', e.target.value)}
+                                style={{ width: 40, marginLeft: 4, background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', padding: '2px 4px' }} />
+                            –<input type="number" value={c.rsiBearishMax} onChange={e => handleNum('rsiBearishMax', e.target.value)}
+                                style={{ width: 40, background: 'var(--bg-primary)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-primary)', padding: '2px 4px' }} />
+                        </span>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+// ── Settings Field Helper ────────────────────────────────────────────────────
+
+function SettingsField({ label, value, onChange, step = '1', width = 80 }) {
+    return (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11 }}>
+            <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+            <input type="number" value={value} step={step} min="0"
+                onChange={e => onChange(e.target.value)}
+                style={{
+                    width, padding: '4px 6px', borderRadius: 4,
+                    border: '1px solid var(--border)', background: 'var(--bg-primary)',
+                    color: 'var(--text-primary)', fontSize: 12,
+                }} />
+        </label>
     );
 }
 
