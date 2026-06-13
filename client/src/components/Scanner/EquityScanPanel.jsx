@@ -167,7 +167,16 @@ function EqScanRow({ alert }) {
                     </span>
                 )}
             </td>
-            <td className="scan-cell scan-cell--price">{alert.close != null ? fmt(alert.close) : "—"}</td>
+            {/* Entry / SL / Target columns */}
+            <td className="scan-cell scan-cell--price" style={{ color: "var(--text-primary)" }}>
+                {alert.close != null ? fmt(alert.close) : "—"}
+            </td>
+            <td className="scan-cell scan-cell--price" style={{ color: "#ff6b6b" }}>
+                {alert.sl != null ? fmt(alert.sl) : "—"}
+            </td>
+            <td className="scan-cell scan-cell--price" style={{ color: "#51cf66" }}>
+                {alert.target != null ? fmt(alert.target) : "—"}
+            </td>
             <td className="scan-cell scan-cell--time">{relativeTime(alert.firedAt)}</td>
         </tr>
     );
@@ -914,7 +923,9 @@ export default function EquityScanPanel({ inline = false }) {
                                 <th className="scan-th">Signal</th>
                                 <th className="scan-th">Pattern</th>
                                 <th className="scan-th">Score</th>
-                                <th className="scan-th">Price @ Alert</th>
+                                <th className="scan-th">Entry</th>
+                                <th className="scan-th" style={{ color: "#ff6b6b" }}>SL</th>
+                                <th className="scan-th" style={{ color: "#51cf66" }}>Target</th>
                                 <th className="scan-th">Time</th>
                             </tr>
                         </thead>
