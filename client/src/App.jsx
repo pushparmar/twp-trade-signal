@@ -196,8 +196,8 @@ function useEodForecastClear() {
 function AppShell() {
   const [activePage, setActivePage] = useState('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  // Settings tab visible only when ?setting=1 is in the URL
-  const showSettings = new URLSearchParams(window.location.search).get('setting') === '1';
+  // Settings tab is always visible now (needed for Module Configuration)
+  const showSettings = true;
   const setKiteConnected = useAppStore((s) => s.setKiteConnected);
   const setPollingStatus = useAppStore((s) => s.setPollingStatus);
   const setTestMode = useAppStore((s) => s.setTestMode);

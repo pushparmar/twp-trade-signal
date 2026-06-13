@@ -25,7 +25,7 @@ const instrumentCache       = require('./instrumentCache');
 const equityScanRepo        = require('../db/repositories/equityScanRepo');
 const equityCandleCacheRepo = require('../db/repositories/equityCandleCacheRepo');
 const { to4H }              = require('./ichimoku');
-const { getConfig }         = require('./config');
+const { getConfig }         = require('../store');
 const { broadcast }         = require('../sseHub');
 
 // ── Constants ─────────────────────────────────────────────────────────────────

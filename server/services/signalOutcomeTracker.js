@@ -1,9 +1,9 @@
 /**
  * signalOutcomeTracker.js
  *
- * Phase 2 data collection — tracks every fired signal candle-by-candle for
- * 20 bars, recording the price path, MFE/MAE, and outcome (target_hit /
- * sl_hit / expired).
+ * Phase 2 data collection — tracks every fired signal candle-by-candle until
+ * SL or target is hit, recording the price path, MFE/MAE, and outcome
+ * (target_hit / sl_hit).
  *
  * Two responsibilities:
  *
@@ -18,8 +18,8 @@
  *      a. Reads the latest closed candle from candleStore.
  *      b. Computes R-multiples (rClose, rHigh, rLow) relative to entry.
  *      c. Updates running MFE/MAE and milestone bars.
- *      d. Checks for target_hit, sl_hit, or expiry at 20 bars.
- *      e. Resolves the outcome or saves progress every 5 bars.
+ *      d. Checks for target_hit or sl_hit (tracks until one is reached).
+ *      e. Resolves the outcome or saves progress every 10 bars.
  *
  * On boot, pending observations are recovered from MongoDB so 1h/4h/day
  * signals that span multiple trading sessions are not lost on server restart.
@@ -54,10 +54,13 @@ function _computeBiasAligned(signal, niftyBias) {
 
 // ── Path shape classification ────────────────────────────────────────────────
 
-function _classifyPath(maeR, mfeR, outcome) {
+function _classifyPath(maeR, mfeR, outcome, barCount) {
+  // Classify based on how the trade progressed
   if (maeR < -0.3 && outcome === 'target_hit') return 'dip_then_run';
   if (mfeR > 0.8  && outcome === 'sl_hit')     return 'run_then_reverse';
   if (mfeR > 1.5  && outcome === 'target_hit') return 'straight_run';
+  if (barCount > 50 && outcome === 'target_hit') return 'slow_grind';
+  if (barCount > 50 && outcome === 'sl_hit') return 'slow_bleed';
   return 'choppy';
 }
 
@@ -269,22 +272,21 @@ function onCandleClose(token, interval) {
       lowR:      +rLow.toFixed(3),
     });
 
-    // ── Check outcome ──────────────────────────────────────────────────────
+    // ── Check outcome — tracks until SL or target is hit (no time limit) ───
     let outcome   = null;
     let exitPrice = null;
 
     if (isBullish) {
+      // For bullish: target hit when high >= target, SL hit when low <= sl
       if (c.high >= obs.target) { outcome = 'target_hit'; exitPrice = obs.target; }
       else if (c.low <= obs.sl) { outcome = 'sl_hit';     exitPrice = obs.sl; }
     } else {
+      // For bearish: target hit when low <= target, SL hit when high >= sl
       if (c.low <= obs.target)  { outcome = 'target_hit'; exitPrice = obs.target; }
       else if (c.high >= obs.sl) { outcome = 'sl_hit';    exitPrice = obs.sl; }
     }
 
-    if (!outcome && obs.barCount >= 20) {
-      outcome   = 'expired';
-      exitPrice = c.close;
-    }
+    // No expiry — track until SL or target is hit
 
     if (outcome) {
       // Compute exit R and returnFromMfeR
@@ -292,7 +294,7 @@ function onCandleClose(token, interval) {
         ? (exitPrice - obs.entry) / obs.riskPerUnit
         : (obs.entry - exitPrice) / obs.riskPerUnit;
       const returnFromMfeR = +(obs.mfeR - exitR).toFixed(3);
-      const pathShape = _classifyPath(obs.maeR, obs.mfeR, outcome);
+      const pathShape = _classifyPath(obs.maeR, obs.mfeR, outcome, obs.barCount);
 
       db.signalOutcomeRepo.resolve(obs.id, {
         outcome,
@@ -312,15 +314,15 @@ function onCandleClose(token, interval) {
 
       _observations.delete(key);
 
-      const emoji = outcome === 'target_hit' ? '🎯'
-        : outcome === 'sl_hit' ? '🛑' : '⏰';
+      const emoji = outcome === 'target_hit' ? '🎯' : '🛑';
       console.log(
         `[SignalOutcomeTracker] ${emoji} ${outcome} — ${obs.signal} ` +
         `${interval} bar ${obs.barCount} | MFE ${obs.mfeR.toFixed(2)}R ` +
         `MAE ${obs.maeR.toFixed(2)}R | returnFromMFE ${returnFromMfeR}R | ${pathShape}`,
       );
-    } else if (obs.barCount % 5 === 0) {
-      // Progress save every 5 bars — prevents data loss on server restart
+    } else if (obs.barCount % 10 === 0) {
+      // Progress save every 10 bars — prevents data loss on server restart
+      // Increased from 5 to 10 since signals can now run for many more bars
       db.signalOutcomeRepo.updateProgress(obs.id, {
         pricePath: obs.pricePath,
         mfeR:      +obs.mfeR.toFixed(3),
@@ -329,6 +331,14 @@ function onCandleClose(token, interval) {
         firstR1Bar:   obs.firstR1Bar,
         firstR2Bar:   obs.firstR2Bar,
       });
+
+      // Log progress for long-running observations
+      if (obs.barCount % 50 === 0) {
+        console.log(
+          `[SignalOutcomeTracker] ⏳ Still tracking — ${obs.signal} ` +
+          `${interval} bar ${obs.barCount} | MFE ${obs.mfeR.toFixed(2)}R MAE ${obs.maeR.toFixed(2)}R`,
+        );
+      }
     }
   }
 }

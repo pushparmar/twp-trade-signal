@@ -55,7 +55,11 @@
       "Bash(node -c server/services/backgroundScanner.js)",
       "Bash(node -c server/index-trade/index.js)",
       "Bash(node -c server/services/signalOutcomeTracker.js)",
-      "Bash(node -c server/services/telegramPoller.js)"
+      "Bash(node -c server/services/telegramPoller.js)",
+      "Bash(node index.js)",
+      "Bash(curl -s http://localhost:3001/api/settings/modules)",
+      "Bash(pkill -f \"node.*index.js\")",
+      "Bash(pkill -9 -f \"node\")"
     ]
   }
 }

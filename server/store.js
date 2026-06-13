@@ -515,7 +515,7 @@ const MODULE_DEFAULTS = {
     // Server-side features
     backgroundScan:      { enabled: true,  label: 'Background Scanner',    category: 'server', description: 'Auto-scan F&O stocks at candle close (15m/1h/4h/day)' },
     telegramAlerts:      { enabled: true,  label: 'Telegram Alerts',       category: 'server', description: 'Send pattern alerts to Telegram' },
-    signalTracking:      { enabled: true,  label: 'Signal Outcome Tracking', category: 'server', description: 'Track signal outcomes (MFE/MAE) for 20 bars' },
+    signalTracking:      { enabled: true,  label: 'Signal Outcome Tracking', category: 'server', description: 'Track signal outcomes (MFE/MAE) until SL/target hit' },
     indexTrade:          { enabled: true,  label: 'Index Trade Auto',      category: 'server', description: 'Auto-trade NIFTY/SENSEX options' },
     telegramPolling:     { enabled: true,  label: 'Telegram Polling',      category: 'server', description: 'Poll Telegram for incoming signals' },
     // UI pages/tabs

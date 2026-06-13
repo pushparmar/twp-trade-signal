@@ -367,8 +367,14 @@ function ModuleConfigPanel() {
 
     useEffect(() => {
         api.get('/settings/modules')
-            .then(r => { setModules(r.data); setDraft(r.data); })
-            .catch(() => {})
+            .then(r => {
+                console.log('[ModuleConfig] Loaded:', r.data);
+                setModules(r.data);
+                setDraft(r.data);
+            })
+            .catch((err) => {
+                console.error('[ModuleConfig] Load failed:', err);
+            })
             .finally(() => setLoading(false));
     }, []);
 
@@ -414,7 +420,7 @@ function ModuleConfigPanel() {
         setSaveMsg('');
     }
 
-    if (loading) return null;
+    if (loading) return <div className="settings-group"><p>Loading modules...</p></div>;
 
     // Group modules by category
     const serverModules = Object.entries(draft).filter(([_, m]) => m.category === 'server');
@@ -422,6 +428,16 @@ function ModuleConfigPanel() {
 
     const enabledCount = Object.values(draft).filter(m => m.enabled).length;
     const totalCount = Object.keys(draft).length;
+
+    // Debug: show if no modules loaded
+    if (totalCount === 0) {
+        return (
+            <div className="settings-group" style={{ marginTop: 20 }}>
+                <h3>⚙️ Module Configuration</h3>
+                <p style={{ color: '#ff6b6b' }}>No modules loaded. Check browser console for errors.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="settings-group" style={{ marginTop: 20 }}>

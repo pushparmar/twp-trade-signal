@@ -45,7 +45,7 @@ const instrumentCache  = require('../services/instrumentCache');
 const foStockRegistry  = require('../services/foStockRegistry');
 const db               = require('../db');
 const alertBus         = require('../services/alertBus');
-const { getConfig }    = require('../services/config');
+const { getConfig }    = require('../store');
 
 /**
  * Return the scan universe of F&O-eligible stocks.
