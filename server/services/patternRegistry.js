@@ -260,18 +260,36 @@ function computeSLTarget(patternId, signal, result, candles, interval) {
 /**
  * TK alignment guard — shared by all active patterns.
  *
- * Bullish setup: Tenkan (green) must be ABOVE Kijun (red).
- * Bearish setup: Kijun (red)   must be ABOVE Tenkan (green).
+ * Bullish setup:
+ *   - Tenkan (green) must be ABOVE Kijun (red)
+ *   - Current price must be ABOVE Kijun
+ *
+ * Bearish setup:
+ *   - Kijun (red) must be ABOVE Tenkan (green)
+ *   - Current price must be BELOW Kijun
  *
  * Returns true when the lines agree with the signal direction,
  * or when tenkan/kijun are unavailable (fail-open so we never
  * silently swallow signals when ichimoku.js return shape changes).
  */
 function _tkAligned(result) {
-  const { signal, tenkan, kijun } = result;
+  const { signal, tenkan, kijun, close } = result;
   if (tenkan == null || kijun == null) return true; // fail-open: data unavailable
-  if (signal === 'bullish') return tenkan > kijun;  // green above red
-  if (signal === 'bearish') return kijun  > tenkan; // red above green
+
+  if (signal === 'bullish') {
+    // Tenkan > Kijun AND price > Kijun
+    if (tenkan <= kijun) return false;
+    if (close != null && close <= kijun) return false;
+    return true;
+  }
+
+  if (signal === 'bearish') {
+    // Kijun > Tenkan AND price < Kijun
+    if (kijun <= tenkan) return false;
+    if (close != null && close >= kijun) return false;
+    return true;
+  }
+
   return true;
 }
 
