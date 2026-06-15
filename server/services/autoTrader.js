@@ -220,6 +220,21 @@ async function _onAlert(alert, source) {
   // This allows disabling auto-trade at runtime without server restart.
   if (!store.isModuleEnabled('equityAutoTrade')) return;
 
+  // ── 0.1 Market hours gate (EARLY CHECK) ───────────────────────────────────
+  // Block ALL equity trades when NSE is closed. MCX symbols handled separately below.
+  // This is an early check to prevent ANY processing when market is closed.
+  const mcxHint = /^(CRUDE|GOLD|SILVER|COPPER|NATURAL|ALUMIN|ZINC|LEAD|NICKEL|MENTHA)/i;
+  const isMcx = alert.exchange === 'MCX' || mcxHint.test(String(alert.label ?? ''));
+
+  if (!isMcx && !isNseOpen()) {
+    // Equity symbol but NSE is closed - block immediately
+    return;
+  }
+  if (isMcx && !isMcxOpen()) {
+    // MCX symbol but MCX is closed - block immediately
+    return;
+  }
+
   // ── 1. Feature gate ──────────────────────────────────────────────────────
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
