@@ -216,6 +216,10 @@ function _round2(v) { return Math.round(v * 100) / 100; }
  * @param {string} source  'background' | 'live' | 'manual'
  */
 async function _onAlert(alert, source) {
+  // ── 0. Module config gate — check on EVERY alert, not just startup ────────
+  // This allows disabling auto-trade at runtime without server restart.
+  if (!store.isModuleEnabled('equityAutoTrade')) return;
+
   // ── 1. Feature gate ──────────────────────────────────────────────────────
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;

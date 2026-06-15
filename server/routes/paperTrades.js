@@ -321,10 +321,16 @@ router.post('/:id/close', (req, res) => {
  * Returns 404 when the trade is not found or is not in PENDING state.
  */
 router.delete('/:id', (req, res) => {
-  const cancelled = cancelPendingTrade(req.params.id);
+  const tradeId = req.params.id;
+  const cancelled = cancelPendingTrade(tradeId);
   if (!cancelled) return res.status(404).json({ error: 'Pending order not found' });
+
+  // Also delete from MongoDB so it doesn't reappear on server restart
+  const db = require('../db');
+  db.tradeRepo.deleteTrade(tradeId);
+
   // Let all clients know the trade is gone
-  broadcast('paper_trade_cancelled', { id: req.params.id });
+  broadcast('paper_trade_cancelled', { id: tradeId });
   broadcast('paper_balance', getPaperBalance());
   res.json({ ok: true });
 });

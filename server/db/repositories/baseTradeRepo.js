@@ -167,6 +167,39 @@ function createTradeRepo(collectionName, logPrefix, mapDocFn, buildDocFn, extraI
       });
   }
 
+  /**
+   * Delete a trade from MongoDB (used when cancelling PENDING orders).
+   * Fire-and-forget — never blocks the caller.
+   */
+  function deleteTrade(tradeId) {
+    if (!tradeId) return;
+
+    const doDelete = () => {
+      mongo.db().collection(COLLECTION)
+        .deleteOne({ tradeId })
+        .then((r) => {
+          if (r.deletedCount > 0) {
+            console.log(`${LOG_PREFIX} deleted trade ${tradeId.slice(0, 8)}… from MongoDB`);
+          }
+        })
+        .catch((err) => {
+          console.warn(`${LOG_PREFIX} deleteTrade failed:`, err.message);
+        });
+    };
+
+    if (!mongo.isReady()) {
+      mongo.waitForReady(10_000).then((ready) => {
+        if (!ready) {
+          console.warn(`${LOG_PREFIX} deleteTrade skipped — MongoDB not ready`);
+          return;
+        }
+        doDelete();
+      });
+      return;
+    }
+    doDelete();
+  }
+
   // ── Read helpers ────────────────────────────────────────────────────────────
 
   async function getOpenTrades() {
@@ -358,6 +391,7 @@ function createTradeRepo(collectionName, logPrefix, mapDocFn, buildDocFn, extraI
     upsertTrade,
     closeTrade,
     updateTrade,
+    deleteTrade,
     getOpenTrades,
     getRecentTrades,
     getByDate,
