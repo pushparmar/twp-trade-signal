@@ -193,6 +193,10 @@ async function _sendTelegramExitAlert(trade) {
  * Only places a BUY order — we never sell options (requires margin).
  */
 function onSignal(signal) {
+    // Module config gate — check on every signal so disabling works without restart
+    const store = require('../store');
+    if (!store.isModuleEnabled('indexTrade')) return;
+
     const config = tradeStore.getConfig();
     if (!config.enabled) return;
     if (!isNseOpen()) return;
@@ -350,6 +354,10 @@ function onSignal(signal) {
  * Each new trade records an avgDownAt price so the monitor knows when to average.
  */
 function _checkLowPremiumEntry() {
+    // Module config gate
+    const store = require('../store');
+    if (!store.isModuleEnabled('indexTrade')) return;
+
     if (!isNseOpen()) return;
     if (!_isWithinTradingWindow()) return; // respect trading time window
 
