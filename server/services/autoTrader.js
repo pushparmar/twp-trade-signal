@@ -677,12 +677,8 @@ async function _onAlert(alert, source) {
 
 /** Start listening for scan alerts. Call once after store is loaded. */
 function start() {
-  // Check module config — skip if equityAutoTrade is disabled
-  if (!store.isModuleEnabled('equityAutoTrade')) {
-    console.log('[AutoTrader] Module disabled via settings — not starting');
-    return;
-  }
-
+  // ALWAYS attach the listener — module config is checked on EVERY alert in _onAlert.
+  // This allows enabling/disabling equityAutoTrade at runtime without server restart.
   alertBus.on('alert', (alert, source) => {
     // _onAlert is async (LTP fetch); attach .catch() so a rejected promise never
     // becomes an unhandled rejection and crashes the process.
@@ -690,7 +686,9 @@ function start() {
       console.error('[AutoTrader] _onAlert error:', err.message),
     );
   });
-  console.log('[AutoTrader] ✅ Started — listening on alertBus (pattern-specific via Settings → Pattern Config → Order column)');
+
+  const enabled = store.isModuleEnabled('equityAutoTrade');
+  console.log(`[AutoTrader] ✅ Started — listening on alertBus (currently ${enabled ? 'ENABLED' : 'DISABLED'} via Module Config)`);
 }
 
 /** Stop listening — called on graceful shutdown. */
