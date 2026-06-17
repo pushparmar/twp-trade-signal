@@ -58,6 +58,93 @@ function ScoreDots({ score, signal }) {
     );
 }
 
+// ── Scan Progress Indicator ───────────────────────────────────────────────────
+
+function ScanProgressBanner({ status }) {
+    if (!status?.running) return null;
+
+    const phaseLabels = {
+        starting: "Starting scan...",
+        updating_candles: "Fetching candles from Kite API...",
+        scanning_patterns: "Running pattern analysis...",
+        complete: "Scan complete!",
+        error: `Error: ${status.error || "Unknown error"}`
+    };
+
+    const phaseEmoji = {
+        starting: "🚀",
+        updating_candles: "📊",
+        scanning_patterns: "🔍",
+        complete: "✅",
+        error: "❌"
+    };
+
+    const label = phaseLabels[status.phase] || status.phase;
+    const emoji = phaseEmoji[status.phase] || "⏳";
+
+    return (
+        <div
+            style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "12px 16px",
+                marginBottom: 16,
+                borderRadius: 8,
+                background: "linear-gradient(90deg, #228be620 0%, #4dabf720 100%)",
+                border: "1px solid #4dabf740",
+                animation: "pulse 2s ease-in-out infinite"
+            }}
+        >
+            {/* Spinner */}
+            <div
+                style={{
+                    width: 20,
+                    height: 20,
+                    border: "2px solid #4dabf740",
+                    borderTopColor: "#4dabf7",
+                    borderRadius: "50%",
+                    animation: "spin 1s linear infinite"
+                }}
+            />
+
+            {/* Status text */}
+            <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#4dabf7" }}>
+                    {emoji} {label}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                    Scanning ~1300 stocks across 3 timeframes (1H, 4H, 1D)
+                </div>
+            </div>
+
+            {/* Phase indicator dots */}
+            <div style={{ display: "flex", gap: 6 }}>
+                {["starting", "updating_candles", "scanning_patterns"].map((phase, i) => {
+                    const phases = ["starting", "updating_candles", "scanning_patterns"];
+                    const currentIdx = phases.indexOf(status.phase);
+                    const isActive = i === currentIdx;
+                    const isDone = i < currentIdx;
+                    return (
+                        <div
+                            key={phase}
+                            style={{
+                                width: 8,
+                                height: 8,
+                                borderRadius: "50%",
+                                background: isDone ? "#51cf66" : isActive ? "#4dabf7" : "var(--border)",
+                                boxShadow: isActive ? "0 0 6px #4dabf7" : "none",
+                                transition: "all 0.3s ease"
+                            }}
+                            title={phaseLabels[phase]}
+                        />
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
 function RRBadge({ entry, sl, target }) {
     if (!entry || !sl || !target) return null;
     const risk = Math.abs(entry - sl);
@@ -380,6 +467,21 @@ export default function EquityScanPanel({ inline = false }) {
 
     const inner = (
         <div style={{ paddingBottom: 32 }}>
+            {/* CSS for animations */}
+            <style>{`
+                @keyframes spin {
+                    from { transform: rotate(0deg); }
+                    to { transform: rotate(360deg); }
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.85; }
+                }
+            `}</style>
+
+            {/* ── Scan Progress Banner ── */}
+            <ScanProgressBanner status={status} />
+
             {/* ── Header ── */}
             <div style={{ marginBottom: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
@@ -433,12 +535,12 @@ export default function EquityScanPanel({ inline = false }) {
                             borderRadius: 12,
                             fontSize: 12,
                             fontWeight: 600,
-                            background: hasResults ? "#2f9e441a" : "var(--bg-secondary)",
-                            color: hasResults ? "#51cf66" : "var(--text-muted)",
-                            border: `1px solid ${hasResults ? "#51cf6640" : "var(--border)"}`
+                            background: scanning ? "#4dabf71a" : hasResults ? "#2f9e441a" : "var(--bg-secondary)",
+                            color: scanning ? "#4dabf7" : hasResults ? "#51cf66" : "var(--text-muted)",
+                            border: `1px solid ${scanning ? "#4dabf740" : hasResults ? "#51cf6640" : "var(--border)"}`
                         }}
                     >
-                        {loading ? "Loading…" : hasResults ? `✓ ${results.length} signals` : "No results"}
+                        {loading ? "Loading…" : scanning ? "🔄 Scanning…" : hasResults ? `✓ ${results.length} signals` : "No results"}
                     </span>
 
                     {/* Refresh button */}
