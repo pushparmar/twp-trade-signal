@@ -23,22 +23,21 @@ const tradeStore        = require('./tradeStore');
 function _store() { return require('../store'); }
 
 async function start() {
-  // Check module config — skip if indexTrade is disabled
-  if (!_store().isModuleEnabled('indexTrade')) {
-    console.log('[IndexTrade] Module disabled via settings — not starting');
-    return;
-  }
+  // ALWAYS restore trades and start the order manager (for EOD close, morning purge).
+  // Module config is checked on every signal/entry, not at startup.
+  // This allows enabling/disabling at runtime without server restart.
 
   // Restore open trades from MongoDB (indexes are created by db/index.js on boot)
   await tradeStore.restore();
 
-  // Start sub-modules
+  // Start sub-modules - ALL must run for lifecycle functions (EOD close, morning purge)
   strikeManager.start();    // resolves ATM strikes, subscribes ticker tokens
   scanner.start();          // polls for candle closes, runs 3 patterns on 1m/5m/15m
-  orderManager.start();     // monitors SL/Target/TSL per-tick, places paper orders
+  orderManager.start();     // monitors SL/Target/TSL per-tick, places paper orders, EOD close
   priceBroadcaster.start(); // pushes option chain prices via SSE every 3s
 
-  console.log('[IndexTrade] Module started');
+  const enabled = _store().isModuleEnabled('indexTrade');
+  console.log(`[IndexTrade] Module started (auto-trade currently ${enabled ? 'ENABLED' : 'DISABLED'} via Module Config)`);
 }
 
 function stop() {
