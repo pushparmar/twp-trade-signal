@@ -55,7 +55,8 @@ router.get('/results', async (req, res) => {
 router.get('/status', async (req, res) => {
   try {
     const status = await equityScan.getStatus();
-    return res.json(status);
+    const progress = equityScan.getScanProgress();
+    return res.json({ ...status, ...progress });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }

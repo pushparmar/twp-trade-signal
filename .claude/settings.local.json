@@ -59,7 +59,14 @@
       "Bash(node index.js)",
       "Bash(curl -s http://localhost:3001/api/settings/modules)",
       "Bash(pkill -f \"node.*index.js\")",
-      "Bash(pkill -9 -f \"node\")"
+      "Bash(pkill -9 -f \"node\")",
+      "Bash(rm -rf /private/tmp/claude-502/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/*/tasks 2>/dev/null; grep -rn \"deleteTrade\\\\|removeTrade\" /Users/pushpendraparmar/Documents/TM/Claude-learning/TelegramToKiteModal/server/db/)",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/settings/module-config\")",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/settings/modules\")",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/auto-trader/settings\")",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/settings/pattern-config\")",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/scan/recent?limit=5\")",
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/equity-scan/results\")"
     ]
   }
 }

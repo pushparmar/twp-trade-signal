@@ -262,27 +262,52 @@ export default function EquityScanPanel({ inline = false }) {
         }
     }, []);
 
-    // Run scan: trigger server to update candles + run patterns
+    // Poll for scan completion
+    const pollForCompletion = useCallback(async () => {
+        const poll = async () => {
+            try {
+                const { data } = await api.get("/equity-scan/status");
+                setStatus(data);
+                if (data.running) {
+                    // Still running, poll again
+                    setTimeout(poll, 2000);
+                } else if (data.phase === "complete" || data.hasResults) {
+                    // Done, fetch results
+                    setScanning(false);
+                    await handleRefresh();
+                } else if (data.phase === "error") {
+                    setScanning(false);
+                    alert(data.error || "Scan failed");
+                }
+            } catch {
+                setScanning(false);
+            }
+        };
+        poll();
+    }, [handleRefresh]);
+
+    // Run scan: trigger server to update candles + run patterns (async)
     const handleRunScan = useCallback(async () => {
         if (scanning) return;
         setScanning(true);
         try {
             const { data } = await api.post("/equity-scan/run");
             if (data.error) {
+                setScanning(false);
                 alert(data.error);
             } else if (data.status === "cached") {
                 // Already have results, just refresh
+                setScanning(false);
                 await handleRefresh();
-            } else if (data.status === "complete") {
-                // Scan complete, fetch results
-                await handleRefresh();
+            } else if (data.status === "started" || data.status === "running") {
+                // Scan started in background, poll for completion
+                pollForCompletion();
             }
         } catch (err) {
-            alert(err.response?.data?.error || err.message || "Scan failed");
-        } finally {
             setScanning(false);
+            alert(err.response?.data?.error || err.message || "Scan failed");
         }
-    }, [scanning, handleRefresh]);
+    }, [scanning, handleRefresh, pollForCompletion]);
 
     // Force re-run
     const handleRerun = useCallback(async () => {
@@ -291,16 +316,17 @@ export default function EquityScanPanel({ inline = false }) {
         try {
             const { data } = await api.post("/equity-scan/rerun");
             if (data.error) {
+                setScanning(false);
                 alert(data.error);
-            } else {
-                await handleRefresh();
+            } else if (data.status === "started" || data.status === "running") {
+                // Scan started in background, poll for completion
+                pollForCompletion();
             }
         } catch (err) {
-            alert(err.response?.data?.error || err.message || "Re-run failed");
-        } finally {
             setScanning(false);
+            alert(err.response?.data?.error || err.message || "Re-run failed");
         }
-    }, [scanning, handleRefresh]);
+    }, [scanning, pollForCompletion]);
 
     // ── Derived state ─────────────────────────────────────────────────────────
 

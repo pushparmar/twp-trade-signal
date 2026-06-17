@@ -56,7 +56,33 @@ const SCAN_INTERVALS = ['60minute', '4h', 'day'];
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
+/** Concurrency limit for parallel Kite API calls (avoid rate limiting). */
+const CONCURRENCY = 10;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/**
+ * Process items in parallel with concurrency limit.
+ * @param {Array} items - Items to process
+ * @param {Function} fn - Async function to call for each item
+ * @param {number} concurrency - Max concurrent operations
+ * @returns {Promise<Array>} Results array
+ */
+async function _parallelWithLimit(items, fn, concurrency) {
+  const results = [];
+  let index = 0;
+
+  async function worker() {
+    while (index < items.length) {
+      const i = index++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 function _istDateStr(date = new Date()) {
   return new Date(date.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -121,18 +147,15 @@ async function updateCandles() {
 
   const stats = { updated: 0, fetched: 0, errors: 0 };
   const toUpsert = [];
+  let processed = 0;
 
-  // Determine which stocks need full fetch vs incremental update
-  const yesterdayIST = (() => {
-    const d = new Date(Date.now() + IST_OFFSET_MS - 86_400_000);
-    return d.toISOString().slice(0, 10);
-  })();
+  // Process stocks in parallel with concurrency limit
+  console.log(`[EquityScan] Processing stocks with concurrency=${CONCURRENCY}...`);
 
-  for (const inst of instruments) {
+  await _parallelWithLimit(instruments, async (inst) => {
     const token = Number(inst.instrumentToken);
     const e60 = cachedCandles.get(`${token}:60minute`);
     const eDay = cachedCandles.get(`${token}:day`);
-
     const hasBoth = e60 != null && eDay != null;
 
     try {
@@ -167,16 +190,16 @@ async function updateCandles() {
         }
         stats.fetched++;
       }
-    } catch (err) {
+    } catch {
       stats.errors++;
     }
 
     // Progress log every 100 stocks
-    const done = stats.updated + stats.fetched + stats.errors;
-    if (done % 100 === 0) {
-      console.log(`[EquityScan] Progress: ${done}/${instruments.length} stocks processed`);
+    processed++;
+    if (processed % 100 === 0) {
+      console.log(`[EquityScan] Progress: ${processed}/${instruments.length} stocks processed`);
     }
-  }
+  }, CONCURRENCY);
 
   // Bulk upsert to MongoDB
   if (toUpsert.length > 0) {
@@ -397,12 +420,21 @@ function getPatternList() {
 // MANUAL TRIGGERS (for API endpoints)
 // ══════════════════════════════════════════════════════════════════════════════
 
+// Track running state for async scan
+let _scanRunning = false;
+let _scanProgress = { phase: 'idle', done: 0, total: 0 };
+
 /**
  * Manual trigger: update candles + run scan.
- * Called by /run endpoint for manual refresh.
+ * Returns immediately, runs in background to avoid HTTP timeout.
  */
 async function run() {
   console.log('[EquityScan] Manual run triggered');
+
+  // Check if already running
+  if (_scanRunning) {
+    return { status: 'running', progress: _scanProgress };
+  }
 
   // Check if already have results today
   const hasResults = await hasResultsToday();
@@ -410,7 +442,61 @@ async function run() {
     return { status: 'cached', message: 'Results already exist for today' };
   }
 
-  // Update candles and run scan
+  // Start scan in background (don't await)
+  _scanRunning = true;
+  _scanProgress = { phase: 'starting', done: 0, total: 0 };
+
+  setImmediate(async () => {
+    try {
+      _scanProgress = { phase: 'updating_candles', done: 0, total: 0 };
+      const candleResult = await updateCandles();
+      if (candleResult.error) {
+        console.error('[EquityScan] Candle update failed:', candleResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: candleResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
+      const scanResult = await runAndStore();
+      if (scanResult.error) {
+        console.error('[EquityScan] Pattern scan failed:', scanResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: scanResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'complete', count: scanResult.count };
+      console.log(`[EquityScan] Background scan complete: ${scanResult.count} results`);
+    } catch (err) {
+      console.error('[EquityScan] Background scan error:', err.message);
+      _scanProgress = { phase: 'error', error: err.message };
+    } finally {
+      _scanRunning = false;
+    }
+  });
+
+  return { status: 'started', message: 'Scan started in background' };
+}
+
+/**
+ * Get current scan progress (for polling).
+ */
+function getScanProgress() {
+  return { running: _scanRunning, ..._scanProgress };
+}
+
+/**
+ * Legacy run function kept for reference - DO NOT USE
+ */
+async function _runSync() {
+  console.log('[EquityScan] Sync run triggered');
+
+  const hasResults = await hasResultsToday();
+  if (hasResults) {
+    return { status: 'cached', message: 'Results already exist for today' };
+  }
+
   const candleResult = await updateCandles();
   if (candleResult.error) {
     return { status: 'error', error: candleResult.error };
@@ -426,21 +512,49 @@ async function run() {
 
 /**
  * Force re-run (bypass today's cache check).
+ * Returns immediately, runs in background.
  */
 async function rerun() {
   console.log('[EquityScan] Force re-run triggered');
 
-  const candleResult = await updateCandles();
-  if (candleResult.error) {
-    return { status: 'error', error: candleResult.error };
+  if (_scanRunning) {
+    return { status: 'running', progress: _scanProgress };
   }
 
-  const scanResult = await runAndStore();
-  if (scanResult.error) {
-    return { status: 'error', error: scanResult.error };
-  }
+  _scanRunning = true;
+  _scanProgress = { phase: 'starting', done: 0, total: 0 };
 
-  return { status: 'complete', count: scanResult.count, scanDate: scanResult.scanDate };
+  setImmediate(async () => {
+    try {
+      _scanProgress = { phase: 'updating_candles', done: 0, total: 0 };
+      const candleResult = await updateCandles();
+      if (candleResult.error) {
+        console.error('[EquityScan] Candle update failed:', candleResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: candleResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
+      const scanResult = await runAndStore();
+      if (scanResult.error) {
+        console.error('[EquityScan] Pattern scan failed:', scanResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: scanResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'complete', count: scanResult.count };
+      console.log(`[EquityScan] Background re-run complete: ${scanResult.count} results`);
+    } catch (err) {
+      console.error('[EquityScan] Background re-run error:', err.message);
+      _scanProgress = { phase: 'error', error: err.message };
+    } finally {
+      _scanRunning = false;
+    }
+  });
+
+  return { status: 'started', message: 'Re-run started in background' };
 }
 
 module.exports = {
@@ -453,6 +567,7 @@ module.exports = {
   rerun,
   getResults,
   getStatus,
+  getScanProgress,
   getUniverse,
   getPatternList,
   hasResultsToday,
