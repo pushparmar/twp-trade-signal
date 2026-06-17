@@ -32,20 +32,30 @@ const COLLECTION = 'equity_candle_cache';
 
 // ── Ichimoku-specific storage optimization ───────────────────────────────────
 // Ichimoku requires minimum 52 bars (Senkou B) + 26 (Chikou) = 78 bars.
-// Store 100 bars (28% buffer) instead of 400-1200 → 75-90% storage reduction.
-const ICHIMOKU_MIN_BARS = 78;
-const STORAGE_BARS = 100;  // buffer above minimum for pattern variations
+//
+// For 4H scans: need 78+ 4H candles → 312+ 1H candles (4 bars per 4H candle)
+// Store 400 1H bars → ~100 4H candles (enough for Ichimoku)
+// Store 100 day bars → enough for daily scans
+//
+// Storage per interval:
+//   60minute: 400 bars (converts to ~100 4H bars)
+//   day:      100 bars
+const STORAGE_BARS_60MIN = 400;  // for 4H conversion via to4H()
+const STORAGE_BARS_DAY = 100;    // direct use
 
 /**
- * Trim candle array to only what's needed for Ichimoku calculations.
- * Keeps the most recent STORAGE_BARS candles, discarding older history.
+ * Trim candle array based on interval.
+ * 60minute needs more bars because it's converted to 4H.
  *
  * @param {object[]} candles - Full candle array
- * @returns {object[]} Trimmed array (most recent 90 bars)
+ * @param {string} interval - '60minute' | 'day'
+ * @returns {object[]} Trimmed array
  */
-function _trimToIchimokuNeeds(candles) {
-  if (!candles || candles.length <= STORAGE_BARS) return candles;
-  return candles.slice(-STORAGE_BARS);
+function _trimToIchimokuNeeds(candles, interval) {
+  if (!candles) return candles;
+  const maxBars = interval === '60minute' ? STORAGE_BARS_60MIN : STORAGE_BARS_DAY;
+  if (candles.length <= maxBars) return candles;
+  return candles.slice(-maxBars);
 }
 
 // ── Freshness ─────────────────────────────────────────────────────────────────
@@ -86,8 +96,8 @@ async function bulkUpsert(docs) {
   let trimmedSize = 0;
 
   const ops = docs.map(({ token, interval, candles }) => {
-    // Trim to Ichimoku minimum (90 bars) before storing
-    const trimmedCandles = _trimToIchimokuNeeds(candles);
+    // Trim based on interval: 60minute needs more bars for 4H conversion
+    const trimmedCandles = _trimToIchimokuNeeds(candles, interval);
     originalSize += candles.length;
     trimmedSize += trimmedCandles.length;
 
@@ -233,8 +243,9 @@ async function trimExistingCache() {
       processed++;
       originalBars += doc.candles.length;
 
-      if (doc.candles.length > STORAGE_BARS) {
-        const trimmedCandles = _trimToIchimokuNeeds(doc.candles);
+      const maxBars = doc.interval === '60minute' ? STORAGE_BARS_60MIN : STORAGE_BARS_DAY;
+      if (doc.candles.length > maxBars) {
+        const trimmedCandles = _trimToIchimokuNeeds(doc.candles, doc.interval);
         trimmedBars += trimmedCandles.length;
         trimmed++;
 

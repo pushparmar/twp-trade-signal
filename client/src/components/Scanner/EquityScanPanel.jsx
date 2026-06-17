@@ -175,6 +175,7 @@ function EqScanRow({ alert }) {
 
 const TF_OPTIONS = [
     { id: "all", label: "All TF" },
+    { id: "60minute", label: "1H" },
     { id: "4h", label: "4H" },
     { id: "day", label: "1D" }
 ];

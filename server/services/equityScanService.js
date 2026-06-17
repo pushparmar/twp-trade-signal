@@ -49,10 +49,10 @@ const FETCH_BARS = {
 const INCR_BARS = { '60minute': 20, 'day': 10 };
 
 /** Human-readable TF label for each interval. */
-const TF_LABELS = { '4h': '4H', 'day': '1D' };
+const TF_LABELS = { '60minute': '1H', '4h': '4H', 'day': '1D' };
 
 /** Supported scan intervals. */
-const SCAN_INTERVALS = ['4h', 'day'];
+const SCAN_INTERVALS = ['60minute', '4h', 'day'];
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -246,7 +246,11 @@ async function runAndStore() {
       // Build candles
       let candles;
       try {
-        if (interval === '4h') {
+        if (interval === '60minute') {
+          // Use 1H candles directly
+          candles = e60?.candles;
+        } else if (interval === '4h') {
+          // Convert 1H to 4H
           const c1h = e60?.candles;
           candles = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
         } else if (interval === 'day') {
