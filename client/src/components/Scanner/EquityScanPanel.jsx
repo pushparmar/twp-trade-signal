@@ -60,8 +60,9 @@ function ScoreDots({ score, signal }) {
 
 // ── Scan Progress Indicator ───────────────────────────────────────────────────
 
-function ScanProgressBanner({ status }) {
-    if (!status?.running) return null;
+function ScanProgressBanner({ status, onDismiss }) {
+    // Show error state even when not running
+    if (!status?.running && status?.phase !== "error") return null;
 
     const phaseLabels = {
         starting: "Starting scan...",
@@ -79,6 +80,7 @@ function ScanProgressBanner({ status }) {
         error: "❌"
     };
 
+    const isError = status.phase === "error";
     const label = phaseLabels[status.phase] || status.phase;
     const emoji = phaseEmoji[status.phase] || "⏳";
 
@@ -91,56 +93,83 @@ function ScanProgressBanner({ status }) {
                 padding: "12px 16px",
                 marginBottom: 16,
                 borderRadius: 8,
-                background: "linear-gradient(90deg, #228be620 0%, #4dabf720 100%)",
-                border: "1px solid #4dabf740",
-                animation: "pulse 2s ease-in-out infinite"
+                background: isError
+                    ? "linear-gradient(90deg, #ff6b6b20 0%, #fa525220 100%)"
+                    : "linear-gradient(90deg, #228be620 0%, #4dabf720 100%)",
+                border: `1px solid ${isError ? "#ff6b6b40" : "#4dabf740"}`,
+                animation: isError ? "none" : "pulse 2s ease-in-out infinite"
             }}
         >
-            {/* Spinner */}
-            <div
-                style={{
-                    width: 20,
-                    height: 20,
-                    border: "2px solid #4dabf740",
-                    borderTopColor: "#4dabf7",
-                    borderRadius: "50%",
-                    animation: "spin 1s linear infinite"
-                }}
-            />
+            {/* Spinner or error icon */}
+            {isError ? (
+                <div style={{ fontSize: 20 }}>❌</div>
+            ) : (
+                <div
+                    style={{
+                        width: 20,
+                        height: 20,
+                        border: "2px solid #4dabf740",
+                        borderTopColor: "#4dabf7",
+                        borderRadius: "50%",
+                        animation: "spin 1s linear infinite"
+                    }}
+                />
+            )}
 
             {/* Status text */}
             <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#4dabf7" }}>
-                    {emoji} {label}
+                <div style={{ fontSize: 13, fontWeight: 600, color: isError ? "#ff6b6b" : "#4dabf7" }}>
+                    {emoji} {isError ? "Scan Failed" : label}
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                    Scanning ~1300 stocks across 3 timeframes (1H, 4H, 1D)
+                    {isError ? status.error : "Scanning ~1300 stocks across 3 timeframes (1H, 4H, 1D)"}
                 </div>
             </div>
 
-            {/* Phase indicator dots */}
-            <div style={{ display: "flex", gap: 6 }}>
-                {["starting", "updating_candles", "scanning_patterns"].map((phase, i) => {
-                    const phases = ["starting", "updating_candles", "scanning_patterns"];
-                    const currentIdx = phases.indexOf(status.phase);
-                    const isActive = i === currentIdx;
-                    const isDone = i < currentIdx;
-                    return (
-                        <div
-                            key={phase}
-                            style={{
-                                width: 8,
-                                height: 8,
-                                borderRadius: "50%",
-                                background: isDone ? "#51cf66" : isActive ? "#4dabf7" : "var(--border)",
-                                boxShadow: isActive ? "0 0 6px #4dabf7" : "none",
-                                transition: "all 0.3s ease"
-                            }}
-                            title={phaseLabels[phase]}
-                        />
-                    );
-                })}
-            </div>
+            {/* Phase indicator dots (hide on error) */}
+            {!isError && (
+                <div style={{ display: "flex", gap: 6 }}>
+                    {["starting", "updating_candles", "scanning_patterns"].map((phase, i) => {
+                        const phases = ["starting", "updating_candles", "scanning_patterns"];
+                        const currentIdx = phases.indexOf(status.phase);
+                        const isActive = i === currentIdx;
+                        const isDone = i < currentIdx;
+                        return (
+                            <div
+                                key={phase}
+                                style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: "50%",
+                                    background: isDone ? "#51cf66" : isActive ? "#4dabf7" : "var(--border)",
+                                    boxShadow: isActive ? "0 0 6px #4dabf7" : "none",
+                                    transition: "all 0.3s ease"
+                                }}
+                                title={phaseLabels[phase]}
+                            />
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* Dismiss button for errors */}
+            {isError && onDismiss && (
+                <button
+                    onClick={onDismiss}
+                    style={{
+                        background: "none",
+                        border: "none",
+                        color: "#ff6b6b",
+                        cursor: "pointer",
+                        fontSize: 18,
+                        padding: "0 4px",
+                        lineHeight: 1
+                    }}
+                    title="Dismiss"
+                >
+                    ×
+                </button>
+            )}
         </div>
     );
 }
@@ -361,13 +390,15 @@ export default function EquityScanPanel({ inline = false }) {
                 } else if (data.phase === "complete" || data.hasResults) {
                     // Done, fetch results
                     setScanning(false);
+                    setStatus(prev => ({ ...prev, phase: "complete" }));
                     await handleRefresh();
                 } else if (data.phase === "error") {
+                    // Error shown in banner, no alert needed
                     setScanning(false);
-                    alert(data.error || "Scan failed");
                 }
             } catch {
                 setScanning(false);
+                setStatus({ phase: "error", error: "Connection lost during scan" });
             }
         };
         poll();
@@ -377,14 +408,16 @@ export default function EquityScanPanel({ inline = false }) {
     const handleRunScan = useCallback(async () => {
         if (scanning) return;
         setScanning(true);
+        setStatus({ running: true, phase: "starting" });
         try {
             const { data } = await api.post("/equity-scan/run");
             if (data.error) {
                 setScanning(false);
-                alert(data.error);
+                setStatus({ phase: "error", error: data.error });
             } else if (data.status === "cached") {
                 // Already have results, just refresh
                 setScanning(false);
+                setStatus(null);
                 await handleRefresh();
             } else if (data.status === "started" || data.status === "running") {
                 // Scan started in background, poll for completion
@@ -392,26 +425,46 @@ export default function EquityScanPanel({ inline = false }) {
             }
         } catch (err) {
             setScanning(false);
-            alert(err.response?.data?.error || err.message || "Scan failed");
+            setStatus({ phase: "error", error: err.response?.data?.error || err.message || "Scan failed" });
         }
     }, [scanning, handleRefresh, pollForCompletion]);
 
-    // Force re-run
+    // Force re-run patterns (no Kite API)
     const handleRerun = useCallback(async () => {
         if (scanning) return;
         setScanning(true);
+        setStatus({ running: true, phase: "scanning_patterns" });
         try {
             const { data } = await api.post("/equity-scan/rerun");
             if (data.error) {
                 setScanning(false);
-                alert(data.error);
+                setStatus({ phase: "error", error: data.error });
             } else if (data.status === "started" || data.status === "running") {
-                // Scan started in background, poll for completion
                 pollForCompletion();
             }
         } catch (err) {
             setScanning(false);
-            alert(err.response?.data?.error || err.message || "Re-run failed");
+            setStatus({ phase: "error", error: err.response?.data?.error || err.message || "Re-run failed" });
+        }
+    }, [scanning, pollForCompletion]);
+
+    // Update candles from Kite API + run patterns (full refresh)
+    const handleUpdateCandles = useCallback(async () => {
+        if (scanning) return;
+        if (!window.confirm("This will fetch fresh candles from Kite API (~5-10 min). Continue?")) return;
+        setScanning(true);
+        setStatus({ running: true, phase: "updating_candles" });
+        try {
+            const { data } = await api.post("/equity-scan/update-candles");
+            if (data.error) {
+                setScanning(false);
+                setStatus({ phase: "error", error: data.error });
+            } else if (data.status === "started" || data.status === "running") {
+                pollForCompletion();
+            }
+        } catch (err) {
+            setScanning(false);
+            setStatus({ phase: "error", error: err.response?.data?.error || err.message || "Update failed" });
         }
     }, [scanning, pollForCompletion]);
 
@@ -480,7 +533,7 @@ export default function EquityScanPanel({ inline = false }) {
             `}</style>
 
             {/* ── Scan Progress Banner ── */}
-            <ScanProgressBanner status={status} />
+            <ScanProgressBanner status={status} onDismiss={() => setStatus(null)} />
 
             {/* ── Header ── */}
             <div style={{ marginBottom: 16 }}>
@@ -579,11 +632,29 @@ export default function EquityScanPanel({ inline = false }) {
                                 textDecoration: "underline",
                                 padding: 0
                             }}
-                            title="Force re-run scan"
+                            title="Force re-run patterns on cached candles"
                         >
                             {scanning ? "Scanning…" : "Re-run"}
                         </button>
                     )}
+
+                    {/* Update Candles link (fetch from Kite API) */}
+                    <button
+                        onClick={handleUpdateCandles}
+                        disabled={scanning}
+                        style={{
+                            fontSize: 11,
+                            background: "none",
+                            border: "none",
+                            color: "#fab005",
+                            cursor: scanning ? "wait" : "pointer",
+                            textDecoration: "underline",
+                            padding: 0
+                        }}
+                        title="Fetch fresh candles from Kite API (takes 5-10 min)"
+                    >
+                        {scanning ? "…" : "⚡ Update Candles"}
+                    </button>
                 </div>
             </div>
 

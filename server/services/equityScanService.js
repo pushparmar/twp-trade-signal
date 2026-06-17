@@ -425,11 +425,16 @@ let _scanRunning = false;
 let _scanProgress = { phase: 'idle', done: 0, total: 0 };
 
 /**
- * Manual trigger: update candles + run scan.
+ * Manual trigger: run scan on EXISTING cached candles (no Kite API call).
  * Returns immediately, runs in background to avoid HTTP timeout.
+ *
+ * Flow:
+ * - If results exist for today → return cached (no work)
+ * - If candles exist in MongoDB → run patterns on them
+ * - If no candles → error (need to run updateCandles first via scheduler or /update-candles)
  */
 async function run() {
-  console.log('[EquityScan] Manual run triggered');
+  console.log('[EquityScan] Manual run triggered (patterns only, no Kite API)');
 
   // Check if already running
   if (_scanRunning) {
@@ -442,22 +447,21 @@ async function run() {
     return { status: 'cached', message: 'Results already exist for today' };
   }
 
-  // Start scan in background (don't await)
+  // Check if we have cached candles to work with
+  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
+  if (cachedCandles.size === 0) {
+    return {
+      status: 'error',
+      error: 'No cached candles found. Candles are updated daily at 11:55 PM IST, or use "Update Candles" to fetch manually.'
+    };
+  }
+
+  // Start scan in background (patterns only, no Kite API)
   _scanRunning = true;
-  _scanProgress = { phase: 'starting', done: 0, total: 0 };
+  _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
 
   setImmediate(async () => {
     try {
-      _scanProgress = { phase: 'updating_candles', done: 0, total: 0 };
-      const candleResult = await updateCandles();
-      if (candleResult.error) {
-        console.error('[EquityScan] Candle update failed:', candleResult.error);
-        _scanRunning = false;
-        _scanProgress = { phase: 'error', error: candleResult.error };
-        return;
-      }
-
-      _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
       const scanResult = await runAndStore();
       if (scanResult.error) {
         console.error('[EquityScan] Pattern scan failed:', scanResult.error);
@@ -467,16 +471,16 @@ async function run() {
       }
 
       _scanProgress = { phase: 'complete', count: scanResult.count };
-      console.log(`[EquityScan] Background scan complete: ${scanResult.count} results`);
+      console.log(`[EquityScan] Pattern scan complete: ${scanResult.count} results`);
     } catch (err) {
-      console.error('[EquityScan] Background scan error:', err.message);
+      console.error('[EquityScan] Pattern scan error:', err.message);
       _scanProgress = { phase: 'error', error: err.message };
     } finally {
       _scanRunning = false;
     }
   });
 
-  return { status: 'started', message: 'Scan started in background' };
+  return { status: 'started', message: 'Pattern scan started (using cached candles)' };
 }
 
 /**
@@ -511,11 +515,58 @@ async function _runSync() {
 }
 
 /**
- * Force re-run (bypass today's cache check).
- * Returns immediately, runs in background.
+ * Force re-run patterns (bypass today's cache check, but still no Kite API).
+ * Use this to re-compute signals on existing cached candles.
  */
 async function rerun() {
-  console.log('[EquityScan] Force re-run triggered');
+  console.log('[EquityScan] Force re-run triggered (patterns only)');
+
+  if (_scanRunning) {
+    return { status: 'running', progress: _scanProgress };
+  }
+
+  // Check if we have cached candles to work with
+  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
+  if (cachedCandles.size === 0) {
+    return {
+      status: 'error',
+      error: 'No cached candles found. Use "Update Candles" to fetch from Kite first.'
+    };
+  }
+
+  _scanRunning = true;
+  _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
+
+  setImmediate(async () => {
+    try {
+      const scanResult = await runAndStore();
+      if (scanResult.error) {
+        console.error('[EquityScan] Pattern scan failed:', scanResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: scanResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'complete', count: scanResult.count };
+      console.log(`[EquityScan] Pattern re-run complete: ${scanResult.count} results`);
+    } catch (err) {
+      console.error('[EquityScan] Pattern re-run error:', err.message);
+      _scanProgress = { phase: 'error', error: err.message };
+    } finally {
+      _scanRunning = false;
+    }
+  });
+
+  return { status: 'started', message: 'Pattern re-run started (using cached candles)' };
+}
+
+/**
+ * Manual trigger: update candles from Kite API + run patterns.
+ * This is the FULL refresh - calls Kite API.
+ * Should be used sparingly (once a day via scheduler, or manual override).
+ */
+async function fullRefresh() {
+  console.log('[EquityScan] Full refresh triggered (Kite API + patterns)');
 
   if (_scanRunning) {
     return { status: 'running', progress: _scanProgress };
@@ -545,16 +596,16 @@ async function rerun() {
       }
 
       _scanProgress = { phase: 'complete', count: scanResult.count };
-      console.log(`[EquityScan] Background re-run complete: ${scanResult.count} results`);
+      console.log(`[EquityScan] Full refresh complete: ${scanResult.count} results`);
     } catch (err) {
-      console.error('[EquityScan] Background re-run error:', err.message);
+      console.error('[EquityScan] Full refresh error:', err.message);
       _scanProgress = { phase: 'error', error: err.message };
     } finally {
       _scanRunning = false;
     }
   });
 
-  return { status: 'started', message: 'Re-run started in background' };
+  return { status: 'started', message: 'Full refresh started (fetching from Kite API)' };
 }
 
 module.exports = {
@@ -563,8 +614,9 @@ module.exports = {
   runAndStore,
 
   // API functions
-  run,
-  rerun,
+  run,           // Run patterns on cached candles (no Kite API)
+  rerun,         // Force re-run patterns (no Kite API)
+  fullRefresh,   // Update candles from Kite + run patterns
   getResults,
   getStatus,
   getScanProgress,

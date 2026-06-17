@@ -1,21 +1,26 @@
 /**
  * routes/equityScan.js
  *
- * Simplified equity scan API:
+ * Equity scan API:
  *
  * GET /api/equity-scan/results
  *   Returns cached scan results for today (or ?date=YYYY-MM-DD).
  *   This is the main endpoint — UI just reads cached results.
  *
  * GET /api/equity-scan/status
- *   Returns: { scanDate, hasResults, resultCount }
+ *   Returns: { scanDate, hasResults, resultCount, running, phase }
  *
  * POST /api/equity-scan/run
- *   Manual trigger: update candles + run scan + store results.
+ *   Run patterns on EXISTING cached candles (no Kite API call).
  *   Returns cached status if already scanned today.
  *
  * POST /api/equity-scan/rerun
- *   Force re-run (bypass today's cache check).
+ *   Force re-run patterns (bypass today's cache check, no Kite API).
+ *
+ * POST /api/equity-scan/update-candles
+ *   Fetch fresh candles from Kite API + run patterns.
+ *   This is the FULL refresh — calls Kite API.
+ *   Normally done by scheduler at 11:55 PM IST.
  *
  * GET /api/equity-scan/universe
  *   Returns stock counts (NSE, BSE, F&O, non-F&O).
@@ -24,7 +29,7 @@
  *   Returns list of available patterns for filter dropdown.
  *
  * POST /api/equity-scan/clear-candle-cache
- *   Delete candle history — next scan re-fetches everything from Kite.
+ *   Delete candle history — next update-candles re-fetches everything.
  *
  * POST /api/equity-scan/clear-scan-results
  *   Delete scan results — next scan regenerates patterns.
@@ -62,7 +67,7 @@ router.get('/status', async (req, res) => {
   }
 });
 
-// ── Manual trigger: update candles + run scan ─────────────────────────────────
+// ── Run patterns on cached candles (no Kite API) ──────────────────────────────
 
 router.post('/run', async (req, res) => {
   try {
@@ -74,7 +79,7 @@ router.post('/run', async (req, res) => {
   }
 });
 
-// ── Force re-run (ignores today's cache) ─────────────────────────────────────
+// ── Force re-run patterns (no Kite API) ───────────────────────────────────────
 
 router.post('/rerun', async (req, res) => {
   try {
@@ -82,6 +87,18 @@ router.post('/rerun', async (req, res) => {
     return res.json(result);
   } catch (err) {
     console.error('[equityScan] /rerun error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Update candles from Kite + run patterns (full refresh) ────────────────────
+
+router.post('/update-candles', async (req, res) => {
+  try {
+    const result = await equityScan.fullRefresh();
+    return res.json(result);
+  } catch (err) {
+    console.error('[equityScan] /update-candles error:', err.message);
     return res.status(500).json({ error: err.message });
   }
 });
