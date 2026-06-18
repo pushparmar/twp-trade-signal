@@ -256,6 +256,7 @@ async function runAndStore() {
   const results = [];
   const _dedup = new Set();
   let scanned = 0;
+  const tfCounts = { '60minute': 0, '4h': 0, 'day': 0 };  // Track matches per TF
 
   for (const token of tokens) {
     const inst = instMap.get(token);
@@ -306,6 +307,7 @@ async function runAndStore() {
         _dedup.add(dedupKey);
 
         const firedAt = new Date();
+        tfCounts[interval]++;  // Count matches per TF
 
         results.push({
           token,
@@ -346,6 +348,7 @@ async function runAndStore() {
   }
 
   console.log(`[EquityScan] Scan complete: ${scanned} TF-instrument pairs, ${results.length} signals stored`);
+  console.log(`[EquityScan] Results by TF: 1H=${tfCounts['60minute']}, 4H=${tfCounts['4h']}, 1D=${tfCounts['day']}`);
   console.log('[EquityScan] ═══════════════════════════════════════════════════════════════');
 
   return { count: results.length, scanDate };
