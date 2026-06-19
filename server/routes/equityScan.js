@@ -127,6 +127,38 @@ router.get('/patterns', (req, res) => {
   }
 });
 
+// ── Debug: Check candle cache status ──────────────────────────────────────────
+
+router.get('/cache-status', async (req, res) => {
+  try {
+    const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
+
+    let count60 = 0, countDay = 0;
+    let sample60 = null, sampleDay = null;
+
+    for (const [key, val] of cachedCandles.entries()) {
+      if (key.endsWith(':60minute')) {
+        count60++;
+        if (!sample60 && val.candles) sample60 = { key, bars: val.candles.length };
+      } else if (key.endsWith(':day')) {
+        countDay++;
+        if (!sampleDay && val.candles) sampleDay = { key, bars: val.candles.length };
+      }
+    }
+
+    return res.json({
+      totalEntries: cachedCandles.size,
+      count60minute: count60,
+      countDay: countDay,
+      sample60minute: sample60,
+      sampleDay: sampleDay,
+      message: count60 === 0 ? 'No 60minute candles cached! Click "Update Candles" to fetch from Kite.' : 'Cache OK'
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Clear candle cache ────────────────────────────────────────────────────────
 
 router.post('/clear-candle-cache', async (req, res) => {

@@ -257,6 +257,8 @@ async function runAndStore() {
   const _dedup = new Set();
   let scanned = 0;
   const tfCounts = { '60minute': 0, '4h': 0, 'day': 0 };  // Track matches per TF
+  const tfScanned = { '60minute': 0, '4h': 0, 'day': 0 };  // Track stocks scanned per TF
+  const tfSkipped = { '60minute': 0, '4h': 0, 'day': 0 };  // Track skipped due to insufficient candles
 
   for (const token of tokens) {
     const inst = instMap.get(token);
@@ -284,8 +286,12 @@ async function runAndStore() {
         continue;
       }
 
-      if (!candles || candles.length < MIN_BARS) continue;
+      if (!candles || candles.length < MIN_BARS) {
+        tfSkipped[interval]++;
+        continue;
+      }
       scanned++;
+      tfScanned[interval]++;
 
       // Run patterns
       for (const { id: patternId, label: patternLabel } of patterns) {
@@ -348,6 +354,8 @@ async function runAndStore() {
   }
 
   console.log(`[EquityScan] Scan complete: ${scanned} TF-instrument pairs, ${results.length} signals stored`);
+  console.log(`[EquityScan] Scanned per TF: 1H=${tfScanned['60minute']}, 4H=${tfScanned['4h']}, 1D=${tfScanned['day']}`);
+  console.log(`[EquityScan] Skipped (insufficient candles): 1H=${tfSkipped['60minute']}, 4H=${tfSkipped['4h']}, 1D=${tfSkipped['day']}`);
   console.log(`[EquityScan] Results by TF: 1H=${tfCounts['60minute']}, 4H=${tfCounts['4h']}, 1D=${tfCounts['day']}`);
   console.log('[EquityScan] ═══════════════════════════════════════════════════════════════');
 
@@ -428,16 +436,36 @@ let _scanRunning = false;
 let _scanProgress = { phase: 'idle', done: 0, total: 0 };
 
 /**
- * Manual trigger: run scan on EXISTING cached candles (no Kite API call).
- * Returns immediately, runs in background to avoid HTTP timeout.
- *
- * Flow:
- * - If results exist for today → return cached (no work)
- * - If candles exist in MongoDB → run patterns on them
- * - If no candles → error (need to run updateCandles first via scheduler or /update-candles)
+ * Check if candle cache is fresh (updated today IST).
+ * Returns true if we fetched candles today, false if stale or missing.
+ */
+async function _isCandleCacheFresh() {
+  const today = _istDateStr();
+
+  // Check MongoDB for when candles were last updated
+  const lastUpdate = await equityCandleCacheRepo.getLastUpdateDate();
+
+  if (!lastUpdate) {
+    console.log('[EquityScan] No candle cache found');
+    return false;
+  }
+
+  // Convert updatedAt to IST date string
+  const lastUpdateIST = _istDateStr(lastUpdate);
+
+  console.log(`[EquityScan] Candle cache last updated: ${lastUpdateIST}, today: ${today}`);
+
+  return lastUpdateIST >= today;
+}
+
+/**
+ * Manual trigger: run scan.
+ * - If results exist for today → return cached
+ * - If candles are stale/missing → auto-fetch from Kite first
+ * - Otherwise → run patterns on cached candles
  */
 async function run() {
-  console.log('[EquityScan] Manual run triggered (patterns only, no Kite API)');
+  console.log('[EquityScan] Manual run triggered');
 
   // Check if already running
   if (_scanRunning) {
@@ -450,16 +478,24 @@ async function run() {
     return { status: 'cached', message: 'Results already exist for today' };
   }
 
-  // Check if we have cached candles to work with
-  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
-  if (cachedCandles.size === 0) {
-    return {
-      status: 'error',
-      error: 'No cached candles found. Candles are updated daily at 11:55 PM IST, or use "Update Candles" to fetch manually.'
-    };
+  // Check if candle cache is fresh
+  const isFresh = await _isCandleCacheFresh();
+
+  if (!isFresh) {
+    // Candles are stale or missing - need to fetch from Kite first
+    console.log('[EquityScan] Candle cache is stale/empty, will fetch from Kite first');
+    return _runWithCandleUpdate();
   }
 
-  // Start scan in background (patterns only, no Kite API)
+  // Candles are fresh - just run patterns
+  console.log('[EquityScan] Candle cache is fresh, running patterns only');
+  return _runPatternsOnly();
+}
+
+/**
+ * Run patterns only (candles already fresh).
+ */
+async function _runPatternsOnly() {
   _scanRunning = true;
   _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
 
@@ -484,6 +520,46 @@ async function run() {
   });
 
   return { status: 'started', message: 'Pattern scan started (using cached candles)' };
+}
+
+/**
+ * Run with candle update (candles stale/missing).
+ */
+async function _runWithCandleUpdate() {
+  _scanRunning = true;
+  _scanProgress = { phase: 'updating_candles', done: 0, total: 0 };
+
+  setImmediate(async () => {
+    try {
+      _scanProgress = { phase: 'updating_candles', done: 0, total: 0 };
+      const candleResult = await updateCandles();
+      if (candleResult.error) {
+        console.error('[EquityScan] Candle update failed:', candleResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: candleResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
+      const scanResult = await runAndStore();
+      if (scanResult.error) {
+        console.error('[EquityScan] Pattern scan failed:', scanResult.error);
+        _scanRunning = false;
+        _scanProgress = { phase: 'error', error: scanResult.error };
+        return;
+      }
+
+      _scanProgress = { phase: 'complete', count: scanResult.count };
+      console.log(`[EquityScan] Full scan complete: ${scanResult.count} results`);
+    } catch (err) {
+      console.error('[EquityScan] Full scan error:', err.message);
+      _scanProgress = { phase: 'error', error: err.message };
+    } finally {
+      _scanRunning = false;
+    }
+  });
+
+  return { status: 'started', message: 'Candles stale - fetching from Kite first, then scanning' };
 }
 
 /**
@@ -518,49 +594,26 @@ async function _runSync() {
 }
 
 /**
- * Force re-run patterns (bypass today's cache check, but still no Kite API).
- * Use this to re-compute signals on existing cached candles.
+ * Force re-run (bypass today's result cache check).
+ * If candles are stale → fetch from Kite first.
  */
 async function rerun() {
-  console.log('[EquityScan] Force re-run triggered (patterns only)');
+  console.log('[EquityScan] Force re-run triggered');
 
   if (_scanRunning) {
     return { status: 'running', progress: _scanProgress };
   }
 
-  // Check if we have cached candles to work with
-  const cachedCandles = await equityCandleCacheRepo.loadAll(['60minute', 'day']);
-  if (cachedCandles.size === 0) {
-    return {
-      status: 'error',
-      error: 'No cached candles found. Use "Update Candles" to fetch from Kite first.'
-    };
+  // Check if candle cache is fresh
+  const isFresh = await _isCandleCacheFresh();
+
+  if (!isFresh) {
+    console.log('[EquityScan] Candle cache is stale/empty, will fetch from Kite first');
+    return _runWithCandleUpdate();
   }
 
-  _scanRunning = true;
-  _scanProgress = { phase: 'scanning_patterns', done: 0, total: 0 };
-
-  setImmediate(async () => {
-    try {
-      const scanResult = await runAndStore();
-      if (scanResult.error) {
-        console.error('[EquityScan] Pattern scan failed:', scanResult.error);
-        _scanRunning = false;
-        _scanProgress = { phase: 'error', error: scanResult.error };
-        return;
-      }
-
-      _scanProgress = { phase: 'complete', count: scanResult.count };
-      console.log(`[EquityScan] Pattern re-run complete: ${scanResult.count} results`);
-    } catch (err) {
-      console.error('[EquityScan] Pattern re-run error:', err.message);
-      _scanProgress = { phase: 'error', error: err.message };
-    } finally {
-      _scanRunning = false;
-    }
-  });
-
-  return { status: 'started', message: 'Pattern re-run started (using cached candles)' };
+  // Candles are fresh - just re-run patterns
+  return _runPatternsOnly();
 }
 
 /**

@@ -280,4 +280,27 @@ async function trimExistingCache() {
   }
 }
 
-module.exports = { bulkUpsert, loadAll, clearAll, trimExistingCache, createIndexes, _todayIST };
+/**
+ * Get the most recent updatedAt timestamp from the candle cache.
+ * This tells us when the scheduler last ran updateCandles().
+ * Returns null if no documents exist.
+ *
+ * @returns {Promise<Date|null>}
+ */
+async function getLastUpdateDate() {
+  if (!mongo.isReady()) return null;
+
+  try {
+    const doc = await mongo
+      .db()
+      .collection(COLLECTION)
+      .findOne({}, { sort: { updatedAt: -1 }, projection: { updatedAt: 1 } });
+
+    return doc?.updatedAt ?? null;
+  } catch (err) {
+    console.warn('[equityCandleCache] getLastUpdateDate failed:', err.message);
+    return null;
+  }
+}
+
+module.exports = { bulkUpsert, loadAll, clearAll, trimExistingCache, createIndexes, getLastUpdateDate, _todayIST };
