@@ -400,131 +400,113 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
 function OrderHistory({ trades, fetchHistoricalTrades }) {
   const [expanded, setExpanded] = useState(true);
   const [chartTrade, setChartTrade] = useState(null);
-  const [showAll, setShowAll] = useState(false);
+  const [viewMode, setViewMode] = useState('today'); // 'today' | 'all'
   const [historicalTrades, setHistoricalTrades] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Load historical trades when "All History" is clicked
-  const handleToggleHistory = async () => {
-    if (!showAll && historicalTrades.length === 0) {
-      setLoadingHistory(true);
+  // Load historical trades from MongoDB
+  const loadHistory = async () => {
+    if (loadingHistory) return;
+    setLoadingHistory(true);
+    try {
       const data = await fetchHistoricalTrades();
-      // Filter to only closed trades and sort by closedTs desc
-      const closed = data
+      const closed = (data || [])
         .filter(t => t.status === 'CLOSED')
         .sort((a, b) => (b.closedTs || 0) - (a.closedTs || 0));
       setHistoricalTrades(closed);
+      setViewMode('all');
+    } catch (err) {
+      console.error('Failed to load history:', err);
+    } finally {
       setLoadingHistory(false);
     }
-    setShowAll(!showAll);
   };
 
-  const displayTrades = showAll ? historicalTrades : trades;
-  const displayLabel = showAll ? `All Closed Trades (${historicalTrades.length})` : "Today's Closed Trades";
+  const displayTrades = viewMode === 'all' ? historicalTrades : trades;
+  const displayPnl = displayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const wins = displayTrades.filter(t => t.pnl > 0).length;
+  const losses = displayTrades.filter(t => t.pnl <= 0).length;
 
-  if (displayTrades.length === 0) {
-    return (
+  return (
+    <>
       <div className="settings-group">
-        <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>{displayLabel}</span>
+        {/* Header with view toggle buttons - ALWAYS VISIBLE */}
+        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <span style={{ fontWeight: 600 }}>Order History</span>
+
+          {/* View toggle buttons */}
+          <div style={{ display: 'flex', gap: 4 }}>
             <button
-              onClick={handleToggleHistory}
+              onClick={() => setViewMode('today')}
+              style={{
+                fontSize: 11,
+                padding: '4px 12px',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                background: viewMode === 'today' ? '#4dabf7' : 'var(--bg-secondary)',
+                color: viewMode === 'today' ? '#fff' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: viewMode === 'today' ? 600 : 400
+              }}
+            >
+              Today ({trades.length})
+            </button>
+            <button
+              onClick={loadHistory}
               disabled={loadingHistory}
               style={{
                 fontSize: 11,
-                padding: '4px 10px',
+                padding: '4px 12px',
                 borderRadius: 4,
-                border: '1px solid #4dabf7',
-                background: showAll ? '#4dabf7' : 'transparent',
-                color: showAll ? '#fff' : '#4dabf7',
+                border: '1px solid var(--border)',
+                background: viewMode === 'all' ? '#4dabf7' : 'var(--bg-secondary)',
+                color: viewMode === 'all' ? '#fff' : 'var(--text-secondary)',
                 cursor: loadingHistory ? 'wait' : 'pointer',
-                fontWeight: 500
+                fontWeight: viewMode === 'all' ? 600 : 400
               }}
             >
-              {loadingHistory ? 'Loading...' : showAll ? '← Today' : '📋 All History'}
+              {loadingHistory ? 'Loading...' : `All History${historicalTrades.length > 0 ? ` (${historicalTrades.length})` : ''}`}
             </button>
-          </span>
+          </div>
+
+          {/* Stats */}
+          {displayTrades.length > 0 && (
+            <>
+              <span style={{ fontSize: 13, fontWeight: 600, color: displayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
+                {fmtPnl(displayPnl)}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                W:{wins} L:{losses}
+              </span>
+            </>
+          )}
+
+          {/* Export button */}
           {historicalTrades.length > 0 && (
             <button
               className="btn btn-sm btn-secondary"
               onClick={() => exportToCSV(historicalTrades)}
-              style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
+              style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400, marginLeft: 'auto' }}
               title={`Export all ${historicalTrades.length} closed trades to CSV`}
             >
               ⬇ Export CSV
             </button>
           )}
         </h3>
-        <p className="diag-hint">{showAll ? 'No closed trades in history' : 'No closed trades today'}</p>
-      </div>
-    );
-  }
-
-  const displayPnl = displayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-  const wins   = displayTrades.filter(t => t.pnl > 0).length;
-  const losses = displayTrades.filter(t => t.pnl <= 0).length;
-
-  return (
-    <>
-      <div className="settings-group">
-        <h3
-          style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
-          onClick={() => setExpanded(prev => !prev)}
-        >
-          {/* Left side: title + stats */}
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-            <span>{displayLabel} ({displayTrades.length})</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); handleToggleHistory(); }}
-              disabled={loadingHistory}
-              style={{
-                fontSize: 11,
-                padding: '4px 10px',
-                borderRadius: 4,
-                border: '1px solid #4dabf7',
-                background: showAll ? '#4dabf7' : 'transparent',
-                color: showAll ? '#fff' : '#4dabf7',
-                cursor: loadingHistory ? 'wait' : 'pointer',
-                fontWeight: 500
-              }}
-            >
-              {loadingHistory ? 'Loading...' : showAll ? '← Today' : '📋 All History'}
-            </button>
-            <span style={{ fontSize: 13, fontWeight: 600, color: displayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
-              {fmtPnl(displayPnl)}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-              W:{wins} L:{losses}
-            </span>
-          </span>
-
-          {/* Right side: export button + collapse chevron */}
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {historicalTrades.length > 0 && (
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={(e) => { e.stopPropagation(); exportToCSV(historicalTrades); }}
-                style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
-                title={`Export all ${historicalTrades.length} closed trades to CSV`}
-              >
-                ⬇ Export CSV
-              </button>
-            )}
-            <span style={{ fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
-          </span>
-        </h3>
-        {expanded && (
+        {displayTrades.length === 0 ? (
+          <p className="diag-hint">
+            {viewMode === 'today' ? 'No closed trades today' : 'No trades in history. Click "All History" to load from database.'}
+          </p>
+        ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
               <thead>
                 <tr>
+                  <th>Date</th>
                   <th>Time</th>
                   <th>Index</th>
                   <th>Symbol</th>
-                  <th>Action</th>
                   <th>Pattern</th>
-                  <th>TF</th>
                   <th>Entry</th>
                   <th>Exit</th>
                   <th>PnL</th>
@@ -532,52 +514,51 @@ function OrderHistory({ trades, fetchHistoricalTrades }) {
                 </tr>
               </thead>
               <tbody>
-                {displayTrades.map(t => (
-                  <tr key={t.id}>
-                    <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(t.closedTs)}</td>
-                    <td>{t.index}</td>
-                    <td
-                      style={{
-                        fontWeight: 500,
-                        cursor: t.token ? 'pointer' : 'default',
-                        color: t.token ? '#4dabf7' : 'inherit',
-                        textDecoration: t.token ? 'underline' : 'none'
-                      }}
-                      onClick={() => t.token && setChartTrade(t)}
-                      title={t.token ? 'Click to view chart' : ''}
-                    >
-                      {t.strike} {t.optionType}
-                    </td>
-                    <td>
-                      <span style={{ color: t.action === 'BUY' ? '#51cf66' : '#ff6b6b' }}>
-                        {t.action}
-                      </span>
-                    </td>
-                    <td>
-                      {t.strategyType === 'low-premium'
-                        ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
-                        : (t.patternLabel || t.patternId)}
-                    </td>
-                    <td>{t.tfLabel}</td>
-                    <td>{fmtPrice(t.entryPrice)}</td>
-                    <td>{fmtPrice(t.exitPrice)}</td>
-                    <td style={{
-                      fontWeight: 600,
-                      color: (t.pnl || 0) >= 0 ? '#51cf66' : '#ff6b6b',
-                    }}>
-                      {fmtPnl(t.pnl)}
-                    </td>
-                    <td>
-                      <span style={{
-                        fontSize: 10, padding: '1px 4px', borderRadius: 3,
-                        background: t.exitReason === 'target' ? '#51cf6622' : '#ff6b6b22',
-                        color: t.exitReason === 'target' ? '#51cf66' : '#ff6b6b',
+                {displayTrades.map(t => {
+                  const dateStr = t.closedTs ? new Date(t.closedTs).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—';
+                  const timeStr = t.closedTs ? new Date(t.closedTs).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                  return (
+                    <tr key={t.id}>
+                      <td style={{ whiteSpace: 'nowrap', fontSize: 11 }}>{dateStr}</td>
+                      <td style={{ whiteSpace: 'nowrap', fontSize: 11 }}>{timeStr}</td>
+                      <td>{t.index}</td>
+                      <td
+                        style={{
+                          fontWeight: 500,
+                          cursor: t.token ? 'pointer' : 'default',
+                          color: t.token ? '#4dabf7' : 'inherit',
+                          textDecoration: t.token ? 'underline' : 'none'
+                        }}
+                        onClick={() => t.token && setChartTrade(t)}
+                        title={t.token ? 'Click to view chart' : ''}
+                      >
+                        {t.strike} {t.optionType}
+                      </td>
+                      <td>
+                        {t.strategyType === 'low-premium'
+                          ? <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, background: '#fab00522', color: '#fab005', fontWeight: 700 }}>💰 LP</span>
+                          : (t.patternLabel || t.patternId || '—')}
+                      </td>
+                      <td>{fmtPrice(t.entryPrice)}</td>
+                      <td>{fmtPrice(t.exitPrice)}</td>
+                      <td style={{
+                        fontWeight: 600,
+                        color: (t.pnl || 0) >= 0 ? '#51cf66' : '#ff6b6b',
                       }}>
-                        {(t.exitReason || 'manual').toUpperCase()}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                        {fmtPnl(t.pnl)}
+                      </td>
+                      <td>
+                        <span style={{
+                          fontSize: 10, padding: '1px 4px', borderRadius: 3,
+                          background: t.exitReason === 'target' ? '#51cf6622' : '#ff6b6b22',
+                          color: t.exitReason === 'target' ? '#51cf66' : '#ff6b6b',
+                        }}>
+                          {(t.exitReason || 'manual').toUpperCase()}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
