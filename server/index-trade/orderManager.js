@@ -105,8 +105,9 @@ function _getCurrentPrice(token) {
  */
 async function _sendTelegramAlert(trade) {
     try {
-        const config = store.getConfig();
-        const chatId = config.telegram?.chatId;
+        // Use main store's telegram chatId (not index trade config)
+        const mainStore = require('../store');
+        const chatId = mainStore.getTelegramChatId();
         if (!chatId) return; // Telegram not configured
 
         const action = trade.action; // Always 'BUY' for index options
@@ -148,8 +149,9 @@ async function _sendTelegramAlert(trade) {
  */
 async function _sendTelegramExitAlert(trade) {
     try {
-        const config = store.getConfig();
-        const chatId = config.telegram?.chatId;
+        // Use main store's telegram chatId (not index trade config)
+        const mainStore = require('../store');
+        const chatId = mainStore.getTelegramChatId();
         if (!chatId) return; // Telegram not configured
 
         const symbol = trade.symbol;
