@@ -432,16 +432,17 @@ function OrderHistory({ trades, fetchHistoricalTrades }) {
               onClick={handleToggleHistory}
               disabled={loadingHistory}
               style={{
-                fontSize: 10,
-                padding: '2px 6px',
+                fontSize: 11,
+                padding: '4px 10px',
                 borderRadius: 4,
-                border: '1px solid var(--border)',
-                background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
-                color: showAll ? '#fff' : 'var(--text-muted)',
-                cursor: loadingHistory ? 'wait' : 'pointer'
+                border: '1px solid #4dabf7',
+                background: showAll ? '#4dabf7' : 'transparent',
+                color: showAll ? '#fff' : '#4dabf7',
+                cursor: loadingHistory ? 'wait' : 'pointer',
+                fontWeight: 500
               }}
             >
-              {loadingHistory ? '...' : showAll ? 'Today' : 'All History'}
+              {loadingHistory ? 'Loading...' : showAll ? '← Today' : '📋 All History'}
             </button>
           </span>
           {historicalTrades.length > 0 && (
@@ -478,16 +479,17 @@ function OrderHistory({ trades, fetchHistoricalTrades }) {
               onClick={(e) => { e.stopPropagation(); handleToggleHistory(); }}
               disabled={loadingHistory}
               style={{
-                fontSize: 10,
-                padding: '2px 6px',
+                fontSize: 11,
+                padding: '4px 10px',
                 borderRadius: 4,
-                border: '1px solid var(--border)',
-                background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
-                color: showAll ? '#fff' : 'var(--text-muted)',
-                cursor: loadingHistory ? 'wait' : 'pointer'
+                border: '1px solid #4dabf7',
+                background: showAll ? '#4dabf7' : 'transparent',
+                color: showAll ? '#fff' : '#4dabf7',
+                cursor: loadingHistory ? 'wait' : 'pointer',
+                fontWeight: 500
               }}
             >
-              {loadingHistory ? '...' : showAll ? 'Today' : 'All History'}
+              {loadingHistory ? 'Loading...' : showAll ? '← Today' : '📋 All History'}
             </button>
             <span style={{ fontSize: 13, fontWeight: 600, color: displayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
               {fmtPnl(displayPnl)}
