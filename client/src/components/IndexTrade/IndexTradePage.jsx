@@ -434,38 +434,38 @@ function OrderHistory({ trades, fetchHistoricalTrades }) {
         <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
           <span style={{ fontWeight: 600 }}>Order History</span>
 
-          {/* View toggle buttons */}
-          <div style={{ display: 'flex', gap: 4 }}>
+          {/* View toggle buttons - prominent styling */}
+          <div style={{ display: 'flex', gap: 6, marginLeft: 12, padding: '4px 8px', background: 'var(--bg-tertiary)', borderRadius: 6 }}>
             <button
               onClick={() => setViewMode('today')}
               style={{
-                fontSize: 11,
-                padding: '4px 12px',
+                fontSize: 12,
+                padding: '6px 14px',
                 borderRadius: 4,
-                border: '1px solid var(--border)',
+                border: viewMode === 'today' ? '2px solid #4dabf7' : '1px solid var(--border)',
                 background: viewMode === 'today' ? '#4dabf7' : 'var(--bg-secondary)',
-                color: viewMode === 'today' ? '#fff' : 'var(--text-secondary)',
+                color: viewMode === 'today' ? '#fff' : 'var(--text-primary)',
                 cursor: 'pointer',
-                fontWeight: viewMode === 'today' ? 600 : 400
+                fontWeight: 600
               }}
             >
-              Today ({trades.length})
+              📅 Today ({trades.length})
             </button>
             <button
               onClick={loadHistory}
               disabled={loadingHistory}
               style={{
-                fontSize: 11,
-                padding: '4px 12px',
+                fontSize: 12,
+                padding: '6px 14px',
                 borderRadius: 4,
-                border: '1px solid var(--border)',
-                background: viewMode === 'all' ? '#4dabf7' : 'var(--bg-secondary)',
-                color: viewMode === 'all' ? '#fff' : 'var(--text-secondary)',
+                border: viewMode === 'all' ? '2px solid #fab005' : '1px solid var(--border)',
+                background: viewMode === 'all' ? '#fab005' : 'var(--bg-secondary)',
+                color: viewMode === 'all' ? '#000' : 'var(--text-primary)',
                 cursor: loadingHistory ? 'wait' : 'pointer',
-                fontWeight: viewMode === 'all' ? 600 : 400
+                fontWeight: 600
               }}
             >
-              {loadingHistory ? 'Loading...' : `All History${historicalTrades.length > 0 ? ` (${historicalTrades.length})` : ''}`}
+              {loadingHistory ? '⏳ Loading...' : `📜 All History${historicalTrades.length > 0 ? ` (${historicalTrades.length})` : ''}`}
             </button>
           </div>
 
