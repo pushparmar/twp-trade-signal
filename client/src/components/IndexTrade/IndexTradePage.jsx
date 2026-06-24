@@ -128,7 +128,7 @@ function exportToCSV(trades) {
 
 // ── Status Bar ──────────────────────────────────────────────────────────────
 
-function StatusBar({ status, config, onToggle, onRefreshStrikes, sseConnected }) {
+function StatusBar({ status, config, onToggle, onRefreshStrikes, onUpdateConfig, sseConnected }) {
   const [refreshing, setRefreshing] = useState(false);
 
   if (!status) return <div className="settings-group"><p className="diag-hint">Loading status…</p></div>;
@@ -186,6 +186,16 @@ function StatusBar({ status, config, onToggle, onRefreshStrikes, sseConnected })
           >
             {refreshing ? '…' : '↻ Refresh Strikes'}
           </button>
+          {/* Mask Pattern Names toggle */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--text-muted)' }}>
+            <input
+              type="checkbox"
+              checked={config?.maskPatternNames || false}
+              onChange={(e) => onUpdateConfig({ maskPatternNames: e.target.checked })}
+              style={{ margin: 0 }}
+            />
+            Mask Names
+          </label>
         </div>
       </div>
     </div>
@@ -757,7 +767,7 @@ export default function IndexTradePage() {
       </div>
 
       <div className="settings-panel">
-        <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
+        <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} onUpdateConfig={updateConfig} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} fetchHistoricalTrades={fetchHistoricalTrades} />

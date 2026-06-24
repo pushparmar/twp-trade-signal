@@ -57,6 +57,10 @@ let _config = {
   // Buys any subscribed option in the lpEntryMin–lpEntryMax range.
   // Averages down once when price drops lpAvgDownPct from entry.
   // Max lpMaxPositions concurrent LP trades at any time.
+  // ── Pattern Name Masking ──────────────────────────────────────────────────────
+  // When enabled, pattern names are hidden and shown as System A, B, C, etc.
+  maskPatternNames: false,
+
   lowPremiumEnabled: false,  // off by default; enable via UI config panel
   lpEntryMin: 5,             // BUY only if LTP ≥ this (₹) — avoid dead options
   lpEntryMax: 10,            // BUY only if LTP ≤ this (₹)
@@ -253,6 +257,24 @@ function clearTrades() {
 
 // ── Config ──────────────────────────────────────────────────────────────────
 
+// ── Pattern Name Masking ────────────────────────────────────────────────────
+
+const PATTERN_MASK_MAP = {
+  'tk-reversion': 'System A',
+  'kumo-breakout': 'System B',
+  'kijun-bounce': 'System C',
+  'kijun-retest': 'System D',
+  'chikou-breakout': 'System E',
+  'cloud-twist': 'System F',
+};
+
+function getMaskedPatternLabel(patternId, patternLabel) {
+  if (!_config.maskPatternNames) {
+    return patternLabel || patternId || '—';
+  }
+  return PATTERN_MASK_MAP[patternId] || 'System X';
+}
+
 function getConfig() { return { ..._config }; }
 
 function setConfig(updates) {
@@ -274,4 +296,5 @@ module.exports = {
   getOpenTrades, getClosedTrades, getAllTrades, getTrade,
   getPnlSummary, clearTrades, purgePreviousDayTrades,
   getConfig, setConfig,
+  getMaskedPatternLabel, PATTERN_MASK_MAP,
 };

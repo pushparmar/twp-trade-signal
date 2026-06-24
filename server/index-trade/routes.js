@@ -14,6 +14,25 @@ const tradePairing  = require('../services/tradePairing');
 
 const router = express.Router();
 
+// Helper to mask pattern labels in trades/alerts if config.maskPatternNames is true
+function maskTradePatterns(trades) {
+  const config = tradeStore.getConfig();
+  if (!config.maskPatternNames) return trades;
+  return trades.map(t => ({
+    ...t,
+    patternLabel: tradeStore.getMaskedPatternLabel(t.patternId, t.patternLabel),
+  }));
+}
+
+function maskAlertPatterns(alerts) {
+  const config = tradeStore.getConfig();
+  if (!config.maskPatternNames) return alerts;
+  return alerts.map(a => ({
+    ...a,
+    patternLabel: tradeStore.getMaskedPatternLabel(a.patternId, a.patternLabel),
+  }));
+}
+
 // GET /api/index-trade/status
 router.get('/status', (_req, res) => {
   const config = tradeStore.getConfig();
@@ -38,7 +57,7 @@ router.get('/trades', async (_req, res) => {
     trades = tradeStore.getAllTrades();
   }
 
-  res.json(trades);
+  res.json(maskTradePatterns(trades));
 });
 
 // POST /api/index-trade/restore — manually restore trades from MongoDB
@@ -59,14 +78,14 @@ router.post('/restore', async (_req, res) => {
 
 // GET /api/index-trade/trades/open
 router.get('/trades/open', (_req, res) => {
-  res.json(tradeStore.getOpenTrades());
+  res.json(maskTradePatterns(tradeStore.getOpenTrades()));
 });
 
 // GET /api/index-trade/trades/history
 router.get('/trades/history', (_req, res) => {
   const closed = tradeStore.getClosedTrades()
     .sort((a, b) => (b.closedTs || 0) - (a.closedTs || 0));
-  res.json(closed);
+  res.json(maskTradePatterns(closed));
 });
 
 // GET /api/index-trade/pnl
@@ -110,7 +129,7 @@ router.get('/option-chain', (_req, res) => {
 
 // GET /api/index-trade/alerts — recent scan alerts (survives page refresh)
 router.get('/alerts', (_req, res) => {
-  res.json(scanner.getAlertHistory());
+  res.json(maskAlertPatterns(scanner.getAlertHistory()));
 });
 
 // POST /api/index-trade/clear-dedup
@@ -218,7 +237,7 @@ router.get('/analytics/recent-trades', async (req, res) => {
   try {
     const limit = req.query.limit ? parseInt(req.query.limit, 10) : 200;
     const trades = await db.indexTradeRepo.getRecentTrades(limit);
-    res.json(trades);
+    res.json(maskTradePatterns(trades));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

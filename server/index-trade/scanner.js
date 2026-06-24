@@ -119,6 +119,9 @@ function _scan(token, interval) {
       _matchCount++;
       const tfLabel = TF_LABEL[interval] || interval;
 
+      // Get masked label if config.maskPatternNames is true
+      const maskedLabel = tradeStore.getMaskedPatternLabel(patternId, pattern.label);
+
       const signalPayload = {
         token,
         index: inst.index,
@@ -128,7 +131,7 @@ function _scan(token, interval) {
         exchange: inst.exchange,
         lotSize: inst.lotSize,
         patternId,
-        patternLabel: pattern.label,
+        patternLabel: maskedLabel,
         signal: result.signal,
         interval,
         tfLabel,
