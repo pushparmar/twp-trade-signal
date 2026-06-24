@@ -66,7 +66,21 @@
       "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/auto-trader/settings\")",
       "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/settings/pattern-config\")",
       "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/scan/recent?limit=5\")",
-      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/equity-scan/results\")"
+      "Bash(curl -s \"https://twp-trade-signal-production.up.railway.app/api/equity-scan/results\")",
+      "Bash(cd ~/Desktop/hld-calculator && npm run dev)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(curl -s http://localhost:5177)",
+      "Bash(pkill -f \"vite.*hld-calculator\")",
+      "Bash(curl -s http://localhost:3000/api/equity-scan/status)",
+      "Bash(curl -s http://localhost:3000/api/equity-scan/universe)",
+      "Bash(curl -s http://localhost:3000/api/equity-scan/cache-status)",
+      "Bash(curl -s http://localhost:3000/api/kite/status)",
+      "Bash(curl -s http://127.0.0.1:3000/api/equity-scan/status)",
+      "Bash(curl -s http://localhost:3001/api/config)",
+      "Bash(curl -s http://localhost:3001/api/kite-auth/status)",
+      "Bash(curl -s http://localhost:3001/kite/status)",
+      "Bash(curl -s 'http://localhost:3001/api/equity-scan/cache-status')",
+      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\)\\)\")"
     ]
   }
 }

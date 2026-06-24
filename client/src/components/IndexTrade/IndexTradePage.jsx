@@ -400,12 +400,32 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
 function OrderHistory({ trades, allTrades }) {
   const [expanded, setExpanded] = useState(true);
   const [chartTrade, setChartTrade] = useState(null);
+  const [showAll, setShowAll] = useState(false);  // Toggle between today and all history
 
-  if (trades.length === 0) {
+  const displayTrades = showAll ? allTrades : trades;
+  const displayLabel = showAll ? 'All Closed Trades' : "Today's Closed Trades";
+
+  if (displayTrades.length === 0) {
     return (
       <div className="settings-group">
         <h3 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Today&apos;s Closed Trades</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>{displayLabel}</span>
+            <button
+              onClick={() => setShowAll(!showAll)}
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
+                color: showAll ? '#fff' : 'var(--text-muted)',
+                cursor: 'pointer'
+              }}
+            >
+              {showAll ? 'Today' : 'All History'}
+            </button>
+          </span>
           {allTrades && allTrades.length > 0 && (
             <button
               className="btn btn-sm btn-secondary"
@@ -417,14 +437,14 @@ function OrderHistory({ trades, allTrades }) {
             </button>
           )}
         </h3>
-        <p className="diag-hint">No closed trades today</p>
+        <p className="diag-hint">{showAll ? 'No closed trades in history' : 'No closed trades today'}</p>
       </div>
     );
   }
 
-  const todayPnl = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
-  const wins   = trades.filter(t => t.pnl > 0).length;
-  const losses = trades.filter(t => t.pnl <= 0).length;
+  const displayPnl = displayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+  const wins   = displayTrades.filter(t => t.pnl > 0).length;
+  const losses = displayTrades.filter(t => t.pnl <= 0).length;
 
   return (
     <>
@@ -433,11 +453,25 @@ function OrderHistory({ trades, allTrades }) {
           style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
           onClick={() => setExpanded(prev => !prev)}
         >
-          {/* Left side: title + today's stats */}
+          {/* Left side: title + stats */}
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
-            <span>Today&apos;s Closed Trades ({trades.length})</span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: todayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
-              {fmtPnl(todayPnl)}
+            <span>{displayLabel} ({displayTrades.length})</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowAll(!showAll); }}
+              style={{
+                fontSize: 10,
+                padding: '2px 6px',
+                borderRadius: 4,
+                border: '1px solid var(--border)',
+                background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
+                color: showAll ? '#fff' : 'var(--text-muted)',
+                cursor: 'pointer'
+              }}
+            >
+              {showAll ? 'Today' : 'All History'}
+            </button>
+            <span style={{ fontSize: 13, fontWeight: 600, color: displayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
+              {fmtPnl(displayPnl)}
             </span>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
               W:{wins} L:{losses}
@@ -477,7 +511,7 @@ function OrderHistory({ trades, allTrades }) {
                 </tr>
               </thead>
               <tbody>
-                {trades.map(t => (
+                {displayTrades.map(t => (
                   <tr key={t.id}>
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtTime(t.closedTs)}</td>
                     <td>{t.index}</td>

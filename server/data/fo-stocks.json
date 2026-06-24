@@ -1,5 +1,5 @@
 {
-  "builtAt": 1778849555607,
+  "builtAt": 1782230626553,
   "stocks": [
     {
       "name": "360ONE",
@@ -506,6 +506,13 @@
       "lotSize": 250
     },
     {
+      "name": "GVT&D",
+      "tradingsymbol": "GVT&D",
+      "instrumentToken": 4296449,
+      "exchange": "NSE",
+      "lotSize": 125
+    },
+    {
       "name": "HAL",
       "tradingsymbol": "HAL",
       "instrumentToken": 589569,
@@ -804,7 +811,7 @@
       "tradingsymbol": "LICI",
       "instrumentToken": 2426881,
       "exchange": "NSE",
-      "lotSize": 700
+      "lotSize": 1400
     },
     {
       "name": "LODHA",
@@ -1157,6 +1164,13 @@
       "lotSize": 450
     },
     {
+      "name": "RADICO",
+      "tradingsymbol": "RADICO",
+      "instrumentToken": 2813441,
+      "exchange": "NSE",
+      "lotSize": 150
+    },
+    {
       "name": "RBLBANK",
       "tradingsymbol": "RBLBANK",
       "instrumentToken": 4708097,
@@ -1364,7 +1378,7 @@
       "tradingsymbol": "TRENT",
       "instrumentToken": 502785,
       "exchange": "NSE",
-      "lotSize": 100
+      "lotSize": 150
     },
     {
       "name": "TVSMOTOR",
