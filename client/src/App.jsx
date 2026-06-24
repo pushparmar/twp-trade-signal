@@ -319,7 +319,7 @@ function AppShell() {
                 }}
             />
             <div className="main-area">
-                <HeaderStrip />
+                {activePage !== 'index-trade' && <HeaderStrip />}
                 <ActiveComponent />
             </div>
         </div>

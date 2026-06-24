@@ -365,6 +365,239 @@ function SummaryCards({ patternStats, winRate, dailyPnl }) {
   );
 }
 
+// ── Comprehensive Analytics Section ──────────────────────────────────────────
+
+function ComprehensiveAnalytics({ exchange }) {
+  const [expanded, setExpanded] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const loadAnalytics = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const params = exchange !== 'all' ? { exchange, limit: 2000 } : { limit: 2000 };
+      const res = await api.get('/analytics/comprehensive', { params });
+      setAnalytics(res.data);
+      setExpanded(true);
+    } catch (err) {
+      console.error('Failed to load comprehensive analytics:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportAllTrades = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const params = exchange !== 'all' ? { exchange, limit: 10000 } : { limit: 10000 };
+      const res = await api.get('/analytics/export', { params });
+      if (!res.data || res.data.length === 0) {
+        alert('No trades to export');
+        return;
+      }
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `equity-trades-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const fmtWinRate = (wins, total) => {
+    if (!total) return '—';
+    return `${((wins / total) * 100).toFixed(0)}%`;
+  };
+
+  return (
+    <Section title="Detailed Performance" subtitle="By pattern, timeframe, and entry hour">
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <button
+          className="an-refresh-btn"
+          onClick={loadAnalytics}
+          disabled={loading}
+          style={{ fontSize: 12 }}
+        >
+          {loading ? '⏳ Loading...' : '📊 Load Detailed Analytics'}
+        </button>
+        <button
+          className="an-refresh-btn"
+          onClick={exportAllTrades}
+          disabled={exporting}
+          style={{ fontSize: 12 }}
+        >
+          {exporting ? '⏳...' : '⬇ Export All Trades'}
+        </button>
+      </div>
+
+      {expanded && analytics?.dbReady && (
+        <div style={{ marginTop: 12 }}>
+          {/* Summary */}
+          <div className="an-cards" style={{ marginBottom: 16 }}>
+            <div className="an-card">
+              <div className="an-card-value">{analytics.summary?.totalTrades || 0}</div>
+              <div className="an-card-label">Total Trades</div>
+            </div>
+            <div className="an-card">
+              <div className={`an-card-value ${(analytics.summary?.wins / analytics.summary?.totalTrades) >= 0.5 ? 'an-pnl--pos' : 'an-pnl--neg'}`}>
+                {fmtWinRate(analytics.summary?.wins, analytics.summary?.totalTrades)}
+              </div>
+              <div className="an-card-label">Win Rate</div>
+            </div>
+            <div className="an-card">
+              <div className={`an-card-value ${(analytics.summary?.totalPnl || 0) >= 0 ? 'an-pnl--pos' : 'an-pnl--neg'}`}>
+                {fmtPnl(analytics.summary?.totalPnl)}
+              </div>
+              <div className="an-card-label">Total PnL</div>
+            </div>
+            <div className="an-card">
+              <div className="an-card-value">
+                <span className="an-pnl--pos">{analytics.summary?.targetHits || 0}</span>
+                {' / '}
+                <span className="an-pnl--neg">{analytics.summary?.slHits || 0}</span>
+              </div>
+              <div className="an-card-label">Target / SL Hits</div>
+            </div>
+          </div>
+
+          {/* By Pattern */}
+          {analytics.byPattern && Object.keys(analytics.byPattern).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 className="an-section-title" style={{ fontSize: 14, marginBottom: 8 }}>📈 By Pattern</h3>
+              <div className="an-table-wrap">
+                <table className="an-table">
+                  <thead>
+                    <tr>
+                      <th>Pattern</th>
+                      <th>Trades</th>
+                      <th>Wins</th>
+                      <th>Losses</th>
+                      <th>Target</th>
+                      <th>SL</th>
+                      <th>Win %</th>
+                      <th>PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(analytics.byPattern)
+                      .sort(([,a], [,b]) => b.totalPnl - a.totalPnl)
+                      .map(([patternId, data]) => (
+                      <tr key={patternId}>
+                        <td className="an-td-pattern">{patternId}</td>
+                        <td className="an-td-num">{data.wins + data.losses}</td>
+                        <td className="an-td-num an-pnl--pos">{data.wins}</td>
+                        <td className="an-td-num an-pnl--neg">{data.losses}</td>
+                        <td className="an-td-num an-pnl--pos">{data.target}</td>
+                        <td className="an-td-num an-pnl--neg">{data.sl}</td>
+                        <td className="an-td-num" style={{ fontWeight: 600 }}>
+                          {fmtWinRate(data.wins, data.wins + data.losses)}
+                        </td>
+                        <td className={`an-td-num an-pnl ${data.totalPnl >= 0 ? 'an-pnl--pos' : 'an-pnl--neg'}`}>
+                          {fmtPnl(data.totalPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* By Timeframe */}
+          {analytics.byTimeframe && Object.keys(analytics.byTimeframe).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 className="an-section-title" style={{ fontSize: 14, marginBottom: 8 }}>⏱ By Timeframe</h3>
+              <div className="an-table-wrap">
+                <table className="an-table">
+                  <thead>
+                    <tr>
+                      <th>Timeframe</th>
+                      <th>Trades</th>
+                      <th>Target Hits</th>
+                      <th>SL Hits</th>
+                      <th>Win %</th>
+                      <th>PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(analytics.byTimeframe)
+                      .sort(([,a], [,b]) => b.totalPnl - a.totalPnl)
+                      .map(([tf, data]) => (
+                      <tr key={tf}>
+                        <td className="an-td-pattern">{tf}</td>
+                        <td className="an-td-num">{data.wins + data.losses}</td>
+                        <td className="an-td-num an-pnl--pos">{data.target}</td>
+                        <td className="an-td-num an-pnl--neg">{data.sl}</td>
+                        <td className="an-td-num" style={{ fontWeight: 600 }}>
+                          {fmtWinRate(data.wins, data.wins + data.losses)}
+                        </td>
+                        <td className={`an-td-num an-pnl ${data.totalPnl >= 0 ? 'an-pnl--pos' : 'an-pnl--neg'}`}>
+                          {fmtPnl(data.totalPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* By Entry Hour */}
+          {analytics.byEntryHour && Object.keys(analytics.byEntryHour).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <h3 className="an-section-title" style={{ fontSize: 14, marginBottom: 8 }}>🕐 By Entry Time (IST)</h3>
+              <div className="an-table-wrap">
+                <table className="an-table">
+                  <thead>
+                    <tr>
+                      <th>Hour</th>
+                      <th>Trades</th>
+                      <th>Wins</th>
+                      <th>Losses</th>
+                      <th>Win %</th>
+                      <th>PnL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(analytics.byEntryHour)
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([hour, data]) => (
+                      <tr key={hour}>
+                        <td className="an-td-pattern">{hour}</td>
+                        <td className="an-td-num">{data.wins + data.losses}</td>
+                        <td className="an-td-num an-pnl--pos">{data.wins}</td>
+                        <td className="an-td-num an-pnl--neg">{data.losses}</td>
+                        <td className="an-td-num" style={{ fontWeight: 600 }}>
+                          {fmtWinRate(data.wins, data.wins + data.losses)}
+                        </td>
+                        <td className={`an-td-num an-pnl ${data.totalPnl >= 0 ? 'an-pnl--pos' : 'an-pnl--neg'}`}>
+                          {fmtPnl(data.totalPnl)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!expanded && (
+        <EmptyState icon="📊" message="Click 'Load Detailed Analytics' to see performance by pattern, timeframe, and entry hour." />
+      )}
+    </Section>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 const EXCHANGES = [
@@ -497,6 +730,8 @@ export default function AnalyticsPage() {
           >
             <DailyPnlTable rows={data.dailyPnl} />
           </Section>
+
+          <ComprehensiveAnalytics exchange={exchange} />
         </>
       )}
 

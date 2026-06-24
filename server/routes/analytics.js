@@ -225,4 +225,132 @@ router.get('/bias-stats', async (req, res) => {
   }
 });
 
+// ── GET /api/analytics/comprehensive ─────────────────────────────────────────
+/**
+ * Comprehensive analytics — by pattern, timeframe, entry hour, with export.
+ * Returns detailed stats for equity trades similar to index trade analytics.
+ *
+ * Query params:
+ *   limit      — max trades to analyze (default 2000)
+ *   exchange   — optional filter: 'NSE', 'MCX'
+ */
+router.get('/comprehensive', async (req, res) => {
+  if (!mongo.isReady()) {
+    return res.json({ summary: null, byPattern: {}, byTimeframe: {}, byEntryHour: {}, dbReady: false });
+  }
+
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 2000;
+    const trades = await db.tradeRepo.getRecentTrades(limit);
+
+    // Optional exchange filter
+    let filtered = trades;
+    if (req.query.exchange === 'NSE') {
+      filtered = trades.filter(t => t.exchange === 'NSE' || t.exchange === 'NFO');
+    } else if (req.query.exchange) {
+      filtered = trades.filter(t => t.exchange === req.query.exchange);
+    }
+
+    const closed = filtered.filter(t => t.status === 'CLOSED');
+
+    // Helper for IST hour from timestamp
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const getIstHour = (ts) => {
+      if (!ts) return null;
+      const d = new Date(ts + IST_OFFSET_MS);
+      return d.getUTCHours();
+    };
+
+    // 1. By Pattern
+    const byPattern = {};
+    for (const t of closed) {
+      const key = t.patternId || 'unknown';
+      if (!byPattern[key]) byPattern[key] = { wins: 0, losses: 0, totalPnl: 0, target: 0, sl: 0 };
+      if (t.pnl > 0) byPattern[key].wins++;
+      else byPattern[key].losses++;
+      byPattern[key].totalPnl += t.pnl || 0;
+      if (t.exitReason === 'target') byPattern[key].target++;
+      if (t.exitReason === 'sl') byPattern[key].sl++;
+    }
+
+    // 2. By Timeframe
+    const byTimeframe = {};
+    for (const t of closed) {
+      const key = t.tfLabel || t.interval || 'unknown';
+      if (!byTimeframe[key]) byTimeframe[key] = { wins: 0, losses: 0, totalPnl: 0, target: 0, sl: 0 };
+      if (t.pnl > 0) byTimeframe[key].wins++;
+      else byTimeframe[key].losses++;
+      byTimeframe[key].totalPnl += t.pnl || 0;
+      if (t.exitReason === 'target') byTimeframe[key].target++;
+      if (t.exitReason === 'sl') byTimeframe[key].sl++;
+    }
+
+    // 3. By Entry Hour (IST)
+    const byEntryHour = {};
+    for (const t of closed) {
+      const hour = getIstHour(t.ts);
+      if (hour === null) continue;
+      const key = `${hour.toString().padStart(2, '0')}:00`;
+      if (!byEntryHour[key]) byEntryHour[key] = { wins: 0, losses: 0, totalPnl: 0 };
+      if (t.pnl > 0) byEntryHour[key].wins++;
+      else byEntryHour[key].losses++;
+      byEntryHour[key].totalPnl += t.pnl || 0;
+    }
+
+    // 4. Summary
+    const summary = {
+      totalTrades: closed.length,
+      wins: closed.filter(t => t.pnl > 0).length,
+      losses: closed.filter(t => t.pnl <= 0).length,
+      totalPnl: closed.reduce((s, t) => s + (t.pnl || 0), 0),
+      targetHits: closed.filter(t => t.exitReason === 'target').length,
+      slHits: closed.filter(t => t.exitReason === 'sl').length,
+    };
+
+    res.json({
+      summary,
+      byPattern,
+      byTimeframe,
+      byEntryHour,
+      dbReady: true,
+    });
+  } catch (err) {
+    console.error('[Analytics] comprehensive failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/analytics/export ────────────────────────────────────────────────
+/**
+ * Export all trades as JSON for download.
+ *
+ * Query params:
+ *   limit      — max trades to export (default 10000)
+ *   exchange   — optional filter: 'NSE', 'MCX'
+ */
+router.get('/export', async (req, res) => {
+  if (!mongo.isReady()) {
+    return res.status(400).json({ error: 'MongoDB not connected' });
+  }
+
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 10000;
+    let trades = await db.tradeRepo.getRecentTrades(limit);
+
+    // Optional exchange filter
+    if (req.query.exchange === 'NSE') {
+      trades = trades.filter(t => t.exchange === 'NSE' || t.exchange === 'NFO');
+    } else if (req.query.exchange) {
+      trades = trades.filter(t => t.exchange === req.query.exchange);
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=equity-trades-export.json');
+    res.json(trades);
+  } catch (err) {
+    console.error('[Analytics] export failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

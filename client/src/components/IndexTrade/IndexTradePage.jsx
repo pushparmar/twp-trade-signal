@@ -597,6 +597,296 @@ function OrderHistory({ trades, fetchHistoricalTrades }) {
   );
 }
 
+// ── Analytics Section ──────────────────────────────────────────────────────
+
+function AnalyticsSection({ fetchComprehensiveAnalytics, fetchHistoricalTrades }) {
+  const [expanded, setExpanded] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const loadAnalytics = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const data = await fetchComprehensiveAnalytics();
+      setAnalytics(data);
+      setExpanded(true);
+    } catch (err) {
+      console.error('Failed to load analytics:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const exportAllTrades = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const trades = await fetchHistoricalTrades();
+      if (!trades || trades.length === 0) {
+        alert('No trades to export');
+        return;
+      }
+      const blob = new Blob([JSON.stringify(trades, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `index-trades-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const fmtWinRate = (wins, total) => {
+    if (!total) return '—';
+    return `${((wins / total) * 100).toFixed(0)}%`;
+  };
+
+  return (
+    <div className="settings-group">
+      <h3
+        style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        onClick={() => analytics ? setExpanded(prev => !prev) : loadAnalytics()}
+      >
+        <span>📊 Analytics</span>
+        <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={(e) => { e.stopPropagation(); loadAnalytics(); }}
+            style={{ fontSize: 10, padding: '2px 8px' }}
+            disabled={loading}
+          >
+            {loading ? '⏳ Loading...' : '🔄 Load Analytics'}
+          </button>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={(e) => { e.stopPropagation(); exportAllTrades(); }}
+            style={{ fontSize: 10, padding: '2px 8px' }}
+            disabled={exporting}
+          >
+            {exporting ? '⏳...' : '⬇ Export All'}
+          </button>
+          <span style={{ fontSize: 12 }}>{expanded ? '▼' : '▶'}</span>
+        </span>
+      </h3>
+
+      {expanded && analytics && (
+        <div style={{ marginTop: 12 }}>
+          {/* Summary */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: 8,
+            marginBottom: 16, padding: 12, background: 'var(--bg-tertiary)', borderRadius: 8
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total Trades</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>{analytics.summary?.totalTrades || 0}</div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Win Rate</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#51cf66' }}>
+                {fmtWinRate(analytics.summary?.wins, analytics.summary?.totalTrades)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Total PnL</div>
+              <div style={{
+                fontSize: 18, fontWeight: 700,
+                color: (analytics.summary?.totalPnl || 0) >= 0 ? '#51cf66' : '#ff6b6b'
+              }}>
+                {fmtPnl(analytics.summary?.totalPnl)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Target / SL</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>
+                <span style={{ color: '#51cf66' }}>{analytics.summary?.targetHits || 0}</span>
+                {' / '}
+                <span style={{ color: '#ff6b6b' }}>{analytics.summary?.slHits || 0}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* By Pattern */}
+          {analytics.byPattern && Object.keys(analytics.byPattern).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <h4 style={{ fontSize: 13, marginBottom: 8, color: 'var(--text-secondary)' }}>📈 By Pattern</h4>
+              <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Pattern</th>
+                    <th style={{ textAlign: 'right' }}>Trades</th>
+                    <th style={{ textAlign: 'right' }}>Wins</th>
+                    <th style={{ textAlign: 'right' }}>Losses</th>
+                    <th style={{ textAlign: 'right' }}>Win %</th>
+                    <th style={{ textAlign: 'right' }}>PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(analytics.byPattern).map(([patternId, data]) => (
+                    <tr key={patternId}>
+                      <td style={{ fontWeight: 500 }}>{patternId}</td>
+                      <td style={{ textAlign: 'right' }}>{data.wins + data.losses}</td>
+                      <td style={{ textAlign: 'right', color: '#51cf66' }}>{data.wins}</td>
+                      <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{data.losses}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {fmtWinRate(data.wins, data.wins + data.losses)}
+                      </td>
+                      <td style={{
+                        textAlign: 'right', fontWeight: 600,
+                        color: data.totalPnl >= 0 ? '#51cf66' : '#ff6b6b'
+                      }}>
+                        {fmtPnl(data.totalPnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* By Timeframe */}
+          {analytics.byTimeframe && Object.keys(analytics.byTimeframe).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <h4 style={{ fontSize: 13, marginBottom: 8, color: 'var(--text-secondary)' }}>⏱ By Timeframe</h4>
+              <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Timeframe</th>
+                    <th style={{ textAlign: 'right' }}>Trades</th>
+                    <th style={{ textAlign: 'right' }}>Target Hits</th>
+                    <th style={{ textAlign: 'right' }}>SL Hits</th>
+                    <th style={{ textAlign: 'right' }}>Win %</th>
+                    <th style={{ textAlign: 'right' }}>PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(analytics.byTimeframe).map(([tf, data]) => (
+                    <tr key={tf}>
+                      <td style={{ fontWeight: 500 }}>{tf}</td>
+                      <td style={{ textAlign: 'right' }}>{data.wins + data.losses}</td>
+                      <td style={{ textAlign: 'right', color: '#51cf66' }}>{data.target}</td>
+                      <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{data.sl}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {fmtWinRate(data.wins, data.wins + data.losses)}
+                      </td>
+                      <td style={{
+                        textAlign: 'right', fontWeight: 600,
+                        color: data.totalPnl >= 0 ? '#51cf66' : '#ff6b6b'
+                      }}>
+                        {fmtPnl(data.totalPnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* By Entry Hour */}
+          {analytics.byEntryHour && Object.keys(analytics.byEntryHour).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <h4 style={{ fontSize: 13, marginBottom: 8, color: 'var(--text-secondary)' }}>🕐 By Entry Time (IST)</h4>
+              <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Hour</th>
+                    <th style={{ textAlign: 'right' }}>Trades</th>
+                    <th style={{ textAlign: 'right' }}>Wins</th>
+                    <th style={{ textAlign: 'right' }}>Losses</th>
+                    <th style={{ textAlign: 'right' }}>Win %</th>
+                    <th style={{ textAlign: 'right' }}>PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(analytics.byEntryHour)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([hour, data]) => (
+                    <tr key={hour}>
+                      <td style={{ fontWeight: 500 }}>{hour}</td>
+                      <td style={{ textAlign: 'right' }}>{data.wins + data.losses}</td>
+                      <td style={{ textAlign: 'right', color: '#51cf66' }}>{data.wins}</td>
+                      <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{data.losses}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {fmtWinRate(data.wins, data.wins + data.losses)}
+                      </td>
+                      <td style={{
+                        textAlign: 'right', fontWeight: 600,
+                        color: data.totalPnl >= 0 ? '#51cf66' : '#ff6b6b'
+                      }}>
+                        {fmtPnl(data.totalPnl)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* RSI Analysis */}
+          {analytics.rsiAnalysis && (
+            <div style={{ marginBottom: 16 }}>
+              <h4 style={{ fontSize: 13, marginBottom: 8, color: 'var(--text-secondary)' }}>📉 RSI Filter Analysis</h4>
+              <table className="diag-table" style={{ fontSize: 12, width: '100%' }}>
+                <thead>
+                  <tr>
+                    <th>Condition</th>
+                    <th style={{ textAlign: 'right' }}>Trades</th>
+                    <th style={{ textAlign: 'right' }}>Wins</th>
+                    <th style={{ textAlign: 'right' }}>Losses</th>
+                    <th style={{ textAlign: 'right' }}>Win %</th>
+                    <th style={{ textAlign: 'right' }}>PnL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ fontWeight: 500 }}>With RSI Filter</td>
+                    <td style={{ textAlign: 'right' }}>{analytics.rsiAnalysis.withRsi?.count || 0}</td>
+                    <td style={{ textAlign: 'right', color: '#51cf66' }}>{analytics.rsiAnalysis.withRsi?.wins || 0}</td>
+                    <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{analytics.rsiAnalysis.withRsi?.losses || 0}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                      {fmtWinRate(analytics.rsiAnalysis.withRsi?.wins, analytics.rsiAnalysis.withRsi?.count)}
+                    </td>
+                    <td style={{
+                      textAlign: 'right', fontWeight: 600,
+                      color: (analytics.rsiAnalysis.withRsi?.totalPnl || 0) >= 0 ? '#51cf66' : '#ff6b6b'
+                    }}>
+                      {fmtPnl(analytics.rsiAnalysis.withRsi?.totalPnl)}
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style={{ fontWeight: 500 }}>Without RSI Filter</td>
+                    <td style={{ textAlign: 'right' }}>{analytics.rsiAnalysis.withoutRsi?.count || 0}</td>
+                    <td style={{ textAlign: 'right', color: '#51cf66' }}>{analytics.rsiAnalysis.withoutRsi?.wins || 0}</td>
+                    <td style={{ textAlign: 'right', color: '#ff6b6b' }}>{analytics.rsiAnalysis.withoutRsi?.losses || 0}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                      {fmtWinRate(analytics.rsiAnalysis.withoutRsi?.wins, analytics.rsiAnalysis.withoutRsi?.count)}
+                    </td>
+                    <td style={{
+                      textAlign: 'right', fontWeight: 600,
+                      color: (analytics.rsiAnalysis.withoutRsi?.totalPnl || 0) >= 0 ? '#51cf66' : '#ff6b6b'
+                    }}>
+                      {fmtPnl(analytics.rsiAnalysis.withoutRsi?.totalPnl)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!expanded && !analytics && (
+        <p className="diag-hint">Click "Load Analytics" to see pattern performance, timeframe stats, and more.</p>
+      )}
+    </div>
+  );
+}
+
 // ── Option Chain Table ─────────────────────────────────────────────────────
 
 function OptionChainTable({ optionChain, onRefresh }) {
@@ -746,7 +1036,7 @@ export default function IndexTradePage() {
   const {
     openTrades, todayClosed,
     tradeTicks, optionChain, sseConnected, status, config, pnl, alerts,
-    updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes, fetchHistoricalTrades,
+    updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes, fetchHistoricalTrades, fetchComprehensiveAnalytics,
   } = useIndexTrade();
 
   function handleToggle() {
@@ -771,6 +1061,7 @@ export default function IndexTradePage() {
         <PnlSummary pnl={pnl} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
         <OrderHistory trades={todayClosed} fetchHistoricalTrades={fetchHistoricalTrades} />
+        <AnalyticsSection fetchComprehensiveAnalytics={fetchComprehensiveAnalytics} fetchHistoricalTrades={fetchHistoricalTrades} />
         <OptionChainTable optionChain={optionChain} onRefresh={fetchOptionChain} />
       </div>
     </div>

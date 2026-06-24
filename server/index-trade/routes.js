@@ -243,6 +243,110 @@ router.get('/analytics/recent-trades', async (req, res) => {
   }
 });
 
+// GET /api/index-trade/analytics/comprehensive
+// Returns detailed analytics: by pattern, timeframe, entry time, with/without RSI
+router.get('/analytics/comprehensive', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 2000;
+    const trades = await db.indexTradeRepo.getRecentTrades(limit);
+    const closed = trades.filter(t => t.status === 'CLOSED');
+
+    // Helper for IST hour from timestamp
+    const getIstHour = (ts) => {
+      if (!ts) return null;
+      const d = new Date(ts + 5.5 * 60 * 60 * 1000);
+      return d.getUTCHours();
+    };
+
+    // 1. By Pattern
+    const byPattern = {};
+    for (const t of closed) {
+      const key = t.patternId || 'unknown';
+      if (!byPattern[key]) byPattern[key] = { wins: 0, losses: 0, totalPnl: 0, trades: [] };
+      if (t.pnl > 0) byPattern[key].wins++;
+      else byPattern[key].losses++;
+      byPattern[key].totalPnl += t.pnl || 0;
+      byPattern[key].trades.push(t);
+    }
+
+    // 2. By Timeframe
+    const byTimeframe = {};
+    for (const t of closed) {
+      const key = t.interval || t.tfLabel || 'unknown';
+      if (!byTimeframe[key]) byTimeframe[key] = { wins: 0, losses: 0, totalPnl: 0, target: 0, sl: 0 };
+      if (t.pnl > 0) byTimeframe[key].wins++;
+      else byTimeframe[key].losses++;
+      byTimeframe[key].totalPnl += t.pnl || 0;
+      if (t.exitReason === 'target') byTimeframe[key].target++;
+      if (t.exitReason === 'sl') byTimeframe[key].sl++;
+    }
+
+    // 3. By Entry Hour (IST)
+    const byEntryHour = {};
+    for (const t of closed) {
+      const hour = getIstHour(t.ts);
+      if (hour === null) continue;
+      const key = `${hour.toString().padStart(2, '0')}:00`;
+      if (!byEntryHour[key]) byEntryHour[key] = { wins: 0, losses: 0, totalPnl: 0 };
+      if (t.pnl > 0) byEntryHour[key].wins++;
+      else byEntryHour[key].losses++;
+      byEntryHour[key].totalPnl += t.pnl || 0;
+    }
+
+    // 4. RSI analysis (trades that have RSI vs those without)
+    const withRsi = closed.filter(t => t.rsiAtEntry != null);
+    const withoutRsi = closed.filter(t => t.rsiAtEntry == null);
+    const rsiAnalysis = {
+      withRsi: {
+        count: withRsi.length,
+        wins: withRsi.filter(t => t.pnl > 0).length,
+        losses: withRsi.filter(t => t.pnl <= 0).length,
+        totalPnl: withRsi.reduce((s, t) => s + (t.pnl || 0), 0),
+      },
+      withoutRsi: {
+        count: withoutRsi.length,
+        wins: withoutRsi.filter(t => t.pnl > 0).length,
+        losses: withoutRsi.filter(t => t.pnl <= 0).length,
+        totalPnl: withoutRsi.reduce((s, t) => s + (t.pnl || 0), 0),
+      },
+    };
+
+    // 5. Summary
+    const summary = {
+      totalTrades: closed.length,
+      wins: closed.filter(t => t.pnl > 0).length,
+      losses: closed.filter(t => t.pnl <= 0).length,
+      totalPnl: closed.reduce((s, t) => s + (t.pnl || 0), 0),
+      targetHits: closed.filter(t => t.exitReason === 'target').length,
+      slHits: closed.filter(t => t.exitReason === 'sl').length,
+    };
+
+    res.json({
+      summary,
+      byPattern,
+      byTimeframe,
+      byEntryHour,
+      rsiAnalysis,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/index-trade/analytics/export
+// Export all trades as JSON for download
+router.get('/analytics/export', async (req, res) => {
+  try {
+    const limit = req.query.limit ? parseInt(req.query.limit, 10) : 10000;
+    const trades = await db.indexTradeRepo.getRecentTrades(limit);
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename=index-trades-export.json');
+    res.json(maskTradePatterns(trades));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Trade Pairing & Backtesting Analytics ────────────────────────────────────
 
 // GET /api/index-trade/paired-trades
