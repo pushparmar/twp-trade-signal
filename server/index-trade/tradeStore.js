@@ -93,6 +93,18 @@ async function restore() {
       const openCount = todayTrades.filter(t => t.status === 'OPEN').length;
       const closedCount = todayTrades.filter(t => t.status === 'CLOSED').length;
       console.log(`[IdxTradeStore] Restored ${todayTrades.length} trade(s) from MongoDB (${openCount} open, ${closedCount} closed)`);
+
+      // Register open trade tokens with strikeManager so they stay subscribed
+      const openTrades = todayTrades.filter(t => t.status === 'OPEN');
+      if (openTrades.length > 0) {
+        const strikeManager = require('./strikeManager');
+        for (const trade of openTrades) {
+          if (trade.token) {
+            strikeManager.registerOpenTradeToken(trade.token);
+          }
+        }
+        console.log(`[IdxTradeStore] Registered ${openTrades.length} open trade token(s) with strikeManager`);
+      }
     }
 
     // Load config

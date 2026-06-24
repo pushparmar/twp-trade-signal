@@ -61,6 +61,15 @@ export default function useIndexTrade() {
     try { const r = await api.get('/index-trade/alerts');      setAlerts(r.data || []); }      catch { /* ignore */ }
   }, []);
 
+  const fetchHistoricalTrades = useCallback(async () => {
+    try {
+      const r = await api.get('/index-trade/analytics/recent-trades?limit=500');
+      return r.data || [];
+    } catch {
+      return [];
+    }
+  }, []);
+
   // ── Mutation helpers ───────────────────────────────────────────────────
 
   const updateConfig = useCallback(async (updates) => {
@@ -197,7 +206,7 @@ export default function useIndexTrade() {
     trades, openTrades, closedTrades, todayClosed,
     tradeTicks, optionChain, sseConnected,
     status, config, pnl, alerts,
-    fetchTrades, fetchStatus, fetchConfig, fetchPnl, fetchOptionChain,
+    fetchTrades, fetchStatus, fetchConfig, fetchPnl, fetchOptionChain, fetchHistoricalTrades,
     updateConfig, manualClose, clearTrades, refreshStrikes,
   };
 }

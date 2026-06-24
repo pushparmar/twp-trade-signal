@@ -329,6 +329,9 @@ function onSignal(signal) {
 
     _openKeys.add(stackKey);
 
+    // Register token so it stays subscribed even if ATM shifts
+    strikeManager.registerOpenTradeToken(numToken);
+
     console.log(
         `[IdxOrder] 📋 BUY ${inst.tradingsymbol} @${close} ` +
         `SL=${sl} T=${target} R:R=${rrRatio.toFixed(2)} ` +
@@ -454,6 +457,9 @@ function _checkLowPremiumEntry() {
         });
 
         _openKeys.add(numToken);
+
+        // Register token so it stays subscribed even if ATM shifts
+        strikeManager.registerOpenTradeToken(numToken);
 
         console.log(
             `[IdxOrder] 💰 LP BUY ${inst.tradingsymbol} @₹${ltp} ` +
@@ -585,6 +591,8 @@ function _handleLowPremiumTSL(trade, ltp) {
         const closedTrade = tradeStore.closeTrade(trade.id, exitPrice, exitReason);
         if (closedTrade) {
             _openKeys.delete(numToken);
+            // Unregister token — allows unsubscribe if out of ATM range
+            strikeManager.unregisterOpenTradeToken(numToken);
             console.log(
                 `[IdxOrder] ${exitReason === 'target' ? '🎯' : '🛑'} ` +
                 `LP ${trade.symbol} closed @₹${exitPrice} (${exitReason}) ` +
@@ -688,6 +696,8 @@ function _handlePatternTSL(trade, ltp) {
         const closedTrade = tradeStore.closeTrade(trade.id, exitPrice, exitReason);
         if (closedTrade) {
             _openKeys.delete(numToken);
+            // Unregister token — allows unsubscribe if out of ATM range
+            strikeManager.unregisterOpenTradeToken(numToken);
             console.log(
                 `[IdxOrder] ${exitReason === 'target' ? '🎯' : '🛑'} ` +
                 `${trade.symbol} closed @${exitPrice} (${exitReason}) ` +
@@ -779,7 +789,10 @@ function _checkEodClose() {
         const ltp          = _getCurrentPrice(trade.token) ?? trade.entryPrice;
         const closedTrade  = tradeStore.closeTrade(trade.id, ltp, 'eod');
         if (closedTrade) {
-            _openKeys.delete(Number(trade.token));
+            const numToken = Number(trade.token);
+            _openKeys.delete(numToken);
+            // Unregister token — allows unsubscribe if out of ATM range
+            strikeManager.unregisterOpenTradeToken(numToken);
             console.log(
                 `[IdxOrder] 🕐 EOD closed ${trade.symbol} @₹${ltp} PnL=₹${closedTrade.pnl}`,
             );

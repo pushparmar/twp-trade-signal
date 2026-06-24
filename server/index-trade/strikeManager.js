@@ -34,6 +34,7 @@ let _refreshTimer     = null;
 let _morningTimer     = null; // fires daily at 9:20 IST
 let _lastMorningReset = null; // IST date string of last reset e.g. '2026-05-26'
 let _allTokens = new Set(); // all currently subscribed tokens
+let _openTradeTokens = new Set(); // tokens for open trades — always stay subscribed
 
 // ── Core logic ──────────────────────────────────────────────────────────────
 
@@ -95,14 +96,16 @@ async function _refreshIndex(indexName) {
   }
 
   // Unsubscribe old tokens that are no longer in the new set
+  // BUT keep tokens that have open trades — never unsubscribe those
   const oldTokens = prev ? [...prev.instruments.keys()] : [];
   const newTokens = [...instrumentMap.keys()];
-  const toUnsub = oldTokens.filter(t => !instrumentMap.has(t));
+  const toUnsub = oldTokens.filter(t => !instrumentMap.has(t) && !_openTradeTokens.has(t));
   const toSub   = newTokens.filter(t => !prev?.instruments.has(t));
 
   if (toUnsub.length > 0) {
     try { kiteTicker.unsubscribe(toUnsub); } catch { /* ignore */ }
     toUnsub.forEach(t => _allTokens.delete(t));
+    console.log(`[IdxStrike] Unsubscribed ${toUnsub.length} tokens (not in ATM range and no open trades)`);
   }
 
   if (toSub.length > 0) {
@@ -373,4 +376,71 @@ function getOptionChain() {
   return result;
 }
 
-module.exports = { start, stop, refresh: _refresh, getStatus, getInstrumentByToken, getAllTokens, isOurToken, getOptionChain };
+/**
+ * Register a token as having an open trade — ensures it stays subscribed
+ * even if ATM shifts and the strike falls out of range.
+ */
+function registerOpenTradeToken(token) {
+  const numToken = Number(token);
+  if (!numToken) return;
+
+  _openTradeTokens.add(numToken);
+
+  // If not already subscribed, subscribe now
+  if (!_allTokens.has(numToken)) {
+    try {
+      kiteTicker.subscribe([numToken]);
+      _allTokens.add(numToken);
+      console.log(`[IdxStrike] Subscribed open-trade token ${numToken} (out of ATM range)`);
+
+      // Seed candle buffers
+      for (const interval of SEED_INTERVALS) {
+        candleStore.getCandles(numToken, interval, 300, false).catch(() => {});
+      }
+    } catch (err) {
+      console.warn(`[IdxStrike] Failed to subscribe open-trade token ${numToken}:`, err.message);
+    }
+  }
+}
+
+/**
+ * Unregister a token when its trade is closed — allows it to be unsubscribed
+ * if it's out of the ATM range.
+ */
+function unregisterOpenTradeToken(token) {
+  const numToken = Number(token);
+  if (!numToken) return;
+
+  _openTradeTokens.delete(numToken);
+
+  // Check if this token is still in any subscription map
+  let stillInRange = false;
+  for (const [, data] of _subscriptions) {
+    if (data.instruments.has(numToken)) {
+      stillInRange = true;
+      break;
+    }
+  }
+
+  // If out of range and no longer has open trade, unsubscribe
+  if (!stillInRange && _allTokens.has(numToken)) {
+    try {
+      kiteTicker.unsubscribe([numToken]);
+      _allTokens.delete(numToken);
+      console.log(`[IdxStrike] Unsubscribed closed-trade token ${numToken} (out of ATM range)`);
+    } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Get all open trade tokens (for debugging).
+ */
+function getOpenTradeTokens() {
+  return [..._openTradeTokens];
+}
+
+module.exports = {
+  start, stop, refresh: _refresh,
+  getStatus, getInstrumentByToken, getAllTokens, isOurToken, getOptionChain,
+  registerOpenTradeToken, unregisterOpenTradeToken, getOpenTradeTokens,
+};

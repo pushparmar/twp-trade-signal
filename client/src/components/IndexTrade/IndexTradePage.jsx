@@ -395,15 +395,32 @@ function OpenTradesPanel({ trades, tradeTicks, onClose }) {
 
 /**
  * @param {object[]} trades       - Today's closed trades (for the table display)
- * @param {object[]} allTrades    - Full closed trade history (for CSV export)
+ * @param {function} fetchHistoricalTrades - Function to fetch historical trades from MongoDB
  */
-function OrderHistory({ trades, allTrades }) {
+function OrderHistory({ trades, fetchHistoricalTrades }) {
   const [expanded, setExpanded] = useState(true);
   const [chartTrade, setChartTrade] = useState(null);
-  const [showAll, setShowAll] = useState(false);  // Toggle between today and all history
+  const [showAll, setShowAll] = useState(false);
+  const [historicalTrades, setHistoricalTrades] = useState([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
-  const displayTrades = showAll ? allTrades : trades;
-  const displayLabel = showAll ? 'All Closed Trades' : "Today's Closed Trades";
+  // Load historical trades when "All History" is clicked
+  const handleToggleHistory = async () => {
+    if (!showAll && historicalTrades.length === 0) {
+      setLoadingHistory(true);
+      const data = await fetchHistoricalTrades();
+      // Filter to only closed trades and sort by closedTs desc
+      const closed = data
+        .filter(t => t.status === 'CLOSED')
+        .sort((a, b) => (b.closedTs || 0) - (a.closedTs || 0));
+      setHistoricalTrades(closed);
+      setLoadingHistory(false);
+    }
+    setShowAll(!showAll);
+  };
+
+  const displayTrades = showAll ? historicalTrades : trades;
+  const displayLabel = showAll ? `All Closed Trades (${historicalTrades.length})` : "Today's Closed Trades";
 
   if (displayTrades.length === 0) {
     return (
@@ -412,7 +429,8 @@ function OrderHistory({ trades, allTrades }) {
           <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span>{displayLabel}</span>
             <button
-              onClick={() => setShowAll(!showAll)}
+              onClick={handleToggleHistory}
+              disabled={loadingHistory}
               style={{
                 fontSize: 10,
                 padding: '2px 6px',
@@ -420,18 +438,18 @@ function OrderHistory({ trades, allTrades }) {
                 border: '1px solid var(--border)',
                 background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
                 color: showAll ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer'
+                cursor: loadingHistory ? 'wait' : 'pointer'
               }}
             >
-              {showAll ? 'Today' : 'All History'}
+              {loadingHistory ? '...' : showAll ? 'Today' : 'All History'}
             </button>
           </span>
-          {allTrades && allTrades.length > 0 && (
+          {historicalTrades.length > 0 && (
             <button
               className="btn btn-sm btn-secondary"
-              onClick={() => exportToCSV(allTrades)}
+              onClick={() => exportToCSV(historicalTrades)}
               style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
-              title={`Export all ${allTrades.length} closed trades to CSV`}
+              title={`Export all ${historicalTrades.length} closed trades to CSV`}
             >
               ⬇ Export CSV
             </button>
@@ -457,7 +475,8 @@ function OrderHistory({ trades, allTrades }) {
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
             <span>{displayLabel} ({displayTrades.length})</span>
             <button
-              onClick={(e) => { e.stopPropagation(); setShowAll(!showAll); }}
+              onClick={(e) => { e.stopPropagation(); handleToggleHistory(); }}
+              disabled={loadingHistory}
               style={{
                 fontSize: 10,
                 padding: '2px 6px',
@@ -465,10 +484,10 @@ function OrderHistory({ trades, allTrades }) {
                 border: '1px solid var(--border)',
                 background: showAll ? '#4dabf7' : 'var(--bg-secondary)',
                 color: showAll ? '#fff' : 'var(--text-muted)',
-                cursor: 'pointer'
+                cursor: loadingHistory ? 'wait' : 'pointer'
               }}
             >
-              {showAll ? 'Today' : 'All History'}
+              {loadingHistory ? '...' : showAll ? 'Today' : 'All History'}
             </button>
             <span style={{ fontSize: 13, fontWeight: 600, color: displayPnl >= 0 ? '#51cf66' : '#ff6b6b' }}>
               {fmtPnl(displayPnl)}
@@ -480,12 +499,12 @@ function OrderHistory({ trades, allTrades }) {
 
           {/* Right side: export button + collapse chevron */}
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {allTrades && allTrades.length > 0 && (
+            {historicalTrades.length > 0 && (
               <button
                 className="btn btn-sm btn-secondary"
-                onClick={(e) => { e.stopPropagation(); exportToCSV(allTrades); }}
+                onClick={(e) => { e.stopPropagation(); exportToCSV(historicalTrades); }}
                 style={{ fontSize: 11, padding: '2px 8px', fontWeight: 400 }}
-                title={`Export all ${allTrades.length} closed trades to CSV`}
+                title={`Export all ${historicalTrades.length} closed trades to CSV`}
               >
                 ⬇ Export CSV
               </button>
@@ -732,9 +751,9 @@ function OptionChainIndex({ indexName, data }) {
 
 export default function IndexTradePage() {
   const {
-    openTrades, closedTrades, todayClosed,
+    openTrades, todayClosed,
     tradeTicks, optionChain, sseConnected, status, config, pnl, alerts,
-    updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes,
+    updateConfig, manualClose, fetchStatus, fetchOptionChain, refreshStrikes, fetchHistoricalTrades,
   } = useIndexTrade();
 
   function handleToggle() {
@@ -758,7 +777,7 @@ export default function IndexTradePage() {
         <StatusBar status={status} config={config} onToggle={handleToggle} onRefreshStrikes={refreshStrikes} sseConnected={sseConnected} />
         <PnlSummary pnl={pnl} />
         <OpenTradesPanel trades={openTrades} tradeTicks={tradeTicks} onClose={manualClose} />
-        <OrderHistory trades={todayClosed} allTrades={closedTrades} />
+        <OrderHistory trades={todayClosed} fetchHistoricalTrades={fetchHistoricalTrades} />
         <OptionChainTable optionChain={optionChain} onRefresh={fetchOptionChain} />
       </div>
     </div>
