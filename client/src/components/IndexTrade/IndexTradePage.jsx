@@ -187,14 +187,18 @@ function StatusBar({ status, config, onToggle, onRefreshStrikes, onUpdateConfig,
             {refreshing ? '…' : '↻ Refresh Strikes'}
           </button>
           {/* Mask Pattern Names toggle */}
-          <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, cursor: 'pointer', color: 'var(--text-muted)' }}>
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer',
+            padding: '4px 10px', background: 'var(--bg-tertiary)', borderRadius: 4,
+            border: '1px solid var(--border)', color: config?.maskPatternNames ? '#4dabf7' : 'var(--text-secondary)'
+          }}>
             <input
               type="checkbox"
               checked={config?.maskPatternNames || false}
               onChange={(e) => onUpdateConfig({ maskPatternNames: e.target.checked })}
               style={{ margin: 0 }}
             />
-            Mask Names
+            🔒 Mask Names
           </label>
         </div>
       </div>

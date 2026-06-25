@@ -3,8 +3,11 @@ const store = require('../store');
 
 async function sendMessage(chatId, text) {
   // Check module config — skip if telegramAlerts is disabled
-  if (!store.isModuleEnabled('telegramAlerts')) {
-    console.log('[TelegramNotifier] Module disabled — message not sent');
+  const moduleEnabled = store.isModuleEnabled('telegramAlerts');
+  console.log(`[TelegramNotifier] telegramAlerts module enabled: ${moduleEnabled}`);
+
+  if (!moduleEnabled) {
+    console.log('[TelegramNotifier] ⚠️ Module disabled — message not sent');
     return { ok: true, skipped: true, reason: 'module_disabled' };
   }
 

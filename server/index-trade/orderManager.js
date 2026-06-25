@@ -108,7 +108,13 @@ async function _sendTelegramAlert(trade) {
         // Use main store's telegram chatId (not index trade config)
         const mainStore = require('../store');
         const chatId = mainStore.getTelegramChatId();
-        if (!chatId) return; // Telegram not configured
+
+        console.log(`[IdxOrder] 📱 Telegram alert: chatId=${chatId || 'NOT SET'}, trade=${trade.symbol}`);
+
+        if (!chatId) {
+            console.warn('[IdxOrder] ⚠️ Telegram chatId not configured — skipping alert');
+            return;
+        }
 
         const action = trade.action; // Always 'BUY' for index options
         const symbol = trade.symbol;
@@ -137,9 +143,11 @@ async function _sendTelegramAlert(trade) {
             text += `<b>Avg-Down At:</b> ₹${trade.avgDownAt}\n`;
         }
 
-        await telegramNotifier.sendMessage(chatId, text);
+        console.log(`[IdxOrder] 📱 Sending Telegram message to ${chatId}...`);
+        const result = await telegramNotifier.sendMessage(chatId, text);
+        console.log(`[IdxOrder] ✅ Telegram sent:`, result?.ok ? 'success' : result);
     } catch (err) {
-        console.warn('[IdxOrder] Telegram notification failed:', err.message);
+        console.error('[IdxOrder] ❌ Telegram notification failed:', err.message);
     }
 }
 
