@@ -384,29 +384,63 @@ const PATTERNS = {
   'kumo-bounce': {
     id:          'kumo-bounce',
     label:       'Kumo Bounce',
-    description: 'Price pulled back to the cloud edge from outside and reversed on the current candle. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below.',
+    description: 'Price pulled back to the cloud edge from outside and reversed on the current candle. Bullish when price tests cloudTop from above; bearish when testing cloudBottom from below. Only fires on wide clouds (strong S/R).',
     maxScore:    5,
-    defaultOpts: { lookback: 1, tolerance: 0.005 },
+    // minCloudWidthPct: 0.5% minimum cloud width relative to price
+    // minCloudWidthAtr: 0.5× ATR minimum cloud width (alternative measure)
+    // A wide cloud = strong support/resistance; thin cloud = weak, easily broken
+    defaultOpts: { lookback: 1, tolerance: 0.005, minCloudWidthPct: 0.005, minCloudWidthAtr: 0.5 },
 
     run(candles, opts = {}) {
       const result = getKumoBounce(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
 
+      const { cloudTop, cloudBottom, close } = result;
+
+      // Cloud width filter — only bounce off WIDE clouds (strong S/R)
+      // Thin clouds are weak and easily broken through
+      if (cloudTop != null && cloudBottom != null && close != null) {
+        const cloudWidth = Math.abs(cloudTop - cloudBottom);
+        const atr = getATR(candles, 14);
+
+        // Check percentage-based width
+        const minWidthPct = opts.minCloudWidthPct ?? 0.005; // 0.5% default
+        const pctWidth = cloudWidth / close;
+        if (pctWidth < minWidthPct) return { matched: false };
+
+        // Check ATR-based width (if ATR available)
+        if (atr != null) {
+          const minWidthAtr = opts.minCloudWidthAtr ?? 0.5; // 0.5× ATR default
+          if (cloudWidth < minWidthAtr * atr) return { matched: false };
+        }
+      }
+
       // R3: Wick-penetration requirement — a true bounce shows a wick INTO the cloud
       // Bullish: low should have dipped to/below cloudTop; Bearish: high should have reached cloudBottom
-      if (result.signal === 'bullish' && result.cloudTop != null) {
+      if (result.signal === 'bullish' && cloudTop != null) {
         const lastCandle = candles[candles.length - 1];
-        if (lastCandle.low > result.cloudTop) return { matched: false }; // wick never touched cloud
+        if (lastCandle.low > cloudTop) return { matched: false }; // wick never touched cloud
       }
-      if (result.signal === 'bearish' && result.cloudBottom != null) {
+      if (result.signal === 'bearish' && cloudBottom != null) {
         const lastCandle = candles[candles.length - 1];
-        if (lastCandle.high < result.cloudBottom) return { matched: false }; // wick never touched cloud
+        if (lastCandle.high < cloudBottom) return { matched: false }; // wick never touched cloud
       }
 
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
       const trailingAnchor = result.tenkan ?? null;
-      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
+
+      // Add cloud width info to result for visibility
+      const cloudWidth = (cloudTop != null && cloudBottom != null) ? Math.abs(cloudTop - cloudBottom) : null;
+
+      return {
+        matched: true,
+        ...result,
+        sl, target, atr, targetSource, trailingAnchor,
+        cloudWidth: cloudWidth != null ? Math.round(cloudWidth * 100) / 100 : null,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
     },
   },
 
@@ -436,7 +470,7 @@ const PATTERNS = {
   'kumo-base-entry': {
     id:          'kumo-base-entry',
     label:       'Kumo Base Entry',
-    description: 'Price consolidated in a tight base just outside a fat cloud, then freshly entered the cloud from the near edge. Fat cloud = strong resistance to traverse (meaningful move expected). SL anchors below the base low (bullish) or above the base high (bearish).',
+    description: 'Price consolidated in a tight base just outside a fat cloud, then freshly entered the cloud from the near edge. Fat cloud = strong resistance to traverse (meaningful move expected). SL anchors below the base low (bullish) or above the base high (bearish). Requires BOTH 1% width AND 1.5× ATR.',
     maxScore:    5,
     defaultOpts: {
       consLookback:     10,
@@ -444,10 +478,9 @@ const PATTERNS = {
       minConsBars:      3,
       posThreshold:     0.4,
       entryLookback:    3,
-      // R5: Lower minCloudWidthPct — 0.5% is more appropriate.
-      // Original 1% was too loose for intraday (1m, 5m) where clouds flicker.
-      minCloudWidthPct: 0.005,
-      minCloudWidthAtr: 1.0,
+      // Strict fat cloud requirement — BOTH checks must pass
+      minCloudWidthPct: 0.01,   // 1% of price
+      minCloudWidthAtr: 1.5,    // 1.5× ATR
     },
 
     run(candles, opts = {}) {
@@ -455,12 +488,35 @@ const PATTERNS = {
       if (!result || !result.signal) return { matched: false };
       // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
       if (!_tkAligned(result)) return { matched: false };
+
+      // Strict cloud width check — BOTH percentage AND ATR checks must pass
+      const { cloudTop, cloudBottom, close } = result;
+      if (cloudTop != null && cloudBottom != null && close != null) {
+        const cloudWidth = Math.abs(cloudTop - cloudBottom);
+        const atr = getATR(candles, 14);
+
+        // Must pass percentage check (1%)
+        const minWidthPct = opts.minCloudWidthPct ?? 0.01;
+        if (cloudWidth / close < minWidthPct) return { matched: false };
+
+        // Must ALSO pass ATR check (1.5× ATR)
+        if (atr != null) {
+          const minWidthAtr = opts.minCloudWidthAtr ?? 1.5;
+          if (cloudWidth < minWidthAtr * atr) return { matched: false };
+        }
+      }
+
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
       const trailingAnchor = result.tenkan ?? null;
+
+      // Add cloud width info to result
+      const cloudWidth = (cloudTop != null && cloudBottom != null) ? Math.abs(cloudTop - cloudBottom) : null;
+
       return {
         matched: true,
         ...result,
         sl, target, atr, targetSource, trailingAnchor,
+        cloudWidth: cloudWidth != null ? Math.round(cloudWidth * 100) / 100 : null,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };
@@ -470,14 +526,38 @@ const PATTERNS = {
   'kijun-bounce': {
     id:          'kijun-bounce',
     label:       'Kijun Support / Resistance',
-    description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, close must not break through.',
+    description: 'Price tested the Kijun-sen (base line) as support (bullish) or resistance (bearish) within the last 2–3 candles — wick touched the level, close must not break through. Requires sufficient TK spread for momentum.',
     maxScore:    4,
-    defaultOpts: { lookback: 3, tolerance: 0.003 },
+    // minTkSpreadPct: 0.3% minimum distance between Tenkan and Kijun
+    // minTkSpreadAtr: 0.2× ATR minimum TK spread
+    // If TK are too close, there's no momentum — bounce won't have room to move
+    defaultOpts: { lookback: 3, tolerance: 0.003, minTkSpreadPct: 0.003, minTkSpreadAtr: 0.2 },
 
     run(candles, opts = {}) {
       const result = getKijunLevel(candles, { ...this.defaultOpts, ...opts });
       if (!result || !result.signal) return { matched: false };
       if (!_tkAligned(result)) return { matched: false };
+
+      const { tenkan, kijun, kijunValue, close } = result;
+      const kijunLevel = kijun ?? kijunValue;
+
+      // TK Spread filter — Tenkan and Kijun must have enough distance
+      // If they're too close, there's no momentum for the bounce
+      if (tenkan != null && kijunLevel != null && close != null) {
+        const tkSpread = Math.abs(tenkan - kijunLevel);
+        const atr = getATR(candles, 14);
+
+        // Check percentage-based spread
+        const minSpreadPct = opts.minTkSpreadPct ?? 0.003; // 0.3% default
+        const pctSpread = tkSpread / close;
+        if (pctSpread < minSpreadPct) return { matched: false };
+
+        // Check ATR-based spread (if ATR available)
+        if (atr != null) {
+          const minSpreadAtr = opts.minTkSpreadAtr ?? 0.2; // 0.2× ATR default
+          if (tkSpread < minSpreadAtr * atr) return { matched: false };
+        }
+      }
 
       // P7: Cloud position hard filter — kijun bounce against the cloud is counter-trend.
       // Bullish bounce requires price above cloud; bearish requires below cloud.
@@ -490,8 +570,19 @@ const PATTERNS = {
       if (result.kijunSlopeOk === false) return { matched: false };
 
       const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
-      const trailingAnchor = result.kijun ?? result.kijunValue ?? null;
-      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
+      const trailingAnchor = kijunLevel ?? null;
+
+      // Add TK spread info to result for visibility
+      const tkSpread = (tenkan != null && kijunLevel != null) ? Math.abs(tenkan - kijunLevel) : null;
+
+      return {
+        matched: true,
+        ...result,
+        sl, target, atr, targetSource, trailingAnchor,
+        tkSpread: tkSpread != null ? Math.round(tkSpread * 100) / 100 : null,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
     },
   },
 
