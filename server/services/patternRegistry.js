@@ -336,9 +336,48 @@ const PATTERNS = {
       // TK alignment: bullish requires tenkan > kijun, bearish requires kijun > tenkan
       if (!_tkAligned(result)) return { matched: false };
 
-      const { sl, target, atr, targetSource } = computeSLTarget(this.id, result.signal, result, candles, opts.interval);
+      const { close, cloudTop, cloudBottom, signal } = result;
+
+      // Kumo Breakout: Target MUST be the opposite cloud edge (natural structural target)
+      // Don't force artificial targets — if cloud edge doesn't give good R:R, skip trade
+      if (cloudTop == null || cloudBottom == null) return { matched: false };
+
+      // SL = far cloud edge (price must traverse whole cloud to invalidate)
+      const atr = getATR(candles, 14);
+      let sl = signal === 'bullish' ? cloudBottom : cloudTop;
+
+      // Apply buffer to SL
+      const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+      const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+      const buf = Math.max(pctBuf, atrBuf);
+      sl = signal === 'bullish' ? sl - buf : sl + buf;
+
+      // Target = opposite cloud edge (the natural resistance/support)
+      const target = signal === 'bullish' ? cloudTop : cloudBottom;
+
+      // Validate: target must be on correct side of entry
+      if (signal === 'bullish' && target <= close) return { matched: false };
+      if (signal === 'bearish' && target >= close) return { matched: false };
+
+      // Validate: SL must be on correct side of entry
+      if (signal === 'bullish' && sl >= close) return { matched: false };
+      if (signal === 'bearish' && sl <= close) return { matched: false };
+
+      sl = Math.round(sl * 100) / 100;
+      const targetRounded = Math.round(target * 100) / 100;
+
       const trailingAnchor = result.tenkan ?? null;
-      return { matched: true, ...result, sl, target, atr, targetSource, trailingAnchor, ..._volumeFields(candles), ..._rsiFields(candles) };
+      return {
+        matched: true,
+        ...result,
+        sl,
+        target: targetRounded,
+        atr: atr != null ? Math.round(atr * 100) / 100 : null,
+        targetSource: 'cloud',
+        trailingAnchor,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
     },
   },
 
