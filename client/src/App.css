@@ -3698,7 +3698,7 @@ body {
   left: 0;
   z-index: 200;
   min-width: 240px;
-  background: var(--surface2);
+  background: var(--card);
   border: 1px solid var(--border2);
   border-radius: 8px;
   box-shadow: 0 6px 20px rgba(0,0,0,.35);

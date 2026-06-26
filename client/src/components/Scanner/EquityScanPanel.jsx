@@ -312,9 +312,10 @@ export default function EquityScanPanel({ inline = false }) {
     const [status, setStatus] = useState(null);
 
     // ── Filter state (all client-side) ────────────────────────────────────────
-    const [tfFilter, setTfFilter] = useLocalState("eqscan:tfFilter", "all");
+    // Default: 1D timeframe and first pattern to avoid loading full list on page load
+    const [tfFilter, setTfFilter] = useLocalState("eqscan:tfFilter", "day");
     const [signalFilter, setSignalFilter] = useLocalState("eqscan:signalFilter", "all");
-    const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "all");
+    const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "first");
     const [volOnly, setVolOnly] = useLocalState("eqscan:volOnly", false);
     const [minRR, setMinRR] = useLocalState("eqscan:minRR", 0);
     const [dedup, setDedup] = useLocalState("eqscan:dedup", false);
@@ -480,18 +481,29 @@ export default function EquityScanPanel({ inline = false }) {
                 seen.set(r.patternId, { id: r.patternId, label: r.patternLabel });
             }
         }
+        const sorted = Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label));
         return [
             { id: "all", label: "All patterns" },
-            ...Array.from(seen.values()).sort((a, b) => a.label.localeCompare(b.label))
+            ...sorted
         ];
     }, [results]);
+
+    // Resolve "first" pattern to actual first pattern ID
+    const resolvedPatternFilter = useMemo(() => {
+        if (patternFilter === "first") {
+            // Get first actual pattern (skip "all")
+            const firstPattern = patternOptions.find(p => p.id !== "all");
+            return firstPattern?.id || "all";
+        }
+        return patternFilter;
+    }, [patternFilter, patternOptions]);
 
     // Filter results (all client-side)
     const filtered = useMemo(() => {
         let list = results.filter(r => {
             if (tfFilter !== "all" && r.interval !== tfFilter) return false;
             if (signalFilter !== "all" && r.signal !== signalFilter) return false;
-            if (patternFilter !== "all" && r.patternId !== patternFilter) return false;
+            if (resolvedPatternFilter !== "all" && r.patternId !== resolvedPatternFilter) return false;
             if (volOnly && !r.volumeConfirmed) return false;
             if (minRR > 0) {
                 if (!r.close || !r.sl || !r.target) return false;
@@ -514,7 +526,7 @@ export default function EquityScanPanel({ inline = false }) {
 
         list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
         return list;
-    }, [results, tfFilter, signalFilter, patternFilter, volOnly, minRR, dedup]);
+    }, [results, tfFilter, signalFilter, resolvedPatternFilter, volOnly, minRR, dedup]);
 
     // ── Render ────────────────────────────────────────────────────────────────
 
@@ -733,7 +745,7 @@ export default function EquityScanPanel({ inline = false }) {
 
                     {/* Pattern dropdown */}
                     <select
-                        value={patternFilter}
+                        value={resolvedPatternFilter}
                         onChange={e => setPatternFilter(e.target.value)}
                         style={{
                             fontSize: 11,

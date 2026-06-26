@@ -80,7 +80,11 @@
       "Bash(curl -s http://localhost:3001/api/kite-auth/status)",
       "Bash(curl -s http://localhost:3001/kite/status)",
       "Bash(curl -s 'http://localhost:3001/api/equity-scan/cache-status')",
-      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; print\\(json.load\\(sys.stdin\\)\\)\")",
+      "Bash(mkdir -p ~/Desktop/dsa-mastery)",
+      "Read(//Users/pushpendraparmar/Desktop/**)",
+      "Bash(npm create *)",
+      "Bash(npm install *)"
     ]
   }
 }
