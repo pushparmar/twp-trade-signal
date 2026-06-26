@@ -21,6 +21,7 @@ const {
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
   getKijunLevel, getCloudSupport, getVolumeContext, getATR, getRSI,
   getCloudExit, getKijunRetest, getTKReversion, getSenkouCross,
+  getKumoInsideConsolidation,
 } = require('./ichimoku');
 
 // Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
@@ -338,12 +339,14 @@ const PATTERNS = {
 
       const { close, cloudTop, cloudBottom, signal } = result;
 
-      // Kumo Breakout: Target MUST be the opposite cloud edge (natural structural target)
-      // Don't force artificial targets — if cloud edge doesn't give good R:R, skip trade
       if (cloudTop == null || cloudBottom == null) return { matched: false };
 
-      // SL = far cloud edge (price must traverse whole cloud to invalidate)
+      // Kumo Breakout:
+      // - Bullish: Price broke ABOVE cloud → SL at cloudBottom, Target ahead (swing high)
+      // - Bearish: Price broke BELOW cloud → SL at cloudTop, Target ahead (swing low)
       const atr = getATR(candles, 14);
+
+      // SL = far cloud edge (price must traverse whole cloud to invalidate)
       let sl = signal === 'bullish' ? cloudBottom : cloudTop;
 
       // Apply buffer to SL
@@ -352,16 +355,29 @@ const PATTERNS = {
       const buf = Math.max(pctBuf, atrBuf);
       sl = signal === 'bullish' ? sl - buf : sl + buf;
 
-      // Target = opposite cloud edge (the natural resistance/support)
-      const target = signal === 'bullish' ? cloudTop : cloudBottom;
-
-      // Validate: target must be on correct side of entry
-      if (signal === 'bullish' && target <= close) return { matched: false };
-      if (signal === 'bearish' && target >= close) return { matched: false };
-
       // Validate: SL must be on correct side of entry
       if (signal === 'bullish' && sl >= close) return { matched: false };
       if (signal === 'bearish' && sl <= close) return { matched: false };
+
+      // Target: Use natural swing target (next resistance/support level)
+      // If no natural target found, use ATR-based projection
+      let target = _naturalTarget(candles, signal, close, opts.interval);
+      let targetSource = 'swing';
+
+      if (target == null && atr != null) {
+        // Fallback: 2× ATR projection from entry
+        const atrMult = 2.0;
+        target = signal === 'bullish'
+          ? close + atrMult * atr
+          : close - atrMult * atr;
+        targetSource = 'atr';
+      }
+
+      if (target == null) return { matched: false };
+
+      // Final validation
+      if (signal === 'bullish' && target <= close) return { matched: false };
+      if (signal === 'bearish' && target >= close) return { matched: false };
 
       sl = Math.round(sl * 100) / 100;
       const targetRounded = Math.round(target * 100) / 100;
@@ -373,8 +389,77 @@ const PATTERNS = {
         sl,
         target: targetRounded,
         atr: atr != null ? Math.round(atr * 100) / 100 : null,
-        targetSource: 'cloud',
+        targetSource,
         trailingAnchor,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
+    },
+  },
+
+  'kumo-inside-consolidation': {
+    id:          'kumo-inside-consolidation',
+    label:       'Kumo Inside Consolidation',
+    description: 'Price is INSIDE a thick cloud and consolidating in a tight range — coiling for a breakout. TK alignment determines bias. Thick cloud = strong barrier, tight range = energy building.',
+    maxScore:    5,
+    defaultOpts: {
+      consLookback:     10,    // bars to measure consolidation range
+      consRatio:        2.0,   // max range = 2× ATR (tight)
+      minCloudWidthPct: 0.01,  // 1% cloud width minimum
+      minCloudWidthAtr: 1.5,   // 1.5× ATR cloud width minimum (BOTH must pass)
+    },
+
+    run(candles, opts = {}) {
+      const result = getKumoInsideConsolidation(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+
+      const { close, cloudTop, cloudBottom, signal, atr, cloudWidth, consRange } = result;
+
+      if (cloudTop == null || cloudBottom == null || close == null) return { matched: false };
+
+      // SL = opposite cloud edge (if bullish expecting upside breakout, SL at cloudBottom)
+      let sl = signal === 'bullish' ? cloudBottom : cloudTop;
+
+      // Apply buffer to SL
+      const pctBuf = sl * SL_ANCHOR_BUFFER_PCT;
+      const atrBuf = atr != null ? SL_ANCHOR_BUFFER_ATR * atr : 0;
+      const buf = Math.max(pctBuf, atrBuf);
+      sl = signal === 'bullish' ? sl - buf : sl + buf;
+
+      // Target = breakout through opposite cloud edge + extension
+      // Use natural swing target beyond the cloud, or ATR projection
+      let target = _naturalTarget(candles, signal, close, opts.interval);
+      let targetSource = 'swing';
+
+      if (target == null && atr != null) {
+        // Fallback: cloud edge + 1× ATR extension
+        const cloudEdge = signal === 'bullish' ? cloudTop : cloudBottom;
+        target = signal === 'bullish'
+          ? cloudEdge + atr
+          : cloudEdge - atr;
+        targetSource = 'cloud+atr';
+      }
+
+      if (target == null) return { matched: false };
+
+      // Validate directions
+      if (signal === 'bullish' && (target <= close || sl >= close)) return { matched: false };
+      if (signal === 'bearish' && (target >= close || sl <= close)) return { matched: false };
+
+      sl = Math.round(sl * 100) / 100;
+      const targetRounded = Math.round(target * 100) / 100;
+
+      const trailingAnchor = result.tenkan ?? null;
+      return {
+        matched: true,
+        ...result,
+        sl,
+        target: targetRounded,
+        atr: atr != null ? Math.round(atr * 100) / 100 : null,
+        targetSource,
+        trailingAnchor,
+        cloudWidth,
+        consRange,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };

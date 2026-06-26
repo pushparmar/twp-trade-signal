@@ -1857,6 +1857,124 @@ function getKumoConsolidation(candles, {
   };
 }
 
+/**
+ * Kumo Inside Consolidation — price is INSIDE a thick cloud and consolidating.
+ *
+ * This is a pre-breakout setup: price has entered the cloud and is coiling
+ * in a tight range, building energy for a breakout in either direction.
+ *
+ * Setup criteria:
+ *   1. Price must be INSIDE the cloud (inCloud = true)
+ *   2. Cloud must be thick (minCloudWidthPct AND minCloudWidthAtr)
+ *   3. Price range over lookback bars must be tight (< consRatio × ATR)
+ *   4. TK alignment determines bias (bullish = T>K, bearish = K>T)
+ *
+ * Signal:
+ *   - Bullish: TK aligned bullish → expecting upside breakout
+ *   - Bearish: TK aligned bearish → expecting downside breakout
+ *
+ * Trade setup:
+ *   - Entry: Current close (inside cloud)
+ *   - SL: Opposite cloud edge (if bullish, SL at cloudBottom)
+ *   - Target: Opposite cloud edge breakout target (swing high/low beyond cloud)
+ */
+function getKumoInsideConsolidation(candles, {
+  consLookback     = 10,
+  consRatio        = 2.0,
+  minCloudWidthPct = 0.01,
+  minCloudWidthAtr = 1.5,
+} = {}) {
+  if (!candles || candles.length < 52) return null;
+
+  const results = calculate(candles);
+  const n    = results.length;
+  const last = results[n - 1];
+  if (!last) return null;
+
+  const base = {
+    close:       last.close,
+    cloudTop:    last.cloudTop,
+    cloudBottom: last.cloudBottom,
+    senkouA:     last.senkouA,
+    senkouB:     last.senkouB,
+    tenkan:      last.tenkan != null ? round(last.tenkan) : null,
+    kijun:       last.kijun  != null ? round(last.kijun)  : null,
+  };
+
+  // Must be INSIDE the cloud
+  if (!last.inCloud) {
+    return { signal: null, reason: 'not_in_cloud', ...base, atr: null, cloudWidth: null, consRange: null };
+  }
+
+  if (last.cloudTop == null || last.cloudBottom == null) return null;
+
+  const cloudWidth = Math.abs(last.cloudTop - last.cloudBottom);
+  if (cloudWidth <= 0) return null;
+
+  const atr = getATR(candles, 14);
+
+  // Thick cloud check — BOTH must pass (strict)
+  const pctMin = minCloudWidthPct * last.close;
+  if (cloudWidth < pctMin) {
+    return { signal: null, reason: 'cloud_too_thin_pct', ...base, atr: atr != null ? round(atr) : null, cloudWidth: round(cloudWidth), consRange: null };
+  }
+  if (atr != null) {
+    const atrMin = minCloudWidthAtr * atr;
+    if (cloudWidth < atrMin) {
+      return { signal: null, reason: 'cloud_too_thin_atr', ...base, atr: round(atr), cloudWidth: round(cloudWidth), consRange: null };
+    }
+  }
+
+  // Consolidation range — price must be coiling tight
+  const lookStart = Math.max(0, n - consLookback);
+  let consHigh = -Infinity;
+  let consLow  =  Infinity;
+  for (let i = lookStart; i < n; i++) {
+    const r = results[i];
+    if (r.high > consHigh) consHigh = r.high;
+    if (r.low  < consLow)  consLow  = r.low;
+  }
+  const consRange = consHigh - consLow;
+
+  // Tight range = consolidation. Compare against ATR-scaled threshold.
+  const consThreshold = atr != null ? consRatio * atr : null;
+  if (consThreshold != null && consRange > consThreshold) {
+    return {
+      signal: null, reason: 'range_too_wide',
+      ...base,
+      atr: round(atr),
+      cloudWidth: round(cloudWidth),
+      consRange: round(consRange),
+      consHigh: round(consHigh),
+      consLow: round(consLow),
+    };
+  }
+
+  // TK direction determines bias
+  const tkDir = last.tenkan == null || last.kijun == null ? null
+    : last.tenkan > last.kijun ? 'bullish'
+    : last.tenkan < last.kijun ? 'bearish'
+    : null;
+
+  // If TK is flat/neutral, check if price is closer to one edge
+  let signal = tkDir;
+  if (signal == null && last.close != null) {
+    const midCloud = (last.cloudTop + last.cloudBottom) / 2;
+    signal = last.close > midCloud ? 'bullish' : 'bearish';
+  }
+
+  return {
+    signal,
+    reason: 'matched',
+    ...base,
+    atr: atr != null ? round(atr) : null,
+    cloudWidth: round(cloudWidth),
+    consRange: round(consRange),
+    consHigh: round(consHigh),
+    consLow: round(consLow),
+  };
+}
+
 function round(n) {
   return Math.round(n * 100) / 100;
 }
@@ -2580,6 +2698,7 @@ module.exports = {
   getKumoBaseEntry,
   getKumoPreBreakout,
   getKumoConsolidation,
+  getKumoInsideConsolidation,
   getKumoTwist,
   getTKCross,
   getKijunCross,
