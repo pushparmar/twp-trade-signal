@@ -11,8 +11,7 @@
  * All filtering is client-side — no server calls for filter changes.
  */
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import useAppStore from "../../store/appStore";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import api from "../../api";
 import useLocalState from "../../hooks/useLocalState";
 
@@ -203,11 +202,6 @@ function RRBadge({ entry, sl, target }) {
 // ── Table Row ─────────────────────────────────────────────────────────────────
 
 function EqScanRow({ alert }) {
-    const tick = useAppStore(s => s.ticks[alert.token]);
-    const ltp = tick?.lastPrice ?? null;
-    const change = tick?.change ?? null;
-    const chgCls = change > 0 ? "mw-up" : change < 0 ? "mw-down" : "";
-
     return (
         <tr className={`scan-row scan-row--${alert.signal}`}>
             <td className="scan-cell scan-cell--symbol">
@@ -227,13 +221,7 @@ function EqScanRow({ alert }) {
                 </span>
             </td>
             <td className="scan-cell scan-cell--ltp">
-                <span className="scan-ltp">{ltp != null ? fmt(ltp) : "—"}</span>
-                {change != null && (
-                    <span className={`scan-chg ${chgCls}`}>
-                        {change > 0 ? "+" : ""}
-                        {Number(change).toFixed(2)}%
-                    </span>
-                )}
+                <span className="scan-ltp">{alert.close != null ? fmt(alert.close) : "—"}</span>
             </td>
             <td className="scan-cell">
                 <span className="scan-tf-badge">{alert.tfLabel || alert.interval}</span>
@@ -312,35 +300,16 @@ export default function EquityScanPanel({ inline = false }) {
     const [status, setStatus] = useState(null);
 
     // ── Filter state (all client-side) ────────────────────────────────────────
-    // Default: 1D timeframe and first pattern to avoid loading full list on page load
+    // Default: 1D timeframe only (pattern=all) to show all daily signals without overload
     const [tfFilter, setTfFilter] = useLocalState("eqscan:tfFilter", "day");
     const [signalFilter, setSignalFilter] = useLocalState("eqscan:signalFilter", "all");
-    const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "first");
+    const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "all");
     const [volOnly, setVolOnly] = useLocalState("eqscan:volOnly", false);
     const [minRR, setMinRR] = useLocalState("eqscan:minRR", 0);
     const [dedup, setDedup] = useLocalState("eqscan:dedup", false);
 
-    // ── Token subscription for live LTP ──────────────────────────────────────
-    const subscribedRef = useRef(new Set());
-
-    useEffect(() => {
-        const tokens = results.map(r => Number(r.token)).filter(Boolean);
-        const newTokens = [...new Set(tokens)].filter(t => !subscribedRef.current.has(t));
-        if (newTokens.length > 0) {
-            api.post("/instruments/peek-subscribe", { tokens: newTokens }).catch(() => {});
-            newTokens.forEach(t => subscribedRef.current.add(t));
-        }
-    }, [results]);
-
-    useEffect(() => {
-        return () => {
-            const tokens = [...subscribedRef.current];
-            if (tokens.length > 0) {
-                api.post("/instruments/peek-unsubscribe", { tokens }).catch(() => {});
-                subscribedRef.current.clear();
-            }
-        };
-    }, []);
+    // No live tick subscription — equity scan is for daily/4H swing trades,
+    // subscribing hundreds of tokens just for LTP display is wasteful.
 
     // ── Load cached results on mount ──────────────────────────────────────────
     useEffect(() => {
@@ -488,22 +457,12 @@ export default function EquityScanPanel({ inline = false }) {
         ];
     }, [results]);
 
-    // Resolve "first" pattern to actual first pattern ID
-    const resolvedPatternFilter = useMemo(() => {
-        if (patternFilter === "first") {
-            // Get first actual pattern (skip "all")
-            const firstPattern = patternOptions.find(p => p.id !== "all");
-            return firstPattern?.id || "all";
-        }
-        return patternFilter;
-    }, [patternFilter, patternOptions]);
-
     // Filter results (all client-side)
     const filtered = useMemo(() => {
         let list = results.filter(r => {
             if (tfFilter !== "all" && r.interval !== tfFilter) return false;
             if (signalFilter !== "all" && r.signal !== signalFilter) return false;
-            if (resolvedPatternFilter !== "all" && r.patternId !== resolvedPatternFilter) return false;
+            if (patternFilter !== "all" && r.patternId !== patternFilter) return false;
             if (volOnly && !r.volumeConfirmed) return false;
             if (minRR > 0) {
                 if (!r.close || !r.sl || !r.target) return false;
@@ -526,7 +485,7 @@ export default function EquityScanPanel({ inline = false }) {
 
         list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
         return list;
-    }, [results, tfFilter, signalFilter, resolvedPatternFilter, volOnly, minRR, dedup]);
+    }, [results, tfFilter, signalFilter, patternFilter, volOnly, minRR, dedup]);
 
     // ── Render ────────────────────────────────────────────────────────────────
 
@@ -745,7 +704,7 @@ export default function EquityScanPanel({ inline = false }) {
 
                     {/* Pattern dropdown */}
                     <select
-                        value={resolvedPatternFilter}
+                        value={patternFilter}
                         onChange={e => setPatternFilter(e.target.value)}
                         style={{
                             fontSize: 11,
@@ -871,7 +830,7 @@ export default function EquityScanPanel({ inline = false }) {
                         <thead>
                             <tr>
                                 <th className="scan-th">Symbol</th>
-                                <th className="scan-th">LTP</th>
+                                <th className="scan-th">Close</th>
                                 <th className="scan-th">TF</th>
                                 <th className="scan-th">Signal</th>
                                 <th className="scan-th">Pattern</th>

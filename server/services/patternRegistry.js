@@ -324,11 +324,10 @@ const PATTERNS = {
     label:       'Kumo Breakout',
     description: 'Price broke above or below the cloud within the last N bars and has not re-entered it.',
     maxScore:    5,
-    // lookback:3 — breakout must have occurred within the last 3 closed candles.
-    // lookback:1 (the crossover on the EXACT current candle) combined with TK alignment
-    // as a hard filter produced near-zero matches in production.  A 3-bar window
-    // still identifies fresh breakouts (not stale trends) while being realistic.
-    defaultOpts: { lookback: 3 },
+    // lookback:5 — breakout must have occurred within the last 5 closed candles.
+    // For daily TF, this means within last week. Enough to catch fresh breakouts
+    // without flagging stale trends that broke out weeks ago.
+    defaultOpts: { lookback: 5 },
 
     run(candles, opts = {}) {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
