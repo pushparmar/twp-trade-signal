@@ -284,11 +284,11 @@ const TF_OPTIONS = [
     { id: "day", label: "1D" }
 ];
 
-const MIN_RR_OPTIONS = [
-    { value: 0, label: "Any R:R" },
-    { value: 1.5, label: "≥ 1:1.5" },
-    { value: 2, label: "≥ 1:2" },
-    { value: 3, label: "≥ 1:3" }
+const RR_OPTIONS = [
+    { value: "all", label: "Any R:R", min: 0, max: Infinity },
+    { value: "1", label: "> 1:1", min: 1, max: 2 },
+    { value: "2", label: "> 1:2", min: 2, max: 3 },
+    { value: "3", label: "> 1:3", min: 3, max: Infinity },
 ];
 
 export default function EquityScanPanel({ inline = false }) {
@@ -305,7 +305,7 @@ export default function EquityScanPanel({ inline = false }) {
     const [signalFilter, setSignalFilter] = useLocalState("eqscan:signalFilter", "all");
     const [patternFilter, setPatternFilter] = useLocalState("eqscan:patternFilter", "all");
     const [volOnly, setVolOnly] = useLocalState("eqscan:volOnly", false);
-    const [minRR, setMinRR] = useLocalState("eqscan:minRR", 0);
+    const [rrFilter, setRrFilter] = useLocalState("eqscan:rrFilter", "all");
     const [dedup, setDedup] = useLocalState("eqscan:dedup", false);
 
     // No live tick subscription — equity scan is for daily/4H swing trades,
@@ -459,16 +459,22 @@ export default function EquityScanPanel({ inline = false }) {
 
     // Filter results (all client-side)
     const filtered = useMemo(() => {
+        // Get R:R range for selected filter
+        const rrOpt = RR_OPTIONS.find(o => o.value === rrFilter) || RR_OPTIONS[0];
+
         let list = results.filter(r => {
             if (tfFilter !== "all" && r.interval !== tfFilter) return false;
             if (signalFilter !== "all" && r.signal !== signalFilter) return false;
             if (patternFilter !== "all" && r.patternId !== patternFilter) return false;
             if (volOnly && !r.volumeConfirmed) return false;
-            if (minRR > 0) {
+
+            // R:R range filter (exact range, not >= )
+            if (rrFilter !== "all") {
                 if (!r.close || !r.sl || !r.target) return false;
                 const risk = Math.abs(r.close - r.sl);
                 if (risk < 0.01) return false;
-                if (Math.abs(r.target - r.close) / risk < minRR) return false;
+                const rr = Math.abs(r.target - r.close) / risk;
+                if (rr < rrOpt.min || rr >= rrOpt.max) return false;
             }
             return true;
         });
@@ -485,7 +491,7 @@ export default function EquityScanPanel({ inline = false }) {
 
         list.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
         return list;
-    }, [results, tfFilter, signalFilter, patternFilter, volOnly, minRR, dedup]);
+    }, [results, tfFilter, signalFilter, patternFilter, volOnly, rrFilter, dedup]);
 
     // ── Render ────────────────────────────────────────────────────────────────
 
@@ -723,10 +729,10 @@ export default function EquityScanPanel({ inline = false }) {
                         ))}
                     </select>
 
-                    {/* Min R:R */}
+                    {/* R:R filter (exact range) */}
                     <select
-                        value={minRR}
-                        onChange={e => setMinRR(Number(e.target.value))}
+                        value={rrFilter}
+                        onChange={e => setRrFilter(e.target.value)}
                         style={{
                             fontSize: 11,
                             padding: "3px 8px",
@@ -737,7 +743,7 @@ export default function EquityScanPanel({ inline = false }) {
                             cursor: "pointer"
                         }}
                     >
-                        {MIN_RR_OPTIONS.map(o => (
+                        {RR_OPTIONS.map(o => (
                             <option key={o.value} value={o.value}>
                                 {o.label}
                             </option>
