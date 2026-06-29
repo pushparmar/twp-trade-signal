@@ -196,10 +196,11 @@ function updateTrade(id, fields) {
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 
-function getOpenTrades()   { return _trades.filter(t => t.status === 'OPEN'); }
-function getClosedTrades() { return _trades.filter(t => t.status === 'CLOSED'); }
+function getOpenTrades()    { return _trades.filter(t => t.status === 'OPEN'); }
+function getPendingTrades() { return _trades.filter(t => t.status === 'PENDING'); }
+function getClosedTrades()  { return _trades.filter(t => t.status === 'CLOSED'); }
 function getAllTrades()     { return _trades; }
-function getTrade(id)      { return _trades.find(t => t.id === id) || null; }
+function getTrade(id)       { return _trades.find(t => t.id === id) || null; }
 
 function getPnlSummary() {
   // All stats are scoped to today (IST) so the summary resets each trading day.
@@ -293,7 +294,7 @@ function setConfig(updates) {
 module.exports = {
   restore,
   addTrade, closeTrade, updateTrade,
-  getOpenTrades, getClosedTrades, getAllTrades, getTrade,
+  getOpenTrades, getPendingTrades, getClosedTrades, getAllTrades, getTrade,
   getPnlSummary, clearTrades, purgePreviousDayTrades,
   getConfig, setConfig,
   getMaskedPatternLabel, PATTERN_MASK_MAP,

@@ -274,10 +274,29 @@ function onSignal(signal) {
         return;
     }
 
-    // R:R check
-    const riskPerUnit = Math.abs(close - sl);
+    // ── TK Reversion: Adjusted entry at 20% above SL ──────────────────────────
+    // For tk-reversion pattern, don't enter at scan price. Instead:
+    // - Calculate entry as SL + 20% of (scanPrice - SL)
+    // - This gives a tighter risk and better R:R
+    // Example: scan at 180, SL at 120 → range=60 → entry = 120 + 12 = 132 (not 144)
+    // Wait: user said "entry will be 20% of sl" meaning entry = SL * 1.20
+    // Example: SL=120 → entry = 120 * 1.20 = 144
+    let adjustedEntry = close;
+    if (signal.patternId === 'tk-reversion') {
+        adjustedEntry = Math.round(sl * 1.20 * 100) / 100; // SL + 20%
+        // Entry must still be below scan price and target
+        if (adjustedEntry >= close) {
+            console.log(`[IdxOrder] ⏭ Skipped ${signal.symbol} — TK adj entry ${adjustedEntry} ≥ scan ${close}`);
+            return;
+        }
+        console.log(`[IdxOrder] 📐 TK Reversion: scan=${close} SL=${sl} → adjusted entry=${adjustedEntry}`);
+    }
+
+    // R:R check (use adjusted entry for TK reversion)
+    const entryForRR = adjustedEntry;
+    const riskPerUnit = Math.abs(entryForRR - sl);
     if (riskPerUnit < 0.01) return;
-    const rrRatio = Math.abs(target - close) / riskPerUnit;
+    const rrRatio = Math.abs(target - entryForRR) / riskPerUnit;
     if (rrRatio < config.minRR) {
         console.log(`[IdxOrder] ⏭ Skipped ${signal.symbol} — R:R ${rrRatio.toFixed(2)} < min ${config.minRR}`);
         return;
@@ -312,6 +331,12 @@ function onSignal(signal) {
         quantity = config.lotQuantity || 1;
     }
 
+    // For TK Reversion: create as PENDING if current price > adjusted entry
+    // Trade will be filled when price drops to adjusted entry level
+    const currentPrice = _getCurrentPrice(token);
+    const isTkReversion = signal.patternId === 'tk-reversion';
+    const isPending = isTkReversion && currentPrice != null && currentPrice > adjustedEntry;
+
     const trade = tradeStore.addTrade({
         source:          'index-trade',
         strategyType:    'pattern',
@@ -324,7 +349,9 @@ function onSignal(signal) {
         action:          'BUY', // always BUY — never sell options
         quantity,
         lotSize,
-        entryPrice:      close,
+        entryPrice:      isPending ? null : adjustedEntry, // null = pending fill
+        pendingEntry:    isPending ? adjustedEntry : null, // limit entry price
+        scanPrice:       close, // original scan price for reference
         sl,
         initialSl:       sl,
         target,
@@ -335,18 +362,28 @@ function onSignal(signal) {
         signalDirection: direction,
         score:           signal.score,
         rrRatio:         Math.round(rrRatio * 100) / 100,
+        status:          isPending ? 'PENDING' : 'OPEN',
     });
 
     _openKeys.add(stackKey);
 
     // Register token so it stays subscribed even if ATM shifts
+    const numToken = Number(token);
     strikeManager.registerOpenTradeToken(numToken);
 
-    console.log(
-        `[IdxOrder] 📋 BUY ${inst.tradingsymbol} @${close} ` +
-        `SL=${sl} T=${target} R:R=${rrRatio.toFixed(2)} ` +
-        `[${signal.patternId} ${signal.tfLabel}]`,
-    );
+    if (isPending) {
+        console.log(
+            `[IdxOrder] ⏳ PENDING ${inst.tradingsymbol} limit @${adjustedEntry} (scan=${close}) ` +
+            `SL=${sl} T=${target} R:R=${rrRatio.toFixed(2)} ` +
+            `[${signal.patternId} ${signal.tfLabel}]`,
+        );
+    } else {
+        console.log(
+            `[IdxOrder] 📋 BUY ${inst.tradingsymbol} @${adjustedEntry} ` +
+            `SL=${sl} T=${target} R:R=${rrRatio.toFixed(2)} ` +
+            `[${signal.patternId} ${signal.tfLabel}]`,
+        );
+    }
 
     broadcast('idx_trade', trade);
 
@@ -816,6 +853,56 @@ function _checkEodClose() {
     }
 }
 
+// ── Check pending orders for fill ────────────────────────────────────────────
+
+/**
+ * For TK Reversion pending orders: fill when price drops to pendingEntry level.
+ * This implements a limit-buy behavior for tighter entry.
+ */
+function _checkPendingFills() {
+    if (!isNseOpen()) return;
+    if (!_isWithinTradingWindow()) return;
+
+    const pendingTrades = tradeStore.getPendingTrades();
+
+    for (const trade of pendingTrades) {
+        if (!trade.pendingEntry) continue;
+
+        const ltp = _getCurrentPrice(trade.token);
+        if (!ltp) continue;
+
+        // Fill when price drops to or below pending entry level
+        if (ltp <= trade.pendingEntry) {
+            // Fill the order at the pending entry price
+            tradeStore.updateTrade(trade.id, {
+                status: 'OPEN',
+                entryPrice: trade.pendingEntry,
+                filledAt: Date.now(),
+            });
+
+            console.log(
+                `[IdxOrder] ✅ FILLED ${trade.symbol} @${trade.pendingEntry} ` +
+                `(limit hit, scan was ${trade.scanPrice}) ` +
+                `SL=${trade.sl} T=${trade.target} [${trade.patternId}]`
+            );
+
+            broadcast('idx_trade', {
+                ...trade,
+                status: 'OPEN',
+                entryPrice: trade.pendingEntry,
+            });
+
+            // Send Telegram notification
+            _sendTelegramAlert({
+                ...trade,
+                entryPrice: trade.pendingEntry,
+            }).catch(err =>
+                console.warn('[IdxOrder] Telegram fill alert failed:', err.message)
+            );
+        }
+    }
+}
+
 // ── Main tick loop ───────────────────────────────────────────────────────────
 
 function _checkTrades() {
@@ -824,6 +911,9 @@ function _checkTrades() {
     _checkEodClose();
 
     if (!isNseOpen()) return;
+
+    // Check if any pending orders should be filled
+    _checkPendingFills();
 
     const openTrades = tradeStore.getOpenTrades();
 
@@ -846,14 +936,18 @@ function _checkTrades() {
 // ── Public API ──────────────────────────────────────────────────────────────
 
 function start() {
-    // Rebuild _openKeys from existing open trades (survives server restart)
+    // Rebuild _openKeys from existing open + pending trades (survives server restart)
     const openTrades = tradeStore.getOpenTrades();
+    const pendingTrades = tradeStore.getPendingTrades();
     for (const t of openTrades) {
+        _openKeys.add(Number(t.token));
+    }
+    for (const t of pendingTrades) {
         _openKeys.add(Number(t.token));
     }
 
     _tickTimer = setInterval(_checkTrades, TICK_POLL_MS);
-    console.log(`[IdxOrder] Order manager started — poll=${TICK_POLL_MS}ms`);
+    console.log(`[IdxOrder] Order manager started — poll=${TICK_POLL_MS}ms, open=${openTrades.length}, pending=${pendingTrades.length}`);
 }
 
 function stop() {
