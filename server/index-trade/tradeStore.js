@@ -75,8 +75,10 @@ let _config = {
   // ── Telegram Alerts ──────────────────────────────────────────────────────────
   // patternAlertTelegramEnabled: Send Telegram for TK Reversion, Kumo Breakout patterns
   // bullishSetupAlertEnabled: Send Telegram for simple bullish setup (above cloud + T>K)
+  //   NOTE: bullishSetupAlertEnabled is VERY noisy — fires for every strike above cloud.
+  //   Keep disabled unless you want 50+ alerts per day.
   patternAlertTelegramEnabled: true,
-  bullishSetupAlertEnabled: true,
+  bullishSetupAlertEnabled: false,  // disabled by default — too noisy
 };
 
 // ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────

@@ -40,6 +40,7 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 const _lastCandleCount = new Map(); // "token:interval" → candle count
 const _dedup = new Map();           // "token:interval:patternId:signal" → IST date string
+const _telegramDedup = new Map();   // "token:patternId" → IST date string (global telegram dedup, ignores TF)
 const _bullishSetupDedup = new Map(); // "token:interval" → IST date string (for bullish setup alerts)
 const _alertHistory = [];           // last 100 alerts in-memory for page refresh
 const MAX_HISTORY = 100;
@@ -79,9 +80,21 @@ async function _sendPatternTelegram(signalPayload) {
   const config = tradeStore.getConfig();
   if (!config.patternAlertTelegramEnabled) return; // Config flag to enable/disable
 
+  const { token, patternId } = signalPayload;
+
+  // Global telegram dedup — same token + pattern only sends ONE telegram per day
+  // (even if it fires on multiple timeframes like 5m, 15m, 1h)
+  const telegramKey = `${token}:${patternId}`;
+  const today = _istDateStr();
+  if (_telegramDedup.get(telegramKey) === today) {
+    return; // Already sent telegram for this token+pattern today
+  }
+  _telegramDedup.set(telegramKey, today);
+
   const {
     symbol, index, strike, optionType, patternLabel, signal,
-    tfLabel, close, sl, target, score, rsi14, rrRatio
+    tfLabel, close, sl, target, score, rsi14, rrRatio,
+    volumeRatio, volumeConfirmed
   } = signalPayload;
 
   const emoji = signal === 'bullish' ? '🟢' : '🔴';
@@ -91,6 +104,11 @@ async function _sendPatternTelegram(signalPayload) {
   const rr = rrRatio ?? (close && sl && target
     ? (Math.abs(target - close) / Math.abs(close - sl)).toFixed(2)
     : '—');
+
+  // Volume info
+  const volText = volumeRatio != null
+    ? `Volume: ${volumeRatio.toFixed(1)}× avg ${volumeConfirmed ? '✅' : ''}`
+    : null;
 
   const msg = [
     `${emoji} <b>${patternLabel}</b> — ${signalText}`,
@@ -106,6 +124,7 @@ async function _sendPatternTelegram(signalPayload) {
     ``,
     `Score: ${score ?? '—'}/5`,
     rsi14 != null ? `RSI: ${rsi14}` : null,
+    volText,
     `TF: ${tfLabel}`,
   ].filter(Boolean).join('\n');
 
@@ -194,6 +213,8 @@ function _scan(token, interval) {
         atr: result.atr,
         targetSource: result.targetSource,
         rsi14,   // included so order gate can read it without recomputing
+        volumeRatio: result.volumeRatio ?? null,
+        volumeConfirmed: result.volumeConfirmed ?? null,
         ts: Date.now(),
       };
 
@@ -310,6 +331,11 @@ function _scanBullishSetups() {
     if (cloudTop == null || close == null) continue;
     if (tenkan <= kijun) continue;
 
+    // Proximity filter: price must be within 10% of cloud top
+    // If price has moved too far above the cloud, it's not a fresh setup
+    const distanceFromCloud = (close - cloudTop) / cloudTop;
+    if (distanceFromCloud > 0.10) continue; // Skip if > 10% above cloud
+
     // All conditions met — mark as seen and send alert
     _markBullishSetupSeen(token);
 
@@ -410,6 +436,7 @@ function getStats() {
 
 function clearDedup() {
   _dedup.clear();
+  _telegramDedup.clear();
   _bullishSetupDedup.clear();
   _lastCandleCount.clear();
 }

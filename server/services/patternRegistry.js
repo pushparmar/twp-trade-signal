@@ -322,12 +322,13 @@ const PATTERNS = {
   'kumo-breakout': {
     id:          'kumo-breakout',
     label:       'Kumo Breakout',
-    description: 'Price broke above or below the cloud within the last N bars and has not re-entered it.',
+    description: 'Price broke above or below the cloud within the last N bars, still within 10% of cloud edge.',
     maxScore:    5,
     // lookback:5 — breakout must have occurred within the last 5 closed candles.
     // For daily TF, this means within last week. Enough to catch fresh breakouts
     // without flagging stale trends that broke out weeks ago.
-    defaultOpts: { lookback: 5 },
+    // maxDistanceFromCloud: 0.10 — price must be within 10% of cloud edge (not too far away)
+    defaultOpts: { lookback: 5, maxDistanceFromCloud: 0.10 },
 
     run(candles, opts = {}) {
       const result = getKumoBreakout(candles, { ...this.defaultOpts, ...opts });
@@ -339,6 +340,13 @@ const PATTERNS = {
       const { close, cloudTop, cloudBottom, signal } = result;
 
       if (cloudTop == null || cloudBottom == null) return { matched: false };
+
+      // Proximity filter: price must be within 10% of the cloud edge
+      // If price has moved too far from the cloud, it's no longer a fresh breakout
+      const maxDist = opts.maxDistanceFromCloud ?? 0.10;
+      const cloudEdge = signal === 'bullish' ? cloudTop : cloudBottom;
+      const distanceFromCloud = Math.abs(close - cloudEdge) / cloudEdge;
+      if (distanceFromCloud > maxDist) return { matched: false };
 
       // Kumo Breakout:
       // - Bullish: Price broke ABOVE cloud → SL at cloudBottom, Target ahead (swing high)
