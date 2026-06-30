@@ -330,4 +330,24 @@ function getCount() {
   return _instruments.length;
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount };
+/**
+ * Get ALL options for current (nearest) expiry — no strike filter.
+ * Returns all CE and PE options for the index's nearest expiry.
+ * name: e.g. 'NIFTY', exchange: e.g. 'NFO'
+ */
+function getAllOptionsForCurrentExpiry(name, exchange) {
+  const today = new Date().toISOString().split('T')[0];
+  const candidates = _instruments.filter(
+    (i) =>
+      i.name === name &&
+      i.exchange === exchange &&
+      (i.instrumentType === 'CE' || i.instrumentType === 'PE') &&
+      (!i.expiry || i.expiry >= today),
+  );
+  if (!candidates.length) return [];
+  const expiries = [...new Set(candidates.map((i) => i.expiry).filter(Boolean))].sort();
+  const nearest = expiries[0];
+  return candidates.filter((i) => i.expiry === nearest);
+}
+
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount, getAllOptionsForCurrentExpiry };

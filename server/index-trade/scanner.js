@@ -12,7 +12,9 @@ const candleStore     = require('../services/candleStore');
 const patternRegistry = require('../services/patternRegistry');
 const { broadcast }   = require('../sseHub');
 const { isNseOpen }   = require('../utils/marketHours');
-const { getRSI }      = require('../services/ichimoku');
+const { getRSI, calculate: calculateIchimoku } = require('../services/ichimoku');
+const telegramNotifier = require('../services/telegramNotifier');
+const mainStore       = require('../store');
 
 const strikeManager = require('./strikeManager');
 const orderManager  = require('./orderManager');
@@ -38,9 +40,11 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 const _lastCandleCount = new Map(); // "token:interval" → candle count
 const _dedup = new Map();           // "token:interval:patternId:signal" → IST date string
+const _bullishSetupDedup = new Map(); // "token:interval" → IST date string (for bullish setup alerts)
 const _alertHistory = [];           // last 100 alerts in-memory for page refresh
 const MAX_HISTORY = 100;
 let _pollTimer = null;
+let _bullishScanTimer = null;       // separate timer for bullish setup scan
 let _scanCount = 0;
 let _matchCount = 0;
 let _lastScanAt = null;
@@ -65,6 +69,53 @@ function _markSeen(token, interval, patternId, signal) {
 // ── TF label helper ─────────────────────────────────────────────────────────
 
 const TF_LABEL = { minute: '1m', '5minute': '5m', '15minute': '15m', '60minute': '1h' };
+
+// ── Telegram notification for pattern alerts ────────────────────────────────
+
+async function _sendPatternTelegram(signalPayload) {
+  const chatId = mainStore.getTelegramChatId();
+  if (!chatId) return;
+
+  const config = tradeStore.getConfig();
+  if (!config.patternAlertTelegramEnabled) return; // Config flag to enable/disable
+
+  const {
+    symbol, index, strike, optionType, patternLabel, signal,
+    tfLabel, close, sl, target, score, rsi14, rrRatio
+  } = signalPayload;
+
+  const emoji = signal === 'bullish' ? '🟢' : '🔴';
+  const signalText = signal === 'bullish' ? 'BULLISH' : 'BEARISH';
+
+  // Calculate R:R if not provided
+  const rr = rrRatio ?? (close && sl && target
+    ? (Math.abs(target - close) / Math.abs(close - sl)).toFixed(2)
+    : '—');
+
+  const msg = [
+    `${emoji} <b>${patternLabel}</b> — ${signalText}`,
+    ``,
+    `<b>${symbol}</b> (${index})`,
+    `Strike: ${strike} ${optionType}`,
+    ``,
+    `📊 <b>Trade Setup</b>`,
+    `Entry: ₹${close?.toFixed(2) ?? '—'}`,
+    `SL: ₹${sl?.toFixed(2) ?? '—'}`,
+    `Target: ₹${target?.toFixed(2) ?? '—'}`,
+    `R:R: 1:${rr}`,
+    ``,
+    `Score: ${score ?? '—'}/5`,
+    rsi14 != null ? `RSI: ${rsi14}` : null,
+    `TF: ${tfLabel}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    await telegramNotifier.sendMessage(chatId, msg);
+    console.log(`[IdxScanner] 📱 Pattern alert sent: ${symbol} ${patternLabel}`);
+  } catch (err) {
+    console.warn(`[IdxScanner] Telegram pattern alert failed:`, err.message);
+  }
+}
 
 // ── Scan logic ──────────────────────────────────────────────────────────────
 
@@ -159,12 +210,132 @@ function _scan(token, interval) {
       // Broadcast to UI
       broadcast('idx_scan_alert', signalPayload);
 
+      // Send Telegram notification (fire-and-forget)
+      _sendPatternTelegram(signalPayload).catch(() => {});
+
       // Trigger order
       orderManager.onSignal(signalPayload);
     } catch (err) {
       // Pattern errors should never crash the scanner
       console.warn(`[IdxScanner] ${patternId} error on ${token}/${interval}:`, err.message);
     }
+  }
+}
+
+// ── Bullish Setup Scanner ───────────────────────────────────────────────────
+// Scans ALL subscribed tokens for: price above cloud + tenkan > kijun
+// Sends Telegram alert when conditions are met (once per token per day)
+
+const BULLISH_SCAN_INTERVAL = '5minute'; // Use 5m candles for this scan
+const BULLISH_SCAN_POLL_MS = 30_000;     // Check every 30 seconds
+
+function _isBullishSetupDuplicate(token) {
+  const key = `${token}:${BULLISH_SCAN_INTERVAL}:bullish-setup`;
+  const today = _istDateStr();
+  return _bullishSetupDedup.get(key) === today;
+}
+
+function _markBullishSetupSeen(token) {
+  const key = `${token}:${BULLISH_SCAN_INTERVAL}:bullish-setup`;
+  _bullishSetupDedup.set(key, _istDateStr());
+}
+
+async function _sendBullishSetupTelegram(inst, ichimokuData) {
+  const chatId = mainStore.getTelegramChatId();
+  if (!chatId) return;
+
+  const { close, tenkan, kijun, cloudTop, cloudBottom } = ichimokuData;
+
+  // Safe formatting with null checks
+  const fmt = (v) => v != null ? `₹${v.toFixed(2)}` : '—';
+
+  const msg = [
+    `🟢 <b>BULLISH SETUP</b>`,
+    ``,
+    `<b>${inst.tradingsymbol}</b> (${inst.index})`,
+    `Strike: ${inst.strike} ${inst.optionType}`,
+    ``,
+    `📊 <b>Ichimoku Status</b>`,
+    `Close: ${fmt(close)}`,
+    `Cloud Top: ${fmt(cloudTop)}`,
+    `Tenkan: ${fmt(tenkan)}`,
+    `Kijun: ${fmt(kijun)}`,
+    ``,
+    `✅ Price above cloud`,
+    `✅ Tenkan > Kijun (momentum up)`,
+    ``,
+    `TF: ${BULLISH_SCAN_INTERVAL}`,
+  ].join('\n');
+
+  try {
+    await telegramNotifier.sendMessage(chatId, msg);
+    console.log(`[IdxScanner] 📱 Bullish setup alert sent: ${inst.tradingsymbol}`);
+  } catch (err) {
+    console.warn(`[IdxScanner] Telegram failed:`, err.message);
+  }
+}
+
+function _scanBullishSetups() {
+  if (!isNseOpen()) return;
+
+  const config = tradeStore.getConfig();
+  if (!config.enabled) return;
+  if (!config.bullishSetupAlertEnabled) return; // New config flag
+
+  const allTokens = strikeManager.getAllTokens();
+  if (allTokens.length === 0) return;
+
+  for (const token of allTokens) {
+    // Skip if already alerted today
+    if (_isBullishSetupDuplicate(token)) continue;
+
+    const candles = candleStore.getCandlesSync(token, BULLISH_SCAN_INTERVAL);
+    if (!candles || candles.length < 52) continue;
+
+    const inst = strikeManager.getInstrumentByToken(token);
+    if (!inst) continue;
+
+    // Calculate Ichimoku
+    const results = calculateIchimoku(candles);
+    if (!results || results.length === 0) continue;
+
+    const last = results[results.length - 1];
+    if (!last) continue;
+
+    const { close, tenkan, kijun, cloudTop, cloudBottom, aboveCloud } = last;
+
+    // Check conditions: price above cloud AND tenkan > kijun
+    if (!aboveCloud) continue;
+    if (tenkan == null || kijun == null) continue;
+    if (cloudTop == null || close == null) continue;
+    if (tenkan <= kijun) continue;
+
+    // All conditions met — mark as seen and send alert
+    _markBullishSetupSeen(token);
+
+    console.log(
+      `[IdxScanner] 🟢 Bullish setup: ${inst.tradingsymbol} ` +
+      `close=${close.toFixed(2)} T=${tenkan.toFixed(2)} K=${kijun.toFixed(2)} ` +
+      `cloudTop=${cloudTop.toFixed(2)}`
+    );
+
+    // Send Telegram alert (fire-and-forget)
+    _sendBullishSetupTelegram(inst, last).catch(() => {});
+
+    // Also broadcast to UI
+    broadcast('idx_bullish_setup', {
+      token,
+      symbol: inst.tradingsymbol,
+      index: inst.index,
+      strike: inst.strike,
+      optionType: inst.optionType,
+      close,
+      tenkan,
+      kijun,
+      cloudTop,
+      cloudBottom,
+      ts: Date.now(),
+    });
   }
 }
 
@@ -205,9 +376,11 @@ function _poll() {
 
 function start() {
   _pollTimer = setInterval(_poll, POLL_MS);
+  _bullishScanTimer = setInterval(_scanBullishSetups, BULLISH_SCAN_POLL_MS);
   console.log(
     `[IdxScanner] Started — patterns=[${PATTERN_IDS.join(',')}] ` +
-    `intervals=[${INTERVALS.join(',')}] poll=${POLL_MS}ms`,
+    `intervals=[${INTERVALS.join(',')}] poll=${POLL_MS}ms ` +
+    `bullishScan=${BULLISH_SCAN_POLL_MS}ms`,
   );
 }
 
@@ -215,6 +388,10 @@ function stop() {
   if (_pollTimer) {
     clearInterval(_pollTimer);
     _pollTimer = null;
+  }
+  if (_bullishScanTimer) {
+    clearInterval(_bullishScanTimer);
+    _bullishScanTimer = null;
   }
 }
 
@@ -233,6 +410,7 @@ function getStats() {
 
 function clearDedup() {
   _dedup.clear();
+  _bullishSetupDedup.clear();
   _lastCandleCount.clear();
 }
 

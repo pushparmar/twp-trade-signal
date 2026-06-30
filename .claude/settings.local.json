@@ -84,7 +84,11 @@
       "Bash(mkdir -p ~/Desktop/dsa-mastery)",
       "Read(//Users/pushpendraparmar/Desktop/**)",
       "Bash(npm create *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(node -c server/index-trade/scanner.js)",
+      "Bash(node -c server/index-trade/strikeManager.js)",
+      "Bash(node -c server/services/instrumentCache.js)",
+      "Bash(node -c server/index-trade/tradeStore.js)"
     ]
   }
 }

@@ -71,6 +71,12 @@ let _config = {
   lpAvgDownPct: 0.60,        // avg-down when price drops this % from entry (0.60 = 60%)
   lpAvgDownSlPct: 0.50,      // after avg-down: SL = avgDownPrice × this (e.g. 0.50 = 50% of avg-down price)
   lpMaxPositions: 4,         // max concurrent LP trades (initial + avg-down slots)
+
+  // ── Telegram Alerts ──────────────────────────────────────────────────────────
+  // patternAlertTelegramEnabled: Send Telegram for TK Reversion, Kumo Breakout patterns
+  // bullishSetupAlertEnabled: Send Telegram for simple bullish setup (above cloud + T>K)
+  patternAlertTelegramEnabled: true,
+  bullishSetupAlertEnabled: true,
 };
 
 // ── MongoDB helpers (fire-and-forget) ────────────────────────────────────────

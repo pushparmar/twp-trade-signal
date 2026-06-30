@@ -17,10 +17,13 @@ const { isNseOpen }   = require('../utils/marketHours');
 
 // Indices to trade — NIFTY (NFO) and SENSEX (BFO)
 const INDICES = ['NIFTY', 'SENSEX'];
-const STRIKE_RANGE = 5;          // ATM ± 5
 const REFRESH_MS   = 5 * 60_000; // refresh every 5 minutes
 const SEED_INTERVALS = ['minute', '5minute', '15minute', '60minute'];
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+
+// Subscribe to ALL strikes within this % range of ATM (to avoid extreme OTM)
+// e.g., 10% means for NIFTY at 24000, subscribe strikes from 21600 to 26400
+const STRIKE_RANGE_PCT = 0.10; // 10% above and below ATM
 
 // Morning reset fires at 9:20 IST — opening price has settled by then
 const MORNING_RESET_HOUR_IST   = 9;
@@ -39,7 +42,8 @@ let _openTradeTokens = new Set(); // tokens for open trades — always stay subs
 // ── Core logic ──────────────────────────────────────────────────────────────
 
 /**
- * Resolve ATM ± 5 strikes for a single index and subscribe tokens.
+ * Subscribe to ALL strikes of current expiry within ±10% of ATM.
+ * This gives broad coverage for kumo breakout scanning across the option chain.
  */
 async function _refreshIndex(indexName) {
   const cfg = INDEX_CONFIG[indexName];
@@ -59,24 +63,29 @@ async function _refreshIndex(indexName) {
 
   const atmStrike = Math.round(ltp / cfg.step) * cfg.step;
 
-  // Check if ATM hasn't changed
+  // Check if ATM hasn't changed significantly (within one step)
   const prev = _subscriptions.get(indexName);
-  if (prev && prev.atmStrike === atmStrike) return;
+  if (prev && Math.abs(prev.atmStrike - atmStrike) < cfg.step) return;
 
-  // Generate strike array: ATM - 5*step ... ATM + 5*step
-  const strikes = [];
-  for (let i = -STRIKE_RANGE; i <= STRIKE_RANGE; i++) {
-    strikes.push(atmStrike + i * cfg.step);
-  }
-
-  // Resolve instruments from cache (nearest expiry CE + PE for each strike)
+  // Resolve instruments from cache — ALL options for current expiry
   if (!instrumentCache.isLoaded()) {
     console.warn(`[IdxStrike] Instrument cache not loaded — skipping ${indexName}`);
     return;
   }
-  const instruments = instrumentCache.getOptionsByStrike(cfg.name, cfg.exchange, strikes);
+
+  const allOptions = instrumentCache.getAllOptionsForCurrentExpiry(cfg.name, cfg.exchange);
+  if (allOptions.length === 0) {
+    console.warn(`[IdxStrike] No instruments found for ${indexName}`);
+    return;
+  }
+
+  // Filter to strikes within ±10% of ATM (avoid extreme OTM with no liquidity)
+  const minStrike = atmStrike * (1 - STRIKE_RANGE_PCT);
+  const maxStrike = atmStrike * (1 + STRIKE_RANGE_PCT);
+  const instruments = allOptions.filter(i => i.strike >= minStrike && i.strike <= maxStrike);
+
   if (instruments.length === 0) {
-    console.warn(`[IdxStrike] No instruments found for ${indexName} ATM ${atmStrike}`);
+    console.warn(`[IdxStrike] No instruments in range for ${indexName} ATM ${atmStrike}`);
     return;
   }
 
@@ -105,7 +114,7 @@ async function _refreshIndex(indexName) {
   if (toUnsub.length > 0) {
     try { kiteTicker.unsubscribe(toUnsub); } catch { /* ignore */ }
     toUnsub.forEach(t => _allTokens.delete(t));
-    console.log(`[IdxStrike] Unsubscribed ${toUnsub.length} tokens (not in ATM range and no open trades)`);
+    console.log(`[IdxStrike] Unsubscribed ${toUnsub.length} old tokens`);
   }
 
   if (toSub.length > 0) {
@@ -113,10 +122,9 @@ async function _refreshIndex(indexName) {
     toSub.forEach(t => _allTokens.add(t));
 
     // Seed candle buffers for new tokens (fire-and-forget)
+    // Only seed 5minute for broad scanning — 1m is too heavy for 100+ tokens
     for (const token of toSub) {
-      for (const interval of SEED_INTERVALS) {
-        candleStore.getCandles(token, interval, 300, false).catch(() => {});
-      }
+      candleStore.getCandles(token, '5minute', 300, false).catch(() => {});
     }
   }
 
@@ -124,12 +132,12 @@ async function _refreshIndex(indexName) {
     atmStrike,
     ltp: Math.round(ltp * 100) / 100,
     instruments: instrumentMap,
+    expiry: instruments[0]?.expiry || null,
   });
 
   console.log(
-    `[IdxStrike] ${indexName} ATM ${atmStrike} — subscribed ${instrumentMap.size} instruments` +
-    (toSub.length > 0 ? ` (+${toSub.length} new)` : '') +
-    (toUnsub.length > 0 ? ` (-${toUnsub.length} removed)` : ''),
+    `[IdxStrike] ${indexName} ATM ${atmStrike} — subscribed ${instrumentMap.size} instruments (±${STRIKE_RANGE_PCT * 100}% range)` +
+    ` expiry=${instruments[0]?.expiry || 'unknown'}`,
   );
 }
 
