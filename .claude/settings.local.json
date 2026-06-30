@@ -89,7 +89,9 @@
       "Bash(node -c server/index-trade/strikeManager.js)",
       "Bash(node -c server/services/instrumentCache.js)",
       "Bash(node -c server/index-trade/tradeStore.js)",
-      "Bash(node -c server/services/patternRegistry.js)"
+      "Bash(node -c server/services/patternRegistry.js)",
+      "Bash(node -c server/services/liveScanner.js)",
+      "Bash(node -c server/services/patternAlertWatcher.js)"
     ]
   }
 }

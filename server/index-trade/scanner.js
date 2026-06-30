@@ -331,10 +331,10 @@ function _scanBullishSetups() {
     if (cloudTop == null || close == null) continue;
     if (tenkan <= kijun) continue;
 
-    // Proximity filter: price must be within 10% of cloud top
+    // Proximity filter: price must be within 20% of cloud top
     // If price has moved too far above the cloud, it's not a fresh setup
     const distanceFromCloud = (close - cloudTop) / cloudTop;
-    if (distanceFromCloud > 0.10) continue; // Skip if > 10% above cloud
+    if (distanceFromCloud > 0.20) continue; // Skip if > 20% above cloud
 
     // All conditions met — mark as seen and send alert
     _markBullishSetupSeen(token);
