@@ -320,14 +320,12 @@ async function _runAndAlert(token, interval, candles) {
       && qualityScore !== null && qualityScore < qCfg.minQualityScore;
 
     // Gate Telegram on chatId + exchange hours + alert channel config:
-    //   MCX alerts disabled — no Telegram for commodities
+    //   MCX (Crude/Gold/Silver) → isMcxOpen()  [09:00–23:30 IST]
     //   NSE / VIX / CDS         → isNseOpen()  [09:00–15:30 IST]
     // SSE broadcast below always fires so the Scanner UI stays live.
     if (chatId && !qualityAlertBlocked && store.isPatternEnabled(patternId, interval, 'alert')) {
-      // Skip MCX symbols — no Telegram for commodities
-      if (exchange === 'MCX') {
-        console.log(`[PatternAlert] ⏸ ${patternId} ${result.signal} — ${label} (${tfLabel}) — MCX Telegram disabled`);
-      } else if (isNseOpen()) {
+      const mktOpen = exchange === 'MCX' ? isMcxOpen() : isNseOpen();
+      if (mktOpen) {
         try {
           await telegramNotifier.sendMessage(chatId, text);
           console.log(`[PatternAlert] ✅ ${patternId} ${result.signal} — ${label} (${tfLabel})`);
