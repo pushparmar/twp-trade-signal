@@ -91,7 +91,10 @@
       "Bash(node -c server/index-trade/tradeStore.js)",
       "Bash(node -c server/services/patternRegistry.js)",
       "Bash(node -c server/services/liveScanner.js)",
-      "Bash(node -c server/services/patternAlertWatcher.js)"
+      "Bash(node -c server/services/patternAlertWatcher.js)",
+      "Bash(pkill -f node)",
+      "Bash(npm start *)",
+      "Read(//dev/**)"
     ]
   }
 }

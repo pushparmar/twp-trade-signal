@@ -21,9 +21,9 @@ const REFRESH_MS   = 5 * 60_000; // refresh every 5 minutes
 const SEED_INTERVALS = ['minute', '5minute', '15minute', '60minute'];
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
-// Subscribe to ALL strikes within this % range of ATM (to avoid extreme OTM)
-// e.g., 10% means for NIFTY at 24000, subscribe strikes from 21600 to 26400
-const STRIKE_RANGE_PCT = 0.10; // 10% above and below ATM
+// Strike subscription limits relative to ATM
+const OTM_STRIKES = 2;  // 2 strikes OTM (above ATM for CE, below ATM for PE)
+const ITM_STRIKES = 5;  // 5 strikes ITM (below ATM for CE, above ATM for PE)
 
 // Morning reset fires at 9:20 IST — opening price has settled by then
 const MORNING_RESET_HOUR_IST   = 9;
@@ -42,8 +42,10 @@ let _openTradeTokens = new Set(); // tokens for open trades — always stay subs
 // ── Core logic ──────────────────────────────────────────────────────────────
 
 /**
- * Subscribe to ALL strikes of current expiry within ±10% of ATM.
- * This gives broad coverage for kumo breakout scanning across the option chain.
+ * Subscribe to strikes around ATM: OTM_STRIKES out-of-the-money, ITM_STRIKES in-the-money.
+ * For CE: ITM = below ATM, OTM = above ATM
+ * For PE: ITM = above ATM, OTM = below ATM
+ * Combined: ATM ± max(OTM, ITM) strikes, then filter per option type.
  */
 async function _refreshIndex(indexName) {
   const cfg = INDEX_CONFIG[indexName];
@@ -79,10 +81,22 @@ async function _refreshIndex(indexName) {
     return;
   }
 
-  // Filter to strikes within ±10% of ATM (avoid extreme OTM with no liquidity)
-  const minStrike = atmStrike * (1 - STRIKE_RANGE_PCT);
-  const maxStrike = atmStrike * (1 + STRIKE_RANGE_PCT);
-  const instruments = allOptions.filter(i => i.strike >= minStrike && i.strike <= maxStrike);
+  // Filter strikes: OTM_STRIKES out, ITM_STRIKES in (relative to ATM per option type)
+  // CE: strikes from (ATM - ITM*step) to (ATM + OTM*step)
+  // PE: strikes from (ATM - OTM*step) to (ATM + ITM*step)
+  const ceMinStrike = atmStrike - (ITM_STRIKES * cfg.step);
+  const ceMaxStrike = atmStrike + (OTM_STRIKES * cfg.step);
+  const peMinStrike = atmStrike - (OTM_STRIKES * cfg.step);
+  const peMaxStrike = atmStrike + (ITM_STRIKES * cfg.step);
+
+  const instruments = allOptions.filter(i => {
+    if (i.instrumentType === 'CE') {
+      return i.strike >= ceMinStrike && i.strike <= ceMaxStrike;
+    } else if (i.instrumentType === 'PE') {
+      return i.strike >= peMinStrike && i.strike <= peMaxStrike;
+    }
+    return false;
+  });
 
   if (instruments.length === 0) {
     console.warn(`[IdxStrike] No instruments in range for ${indexName} ATM ${atmStrike}`);
@@ -136,7 +150,7 @@ async function _refreshIndex(indexName) {
   });
 
   console.log(
-    `[IdxStrike] ${indexName} ATM ${atmStrike} — subscribed ${instrumentMap.size} instruments (±${STRIKE_RANGE_PCT * 100}% range)` +
+    `[IdxStrike] ${indexName} ATM ${atmStrike} — subscribed ${instrumentMap.size} instruments (ITM ${ITM_STRIKES}, OTM ${OTM_STRIKES})` +
     ` expiry=${instruments[0]?.expiry || 'unknown'}`,
   );
 }
