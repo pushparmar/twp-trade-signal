@@ -350,4 +350,25 @@ function getAllOptionsForCurrentExpiry(name, exchange) {
   return candidates.filter((i) => i.expiry === nearest);
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount, getAllOptionsForCurrentExpiry };
+/**
+ * Get ALL options for next week expiry — no strike filter.
+ * Returns all CE and PE options for the index's second-nearest expiry.
+ * name: e.g. 'NIFTY', exchange: e.g. 'NFO'
+ */
+function getAllOptionsForNextExpiry(name, exchange) {
+  const today = new Date().toISOString().split('T')[0];
+  const candidates = _instruments.filter(
+    (i) =>
+      i.name === name &&
+      i.exchange === exchange &&
+      (i.instrumentType === 'CE' || i.instrumentType === 'PE') &&
+      (!i.expiry || i.expiry >= today),
+  );
+  if (!candidates.length) return [];
+  const expiries = [...new Set(candidates.map((i) => i.expiry).filter(Boolean))].sort();
+  if (expiries.length < 2) return []; // No next expiry available
+  const nextExpiry = expiries[1];
+  return candidates.filter((i) => i.expiry === nextExpiry);
+}
+
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount, getAllOptionsForCurrentExpiry, getAllOptionsForNextExpiry };

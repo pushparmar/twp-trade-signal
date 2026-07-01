@@ -69,13 +69,16 @@ async function _refreshIndex(indexName) {
   const prev = _subscriptions.get(indexName);
   if (prev && Math.abs(prev.atmStrike - atmStrike) < cfg.step) return;
 
-  // Resolve instruments from cache — ALL options for current expiry
+  // Resolve instruments from cache — current + next week expiry
   if (!instrumentCache.isLoaded()) {
     console.warn(`[IdxStrike] Instrument cache not loaded — skipping ${indexName}`);
     return;
   }
 
-  const allOptions = instrumentCache.getAllOptionsForCurrentExpiry(cfg.name, cfg.exchange);
+  const currentExpiry = instrumentCache.getAllOptionsForCurrentExpiry(cfg.name, cfg.exchange);
+  const nextExpiry = instrumentCache.getAllOptionsForNextExpiry(cfg.name, cfg.exchange);
+  const allOptions = [...currentExpiry, ...nextExpiry];
+
   if (allOptions.length === 0) {
     console.warn(`[IdxStrike] No instruments found for ${indexName}`);
     return;
@@ -142,16 +145,20 @@ async function _refreshIndex(indexName) {
     }
   }
 
+  // Collect unique expiries for logging
+  const expiries = [...new Set(instruments.map(i => i.expiry).filter(Boolean))].sort();
+
   _subscriptions.set(indexName, {
     atmStrike,
     ltp: Math.round(ltp * 100) / 100,
     instruments: instrumentMap,
-    expiry: instruments[0]?.expiry || null,
+    expiry: expiries[0] || null,
+    expiries, // store all expiries
   });
 
   console.log(
     `[IdxStrike] ${indexName} ATM ${atmStrike} — subscribed ${instrumentMap.size} instruments (ITM ${ITM_STRIKES}, OTM ${OTM_STRIKES})` +
-    ` expiry=${instruments[0]?.expiry || 'unknown'}`,
+    ` expiries=${expiries.join(', ') || 'unknown'}`,
   );
 }
 
@@ -321,12 +328,15 @@ function isOurToken(token) {
 
 /**
  * Returns the full option chain for UI display.
- * Groups by index → strike, pairs CE/PE with current LTP from candleStore.
+ * Groups by index → expiry → strike, pairs CE/PE with current LTP from candleStore.
  *
  * Returns: {
- *   NIFTY: { atmStrike, ltp, expiry, strikes: [
- *     { strike: 24500, ce: { token, symbol, ltp }, pe: { token, symbol, ltp } },
- *     ...
+ *   NIFTY: { atmStrike, spotLtp, expiries: [
+ *     { expiry: '2026-07-03', strikes: [
+ *       { strike: 24500, ce: { token, symbol, ltp }, pe: { token, symbol, ltp } },
+ *       ...
+ *     ]},
+ *     { expiry: '2026-07-10', strikes: [...] }
  *   ]},
  *   SENSEX: { ... }
  * }
@@ -334,10 +344,13 @@ function isOurToken(token) {
 function getOptionChain() {
   const result = {};
   for (const [indexName, data] of _subscriptions) {
-    // Group instruments by strike
-    const byStrike = new Map();
-    let expiry = null;
+    // Group instruments by expiry → strike
+    const byExpiry = new Map();
+
     for (const inst of data.instruments.values()) {
+      const exp = inst.expiry || 'unknown';
+      if (!byExpiry.has(exp)) byExpiry.set(exp, new Map());
+      const byStrike = byExpiry.get(exp);
       if (!byStrike.has(inst.strike)) byStrike.set(inst.strike, {});
 
       let currentLtp = null;
@@ -346,7 +359,7 @@ function getOptionChain() {
       let dayLow = null;
       let changePct = null;
 
-      // Try minute candles first (live market), fall back to 5minute, then day candle
+      // Try minute candles first (live market), fall back to 5minute
       const minuteCandles = candleStore.getCandlesSync(inst.token, 'minute');
       const fiveMinCandles = candleStore.getCandlesSync(inst.token, '5minute');
 
@@ -379,20 +392,24 @@ function getOptionChain() {
         dayHigh,
         dayLow,
         changePct,
+        expiry: inst.expiry,
       };
-      if (!expiry && inst.expiry) expiry = inst.expiry;
     }
 
-    // Sort strikes ascending
-    const strikes = [...byStrike.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([strike, sides]) => ({ strike, ce: sides.ce || null, pe: sides.pe || null }));
+    // Build expiries array sorted by date
+    const expiries = [...byExpiry.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([expiry, strikeMap]) => ({
+        expiry,
+        strikes: [...strikeMap.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([strike, sides]) => ({ strike, ce: sides.ce || null, pe: sides.pe || null })),
+      }));
 
     result[indexName] = {
       atmStrike: data.atmStrike,
       spotLtp: data.ltp,
-      expiry,
-      strikes,
+      expiries,
     };
   }
   return result;
