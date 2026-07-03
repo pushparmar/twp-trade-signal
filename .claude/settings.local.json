@@ -94,7 +94,8 @@
       "Bash(node -c server/services/patternAlertWatcher.js)",
       "Bash(pkill -f node)",
       "Bash(npm start *)",
-      "Read(//dev/**)"
+      "Read(//dev/**)",
+      "Bash(node --check routes/kumoBreakout.js)"
     ]
   }
 }

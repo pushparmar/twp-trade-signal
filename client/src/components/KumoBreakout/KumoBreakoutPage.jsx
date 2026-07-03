@@ -4,6 +4,7 @@ import './KumoBreakoutPage.css';
 
 const TF_ORDER = ['15m', '1h', '4h', '1d'];
 const TF_LABELS = { '15m': '15 Min', '1h': '1 Hour', '4h': '4 Hour', '1d': 'Daily' };
+const TF_INTERVALS = { '15m': '15minute', '1h': '60minute', '4h': '4h', '1d': 'day' };
 
 function fmt(n, decimals = 2) {
   if (n == null || isNaN(n)) return '—';
@@ -100,7 +101,7 @@ function BreakoutCard({ match }) {
   );
 }
 
-function TimeframeSection({ tfLabel, matches, filter }) {
+function TimeframeSection({ tfLabel, matches, filter, isLoading }) {
   const filtered = matches.filter(m => {
     if (filter.signal !== 'all' && m.signal !== filter.signal) return false;
     if (filter.category !== 'all' && m.category !== filter.category) return false;
@@ -112,10 +113,16 @@ function TimeframeSection({ tfLabel, matches, filter }) {
     <div className="kb-tf-section">
       <div className="kb-tf-header">
         <h3>{TF_LABELS[tfLabel]}</h3>
-        <span className="kb-tf-count">{filtered.length} signal{filtered.length !== 1 ? 's' : ''}</span>
+        {isLoading ? (
+          <span className="kb-tf-loading">Scanning...</span>
+        ) : (
+          <span className="kb-tf-count">{filtered.length} signal{filtered.length !== 1 ? 's' : ''}</span>
+        )}
       </div>
       <div className="kb-tf-grid">
-        {filtered.length === 0 ? (
+        {isLoading ? (
+          <div className="kb-loading">Loading {TF_LABELS[tfLabel]} data...</div>
+        ) : filtered.length === 0 ? (
           <div className="kb-empty">No breakouts found</div>
         ) : (
           filtered.map((m, i) => <BreakoutCard key={`${m.token}-${i}`} match={m} />)
@@ -126,25 +133,37 @@ function TimeframeSection({ tfLabel, matches, filter }) {
 }
 
 export default function KumoBreakoutPage() {
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [results, setResults] = useState({ '15m': [], '1h': [], '4h': [], '1d': [] });
+  const [loading, setLoading] = useState({ '15m': false, '1h': false, '4h': false, '1d': false });
   const [error, setError] = useState(null);
   const [lastScan, setLastScan] = useState(null);
   const [universe, setUniverse] = useState(null);
   const [filter, setFilter] = useState({ signal: 'all', category: 'all', minScore: 0 });
 
   const runScan = useCallback(async () => {
-    setLoading(true);
     setError(null);
-    try {
-      const res = await api.get('/kumo-breakout/scan');
-      setResults(res.data.results);
-      setLastScan(res.data.ts);
-    } catch (err) {
-      setError(err.response?.data?.error || err.message);
-    } finally {
-      setLoading(false);
+    setLoading({ '15m': true, '1h': true, '4h': true, '1d': true });
+
+    // Fire all 4 timeframe scans in parallel
+    const scanPromises = TF_ORDER.map(async (tf) => {
+      const interval = TF_INTERVALS[tf];
+      try {
+        const res = await api.get(`/kumo-breakout/scan/${interval}`);
+        setResults(prev => ({ ...prev, [tf]: res.data.matches }));
+        setLoading(prev => ({ ...prev, [tf]: false }));
+        return { tf, success: true, count: res.data.matches.length };
+      } catch (err) {
+        setLoading(prev => ({ ...prev, [tf]: false }));
+        return { tf, success: false, error: err.response?.data?.error || err.message };
+      }
+    });
+
+    const scanResults = await Promise.all(scanPromises);
+    const failed = scanResults.filter(r => !r.success);
+    if (failed.length > 0) {
+      setError(`Some scans failed: ${failed.map(f => `${f.tf}: ${f.error}`).join(', ')}`);
     }
+    setLastScan(Date.now());
   }, []);
 
   useEffect(() => {
@@ -153,9 +172,9 @@ export default function KumoBreakoutPage() {
       .catch(() => {});
   }, []);
 
-  const totalMatches = results
-    ? TF_ORDER.reduce((sum, tf) => sum + (results[tf]?.length || 0), 0)
-    : 0;
+  const totalMatches = TF_ORDER.reduce((sum, tf) => sum + (results[tf]?.length || 0), 0);
+  const anyLoading = Object.values(loading).some(Boolean);
+  const hasResults = totalMatches > 0 || lastScan;
 
   return (
     <div className="kb-page">
@@ -169,15 +188,15 @@ export default function KumoBreakoutPage() {
           )}
         </div>
         <div className="kb-toolbar-right">
-          <button className="kb-scan-btn" onClick={runScan} disabled={loading}>
-            {loading ? 'Scanning...' : 'Run Scan'}
+          <button className="kb-scan-btn" onClick={runScan} disabled={anyLoading}>
+            {anyLoading ? 'Scanning...' : 'Run Scan'}
           </button>
         </div>
       </div>
 
       {error && <div className="kb-error">{error}</div>}
 
-      {results && (
+      {hasResults && (
         <>
           <div className="kb-filters">
             <div className="kb-filter-group">
@@ -219,13 +238,14 @@ export default function KumoBreakoutPage() {
                 tfLabel={tf}
                 matches={results[tf] || []}
                 filter={filter}
+                isLoading={loading[tf]}
               />
             ))}
           </div>
         </>
       )}
 
-      {!results && !loading && (
+      {!hasResults && !anyLoading && (
         <div className="kb-placeholder">
           <p>Click "Run Scan" to find Kumo Breakout signals across all timeframes.</p>
           <p className="kb-hint">Scans indices, MCX commodities, and all F&O stocks on 15m, 1h, 4h, and Daily charts.</p>

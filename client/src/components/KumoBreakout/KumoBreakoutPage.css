@@ -152,12 +152,31 @@
   gap: 12px;
 }
 
-.kb-empty {
+.kb-empty,
+.kb-loading {
   grid-column: 1 / -1;
   text-align: center;
   padding: 24px;
   color: var(--text-tertiary, #666);
   font-size: 0.9rem;
+}
+
+.kb-loading {
+  color: var(--accent-primary, #3b82f6);
+}
+
+.kb-tf-loading {
+  font-size: 0.8rem;
+  color: var(--accent-primary, #3b82f6);
+  background: rgba(59, 130, 246, 0.1);
+  padding: 4px 10px;
+  border-radius: 12px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* Card */

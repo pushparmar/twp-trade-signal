@@ -105,11 +105,17 @@ function _computeBias(candles) {
   return 'neutral';
 }
 
-// ── GET /api/kumo-breakout/scan ───────────────────────────────────────────────
-router.get('/scan', async (req, res) => {
-  // Disable timeout for long scans
+// ── GET /api/kumo-breakout/scan/:interval ─────────────────────────────────────
+// Scan a single timeframe — called in parallel by the frontend.
+// interval: '15minute' | '60minute' | '4h' | 'day'
+router.get('/scan/:interval', async (req, res) => {
   req.setTimeout(0);
   res.setTimeout(0);
+
+  const interval = req.params.interval;
+  if (!INTERVALS.includes(interval)) {
+    return res.status(400).json({ error: `Invalid interval: ${interval}. Use: ${INTERVALS.join(', ')}` });
+  }
 
   const pattern = patternRegistry.get('kumo-breakout');
   if (!pattern) {
@@ -117,62 +123,42 @@ router.get('/scan', async (req, res) => {
   }
 
   const universe = _buildUniverse();
-  console.log(`[KumoBreakout] Scanning ${universe.length} instruments × ${INTERVALS.length} intervals`);
+  const tfLabel = TF_LABEL[interval];
+  console.log(`[KumoBreakout] Scanning ${tfLabel} — ${universe.length} instruments`);
 
-  const results = {
-    '15m': [],
-    '1h':  [],
-    '4h':  [],
-    '1d':  [],
-  };
-  const biasMap = new Map(); // token → { interval → bias }
-
+  const matches = [];
   let scannedCount = 0;
 
-  for (const inst of universe) {
-    const tokenBias = {};
-
-    for (const interval of INTERVALS) {
-      const tfLabel = TF_LABEL[interval];
+  // Process in batches to avoid overwhelming Kite API
+  const BATCH_SIZE = 10;
+  for (let i = 0; i < universe.length; i += BATCH_SIZE) {
+    const batch = universe.slice(i, i + BATCH_SIZE);
+    const batchPromises = batch.map(async (inst) => {
       let candles;
       try {
         candles = await _getCandles(inst.instrumentToken, interval);
-      } catch (err) {
-        continue;
+      } catch {
+        return null;
       }
 
-      if (!candles || candles.length < 52) continue;
+      if (!candles || candles.length < 52) return null;
       scannedCount++;
 
-      // Store bias for MTF alignment
-      const bias = _computeBias(candles);
-      tokenBias[interval] = bias;
-
-      // Run kumo-breakout pattern
       let result;
       try {
         result = pattern.run(candles, { ...pattern.defaultOpts, interval });
       } catch {
-        continue;
+        return null;
       }
 
-      if (!result?.matched || !result.signal) continue;
+      if (!result?.matched || !result.signal) return null;
 
-      // Compute MTF alignment
-      const alignedTfs = [];
-      for (const [iv, b] of Object.entries(tokenBias)) {
-        if (iv !== interval && b === result.signal) {
-          alignedTfs.push(TF_LABEL[iv]);
-        }
-      }
-
-      // Get future cloud color
       let futureCloudColor = null;
       try {
         futureCloudColor = getFutureCloudColor(candles);
       } catch {}
 
-      const match = {
+      return {
         token:        inst.instrumentToken,
         symbol:       inst.tradingsymbol,
         name:         inst.name || inst.tradingsymbol,
@@ -196,33 +182,25 @@ router.get('/scan', async (req, res) => {
         chikou:       result.chikou,
         atr:          result.atr,
         futureCloudColor,
-        mtfAligned:   alignedTfs.length > 0,
-        alignedTfs,
         ts:           Date.now(),
       };
+    });
 
-      results[tfLabel].push(match);
-    }
-
-    biasMap.set(inst.instrumentToken, tokenBias);
+    const batchResults = await Promise.all(batchPromises);
+    matches.push(...batchResults.filter(Boolean));
   }
 
-  // Sort each TF by score descending
-  for (const tf of Object.keys(results)) {
-    results[tf].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }
+  // Sort by score descending
+  matches.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
-  console.log(
-    `[KumoBreakout] Scan complete — ` +
-    `15m:${results['15m'].length} 1h:${results['1h'].length} ` +
-    `4h:${results['4h'].length} 1d:${results['1d'].length} ` +
-    `(${scannedCount} pairs scanned)`,
-  );
+  console.log(`[KumoBreakout] ${tfLabel} complete — ${matches.length} matches (${scannedCount} scanned)`);
 
   res.json({
+    interval,
+    tfLabel,
     scannedCount,
     totalInstruments: universe.length,
-    results,
+    matches,
     ts: Date.now(),
   });
 });
