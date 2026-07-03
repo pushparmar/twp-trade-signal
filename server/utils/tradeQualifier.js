@@ -47,7 +47,11 @@ function qualifyTrade(entry, sl, target, settings, exchange, lotSize) {
   }
 
   // NSE: size by ₹riskPerTrade, gate on minProfit.
-  const quantity        = Math.max(1, Math.floor(settings.riskPerTrade / riskPerUnit));
+  // If even 1 share exceeds the risk budget (high-priced stock with a wide SL),
+  // skip the trade — forcing quantity=1 would silently break the risk limit.
+  const quantity = Math.floor(settings.riskPerTrade / riskPerUnit);
+  if (quantity < 1) return null;
+
   const potentialProfit = Math.abs(target - entry) * quantity;
   if (potentialProfit < settings.minProfit) return null;
 

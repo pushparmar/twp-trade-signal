@@ -98,16 +98,36 @@ function _computeCloudBias(candles) {
 
 /**
  * Returns MTF alignment for a given (token, interval, signal).
- * Checks _biasMap for other intervals and returns those matching the signal.
+ * Computes the Kijun bias FRESH from the in-memory candle buffers for every
+ * other interval — the cached _biasMap is only a fallback for intervals whose
+ * buffer isn't seeded, since map entries can be up to hours stale (they only
+ * refresh when that interval's own candle closes).
  *
  * @returns {{ mtfAligned: boolean, alignedTfs: string[] }}
  */
 function _getMtfAlignment(token, currentInterval, signal) {
-  const tokenBias = _biasMap.get(Number(token));
-  if (!tokenBias) return { mtfAligned: false, alignedTfs: [] };
+  const numToken  = Number(token);
+  const tokenBias = _biasMap.get(numToken) ?? {};
+
   const alignedTfs = [];
-  for (const [interval, bias] of Object.entries(tokenBias)) {
+  for (const interval of [...WATCHED_INTERVALS, '4h']) {
     if (interval === currentInterval) continue;
+
+    let bias = null;
+    if (interval === '4h') {
+      const c1h = candleStore.getCandlesSync(numToken, '60minute');
+      if (c1h && c1h.length >= 26) {
+        bias = _computeCloudBias(_to4H(c1h).filter((c) => !c.partial));
+      }
+    } else {
+      const candles = candleStore.getCandlesSync(numToken, interval);
+      if (candles && candles.length >= 26) {
+        bias = _computeCloudBias(candles);
+      }
+    }
+
+    if (bias == null) bias = tokenBias[interval] ?? null;
+
     if (bias === signal) alignedTfs.push(TF_LABEL[interval] || interval);
   }
   return { mtfAligned: alignedTfs.length > 0, alignedTfs };
@@ -261,7 +281,9 @@ async function onCandleClose(token, interval) {
     if (interval === '60minute') {
       const c1h = candleStore.getCandlesSync(token, '60minute');
       if (c1h && c1h.length >= 8) {
-        const c4h = _to4H(c1h);
+        // Drop the still-forming partial group — patterns must only see closed
+        // candles, otherwise signals repaint when the candle finishes.
+        const c4h = _to4H(c1h).filter((c) => !c.partial);
         // Store 4h bias
         if (c4h.length >= 26) {
           const _bias4h = _computeCloudBias(c4h);

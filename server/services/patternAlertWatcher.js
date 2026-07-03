@@ -97,9 +97,11 @@ function _hasHigherTfAlignment(token, signal) {
   ];
 
   // Synthesise 4h from the 1h buffer when enough bars exist.
+  // Drop the still-forming partial group — patterns must only see closed
+  // candles, otherwise signals repaint when the candle finishes.
   const c1h = candleStore.getCandlesSync(token, '60minute');
   if (c1h && c1h.length >= 8) {
-    const c4h = _to4H(c1h);
+    const c4h = _to4H(c1h).filter((c) => !c.partial);
     if (c4h.length >= 52) {
       intervals.push({ interval: '4h', candles: c4h });
     }
@@ -365,7 +367,7 @@ async function onCandleClose(token, interval) {
     if (interval === '60minute') {
       const c1h = candleStore.getCandlesSync(token, '60minute');
       if (c1h && c1h.length >= 8) {
-        const c4h = _to4H(c1h);
+        const c4h = _to4H(c1h).filter((c) => !c.partial);
         if (c4h.length >= 52) {
           await _runAndAlert(token, '4h', c4h);
         }

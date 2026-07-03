@@ -276,9 +276,9 @@ async function runAndStore() {
           // Use 1H candles directly
           candles = e60?.candles;
         } else if (interval === '4h') {
-          // Convert 1H to 4H
+          // Convert 1H to 4H — exclude the still-forming partial group
           const c1h = e60?.candles;
-          candles = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
+          candles = (c1h && c1h.length >= 8) ? to4H(c1h).filter((c) => !c.partial) : null;
         } else if (interval === 'day') {
           candles = eDay?.candles;
         }

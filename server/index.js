@@ -20,6 +20,7 @@ const autoTraderRouter   = require('./routes/autoTrader');
 const backtestRouter     = require('./routes/backtest');
 const equityScanRouter   = require('./routes/equityScan');
 const debugEquityRouter  = require('./routes/debug-equity');
+const kumoBreakoutRouter = require('./routes/kumoBreakout');
 const autoTrader         = require('./services/autoTrader');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
@@ -120,6 +121,7 @@ app.use('/api/auto-trader', autoTraderRouter);
 app.use('/api/backtest',    backtestRouter);
 app.use('/api/equity-scan', equityScanRouter);
 app.use('/api/debug',       debugEquityRouter);
+app.use('/api/kumo-breakout', kumoBreakoutRouter);
 app.use('/api/index-trade', indexTrade.router);
 
 app.listen(PORT, async () => {

@@ -1238,13 +1238,15 @@ function getKijunLevel(candles, { lookback = 3, tolerance = 0.003 } = {}) {
  *   wrong and Ichimoku calculations on those candles produce garbage signals.
  *
  * FIX: group by trading session date first.
- *   Only complete groups of exactly 4 consecutive 1h bars within the SAME
- *   calendar day are combined. A partial end-of-day group (< 4 bars) is skipped.
+ *   Groups of up to 4 consecutive 1h bars within the SAME calendar day are
+ *   combined. The end-of-day tail group (NSE bars 4-5, 13:15-15:15) is kept
+ *   as its own closed candle — those are real closed bars covering the most
+ *   volatile stretch of the session, not partial data.
  *
  * Indian market produces ~6 complete 1h bars per session (9:15-15:15).
- * That gives exactly ONE complete 4h candle per day (bars 0-3) and leaves
- * the last 2 bars out. A 1200-bar 1h buffer (~192 days) therefore yields
- * ~192 4h candles — well above the 52 required by Ichimoku.
+ * That gives TWO 4h candles per day: bars 0-3 and the 2-bar tail (bars 4-5).
+ * A 1200-bar 1h buffer (~192 days) therefore yields ~384 4h candles — well
+ * above the 52 required by Ichimoku.
  *
  * @param {Array<{date: string, open: number, high: number, low: number, close: number}>} candles1h
  * @returns {Array<{date, open, high, low, close}>}
@@ -1272,10 +1274,15 @@ function to4H(candles1h) {
 
     for (let i = 0; i < dayCandles.length; i += 4) {
       const slice = dayCandles.slice(i, i + 4);
-      // Historical days: drop partial trailing groups (preserves old behaviour)
-      if (slice.length < 4 && !isToday) continue;
-      // Today: emit even partial groups (≥1 bar) so latest intraday is visible
       if (slice.length < 1) continue;
+
+      // Historical days: every group is closed — including the 2-bar session
+      // tail (13:15-15:15 on NSE). Those bars are real closed data; dropping
+      // them hid 2 hours of price action from the 4h series every day.
+      // Today: the last group is still forming — flag it so scanners can
+      // exclude it. A group is "still forming" when it's the final group of
+      // today AND the session could still add bars to it (< 4 bars so far).
+      const isLastGroupOfToday = isToday && i + 4 >= dayCandles.length;
 
       out.push({
         date:  slice[0].date,
@@ -1284,7 +1291,7 @@ function to4H(candles1h) {
         low:   Math.min(...slice.map((c) => c.low)),
         close: slice[slice.length - 1].close,
         // Flag forming candles so downstream scanners can opt to exclude them
-        partial: isToday && slice.length < 4,
+        partial: isLastGroupOfToday && slice.length < 4,
       });
     }
   }
@@ -1616,10 +1623,12 @@ function getKumoBaseEntry(candles, {
   // ── ATR ───────────────────────────────────────────────────────────────────
   const atr = getATR(candles, 14);
 
-  // ── 2. Fat cloud (OR-logic: passes if EITHER metric says it's fat) ────────
+  // ── 2. Fat cloud — BOTH the pct and ATR floors must be satisfied ─────────
+  // A thin cloud on a low-volatility day must not qualify just because the
+  // ATR floor happens to be small (and vice versa).
   const pctMin       = minCloudWidthPct * last.close;
   const atrMin       = atr != null ? minCloudWidthAtr * atr : pctMin;
-  const minCloudSize = Math.min(pctMin, atrMin);
+  const minCloudSize = Math.max(pctMin, atrMin);
   if (cloudWidth < minCloudSize) return null;
 
   // ── 3a. Fresh entry — within `entryLookback` bars, at least one was outside ─
@@ -1776,11 +1785,11 @@ function getKumoConsolidation(candles, {
   }
 
   // ── Fat cloud check ───────────────────────────────────────────────────────
-  // OR-logic: qualify if EITHER the pct check OR the ATR check says it's fat.
-  // Math.min picks the less-strict threshold so a cloud only needs to satisfy one.
+  // BOTH the pct and ATR floors must be satisfied ("thick cloud" per the
+  // pattern description). Math.max picks the stricter threshold.
   const pctMin = minCloudWidthPct * last.close;
   const atrMin = atr != null ? minCloudWidthAtr * atr : pctMin;
-  const minCloudWidth = Math.min(pctMin, atrMin);
+  const minCloudWidth = Math.max(pctMin, atrMin);
 
   if (cloudWidth < minCloudWidth) {
     // Thin cloud — not a meaningful barrier, skip

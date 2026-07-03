@@ -143,7 +143,7 @@ function _bgGetMarketBias() {
     const c15m  = candleStore.getCandlesSync(NIFTY_TOKEN_BG, '15minute');
     const c1h   = candleStore.getCandlesSync(NIFTY_TOKEN_BG, '60minute');
     const c1d   = candleStore.getCandlesSync(NIFTY_TOKEN_BG, 'day');
-    const c4h   = c1h && c1h.length >= 52 ? to4H(c1h) : null;
+    const c4h   = c1h && c1h.length >= 52 ? to4H(c1h).filter((c) => !c.partial) : null;
 
     const s15m  = c15m && c15m.length >= 52 ? ichimokuGetSignals(c15m, '15minute') : null;
     const s1h   = c1h  && c1h.length  >= 52 ? ichimokuGetSignals(c1h,  '60minute') : null;
@@ -227,8 +227,15 @@ function _computeCloudBias(candles) {
 
 /**
  * Determine MTF alignment for a new alert.
- * Looks up _biasMap for ALL other timeframes of the same token and returns
- * those whose stored bias matches the alert's signal direction.
+ * Computes the Kijun bias FRESH from the in-memory candle buffers for every
+ * other timeframe of the same token and returns those whose bias matches the
+ * alert's signal direction.
+ *
+ * Why fresh and not the cached _biasMap: the map is only written when that
+ * interval's own scan timer fires, so a 15m alert could gate on a 1h bias
+ * up to an hour old (hours for 4h/1d). The buffers are updated on every
+ * candle close, so computing from them reflects the current state.
+ * Falls back to the cached _biasMap entry when a buffer is empty.
  *
  * Example: RELIANCE 1h bullish alert fires.  If 4h bias = 'bullish' and
  * 1d bias = 'bullish', alignedTfs = ['4h', '1d'] and mtfAligned = true.
@@ -239,12 +246,29 @@ function _computeCloudBias(candles) {
  * @returns {{ mtfAligned: boolean, alignedTfs: string[] }}
  */
 function _getMtfAlignment(token, currentInterval, signal) {
-  const tokenBias = _biasMap.get(Number(token));
-  if (!tokenBias) return { mtfAligned: false, alignedTfs: [] };
+  const numToken  = Number(token);
+  const tokenBias = _biasMap.get(numToken) ?? {};
 
   const alignedTfs = [];
-  for (const [interval, bias] of Object.entries(tokenBias)) {
+  for (const interval of INTERVALS) {
     if (interval === currentInterval) continue;
+
+    let bias = null;
+    if (interval === '4h') {
+      const c1h = candleStore.getCandlesSync(numToken, '60minute');
+      if (c1h && c1h.length >= 26) {
+        bias = _computeCloudBias(to4H(c1h).filter((c) => !c.partial));
+      }
+    } else {
+      const candles = candleStore.getCandlesSync(numToken, interval);
+      if (candles && candles.length >= 26) {
+        bias = _computeCloudBias(candles);
+      }
+    }
+
+    // Buffer not seeded for this interval yet — use the last scanned bias
+    if (bias == null) bias = tokenBias[interval] ?? null;
+
     if (bias === signal) alignedTfs.push(TF_LABEL[interval] || interval);
   }
   return { mtfAligned: alignedTfs.length > 0, alignedTfs };
@@ -480,7 +504,9 @@ async function _runScanForInterval(interval) {
     try {
       if (interval === '4h') {
         const c1h = await candleStore.getCandles(inst.instrumentToken, '60minute', SCAN_BARS['60minute']);
-        candles   = (c1h && c1h.length >= 8) ? to4H(c1h) : null;
+        // Drop the still-forming partial group — patterns must only see closed
+        // candles, otherwise signals repaint when the candle finishes.
+        candles   = (c1h && c1h.length >= 8) ? to4H(c1h).filter((c) => !c.partial) : null;
       } else {
         candles = await candleStore.getCandles(inst.instrumentToken, interval, SCAN_BARS[interval] ?? 100);
       }

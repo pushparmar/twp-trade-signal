@@ -153,8 +153,9 @@ function _getMarketBias() {
     const candles1h  = candleStore.getCandlesSync(NIFTY_TOKEN, '60minute');
     const candles1d  = candleStore.getCandlesSync(NIFTY_TOKEN, 'day');
 
-    // 4h is synthesised from 1h candles (same as chart + UI)
-    const candles4h = candles1h && candles1h.length >= 52 ? to4H(candles1h) : null;
+    // 4h is synthesised from 1h candles (same as chart + UI).
+    // Partial (still-forming) groups are excluded — signals must not repaint.
+    const candles4h = candles1h && candles1h.length >= 52 ? to4H(candles1h).filter((c) => !c.partial) : null;
 
     // ── Run getSignals() on each TF ─────────────────────────────────────
     const sig15m = candles15m && candles15m.length >= 52 ? ichimokuGetSignals(candles15m, '15minute') : null;
@@ -239,6 +240,20 @@ async function _onAlert(alert, source) {
   const settings = store.getAutoTraderSettings();
   if (!settings.enabled) return;
 
+  // ── 1.05 Daily loss circuit breaker ──────────────────────────────────────
+  // Once today's realized PnL drops below -maxDailyLoss, stop entering NEW
+  // trades for the rest of the day. Open trades stay managed (SL/target/TSL).
+  if (settings.maxDailyLoss > 0) {
+    const todayPnl = store.getTodayRealizedPnl();
+    if (todayPnl <= -settings.maxDailyLoss) {
+      console.log(
+        `[AutoTrader] 🛑 Daily loss limit hit (today ₹${Math.round(todayPnl)} ≤ -₹${settings.maxDailyLoss})` +
+        ` — no new trades until tomorrow. Skipped ${alert.label ?? alert.token}`,
+      );
+      return;
+    }
+  }
+
   // ── 1.1  Pattern config gate — skip if order disabled for this pattern+interval
   if (!store.isPatternEnabled(alert.patternId, alert.interval, 'order')) return;
 
@@ -270,6 +285,20 @@ async function _onAlert(alert, source) {
   const { sl, target, token, interval, patternId, signal } = alert;
 
   if (!entry || !sl || !target || !token || !signal) return;
+
+  // ── 2.05 SL/target sanity ─────────────────────────────────────────────────
+  // Bullish must have sl < entry < target; bearish the inverse. A pattern-engine
+  // bug producing inverted levels must never reach a paper trade.
+  const levelsValid = signal === 'bullish'
+    ? (sl < entry && target > entry)
+    : (sl > entry && target < entry);
+  if (!levelsValid) {
+    console.warn(
+      `[AutoTrader] ⛔ Invalid levels for ${alert.label ?? token} (${signal}):` +
+      ` entry=${entry} sl=${sl} target=${target} — skipped`,
+    );
+    return;
+  }
 
   // ── 2.1  Index / non-tradeable instrument gate ───────────────────────────
   // Indices (NIFTY, BANKNIFTY, SENSEX, VIX, etc.) cannot be traded directly;

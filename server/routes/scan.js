@@ -163,7 +163,8 @@ async function _getCandles(token, interval) {
   if (interval === '4h') {
     // Pull enough 1h bars to produce at least 52 synthesised 4h candles
     const c1h = await candleStore.getCandles(token, '60minute', SCAN_BARS['60minute']);
-    return c1h && c1h.length >= 8 ? _to4H(c1h) : null;
+    // Exclude the still-forming partial group so scan results don't repaint.
+    return c1h && c1h.length >= 8 ? _to4H(c1h).filter((c) => !c.partial) : null;
   }
   return candleStore.getCandles(token, interval, SCAN_BARS[interval] ?? 100);
 }

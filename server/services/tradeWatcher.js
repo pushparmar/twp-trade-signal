@@ -29,6 +29,48 @@ function _ticker() {
 const _closing           = new Set();
 const _lastTickBroadcast = new Map();
 
+// Last seen tick price per token — used as the exit price for EOD force-close.
+const _lastPrice = new Map();
+
+// ── EOD force-close ──────────────────────────────────────────────────────────
+// Intraday paper trades must not carry overnight gap risk.
+//   NSE equities → closed at 15:25 IST (market closes 15:30)
+//   MCX          → closed at 23:20 IST (session ends 23:30)
+// One sweep per exchange per calendar day.
+const IST_OFFSET_MS      = 5.5 * 60 * 60 * 1000;
+const EOD_NSE_MINS       = 15 * 60 + 25;
+const EOD_MCX_MINS       = 23 * 60 + 20;
+const _eodClosedDate     = { NSE: null, MCX: null };
+
+function _eodSweep() {
+  const nowIST   = new Date(Date.now() + IST_OFFSET_MS);
+  const nowMins  = nowIST.getUTCHours() * 60 + nowIST.getUTCMinutes();
+  const todayIST = nowIST.toISOString().slice(0, 10);
+
+  for (const [exchange, eodMins] of [['NSE', EOD_NSE_MINS], ['MCX', EOD_MCX_MINS]]) {
+    if (nowMins < eodMins) continue;
+    if (_eodClosedDate[exchange] === todayIST) continue;
+    _eodClosedDate[exchange] = todayIST;
+
+    const openTrades = store.getPaperTrades().filter((t) => {
+      if (t.status !== 'OPEN') return false;
+      const ex = String(t.exchange ?? 'NSE').toUpperCase();
+      return exchange === 'MCX' ? ex === 'MCX' : ex !== 'MCX';
+    });
+    if (openTrades.length === 0) continue;
+
+    console.log(
+      `[TradeWatcher] 🕐 EOD sweep (${exchange}) — force-closing ${openTrades.length} open trade(s)`,
+    );
+    for (const trade of openTrades) {
+      const ltp = _lastPrice.get(normalizeToken(trade.token)) ?? trade.entryPrice;
+      _closeTrade(trade, ltp, 'EOD');
+    }
+  }
+}
+
+setInterval(_eodSweep, 60_000);
+
 // Pending SL breach confirmations — populated when a tick crosses SL and
 // settings.slViaCandleClose is true.  Cleared on price recovery or 15m candle close.
 // tradeId → { sl: number, reason: string, breachTime: number }
@@ -198,6 +240,7 @@ function onTick(token, lastPrice) {
   if (lastPrice == null) return;
 
   const numToken = normalizeToken(token);
+  _lastPrice.set(numToken, lastPrice);
 
   // ── Pending order activation (tick-based — limit orders fill immediately) ─
   const pendingTrades = store.getPaperTrades().filter(

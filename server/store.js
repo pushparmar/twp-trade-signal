@@ -337,6 +337,19 @@ function getPaperTrades() {
     return _paperTrades;
 }
 
+/**
+ * Sum of realized PnL for trades closed TODAY (IST calendar day).
+ * Used by the auto-trader's daily loss circuit breaker.
+ */
+function getTodayRealizedPnl() {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const todayIST = new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    return _paperTrades
+        .filter(t => t.status === "CLOSED" && t.closedTs
+            && new Date(t.closedTs + IST_OFFSET_MS).toISOString().slice(0, 10) === todayIST)
+        .reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+}
+
 // Overwrite cumulative PnL — used on startup to load the authoritative value
 // from MongoDB so the balance survives Railway redeploys and config.json loss.
 function setCumulativePnl(amount) {
@@ -416,6 +429,10 @@ function getAutoTraderSettings() {
         // Open trades continue to be monitored and exited at any time.
         tradeStartHHMM: config.autoTrader?.tradeStartHHMM ?? '09:20',
         tradeEndHHMM:   config.autoTrader?.tradeEndHHMM   ?? '15:15',
+        // Daily loss circuit breaker — once today's realized PnL drops below
+        // -maxDailyLoss, no NEW trades are entered until the next trading day.
+        // Open trades continue to be managed (SL/target/TSL still fire).
+        maxDailyLoss: config.autoTrader?.maxDailyLoss ?? 30_000,
     };
 }
 
@@ -616,6 +633,7 @@ module.exports = {
     cancelPendingTrade,
     autoClosePaperTrades,
     getPaperTrades,
+    getTodayRealizedPnl,
     clearPaperTrades,
     getPaperBalance,
     setPaperInitialBalance,

@@ -12,6 +12,7 @@ import AnalyticsPage from "./components/Analytics/AnalyticsPage";
 import BacktestPage from "./components/Backtest/BacktestPage";
 import IndexTradePage from "./components/IndexTrade/IndexTradePage";
 import EquityScanPanel from "./components/Scanner/EquityScanPanel";
+import KumoBreakoutPage from "./components/KumoBreakout/KumoBreakoutPage";
 import LoginPage from "./components/Auth/LoginPage";
 import "./App.css";
 
@@ -159,6 +160,7 @@ const PAGES = {
     analytics: AnalyticsPage,
     backtest: BacktestPage,
     "equity-scan": EquityScanPanel,
+    "kumo-breakout": KumoBreakoutPage,
     settings: SettingsPanel
 };
 
