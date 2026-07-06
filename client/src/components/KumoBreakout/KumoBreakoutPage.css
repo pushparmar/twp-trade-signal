@@ -383,6 +383,92 @@
   color: var(--text-tertiary, #666);
 }
 
+/* Scheduler status */
+.kb-scheduler {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+}
+
+.kb-scheduler--running {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+}
+
+.kb-scheduler--stopped {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.kb-scheduler-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.kb-scheduler--running .kb-scheduler-dot {
+  background: #22c55e;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.kb-scheduler--stopped .kb-scheduler-dot {
+  background: #ef4444;
+}
+
+.kb-scheduler-label {
+  color: var(--text-secondary, #888);
+  font-weight: 500;
+}
+
+.kb-scheduler-btn {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.kb-scheduler-btn--start {
+  background: #22c55e;
+  color: #fff;
+}
+
+.kb-scheduler-btn--start:hover {
+  background: #16a34a;
+}
+
+.kb-scheduler-btn--stop {
+  background: #ef4444;
+  color: #fff;
+}
+
+.kb-scheduler-btn--stop:hover {
+  background: #dc2626;
+}
+
+/* Timeframe meta (scanned, next scan) */
+.kb-tf-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kb-tf-scanned {
+  font-size: 0.75rem;
+  color: var(--text-tertiary, #666);
+}
+
+.kb-tf-next {
+  font-size: 0.75rem;
+  color: var(--accent-primary, #3b82f6);
+  font-weight: 500;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .kb-toolbar {

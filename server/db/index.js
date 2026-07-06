@@ -23,6 +23,7 @@ const signalOutcomeRepo  = require('./repositories/signalOutcomeRepo');
 const settingsRepo       = require('./repositories/settingsRepo');
 const equityScanRepo        = require('./repositories/equityScanRepo');
 const equityCandleCacheRepo = require('./repositories/equityCandleCacheRepo');
+const kumoBreakoutCacheRepo = require('./repositories/kumoBreakoutCacheRepo');
 
 /**
  * Connect to MongoDB and bootstrap collection indexes.
@@ -45,6 +46,7 @@ async function init() {
     settingsRepo.createIndexes(),
     equityScanRepo.createIndexes(),
     equityCandleCacheRepo.createIndexes(),
+    kumoBreakoutCacheRepo.createIndexes(),
   ]);
 
   return true;
@@ -57,4 +59,4 @@ async function close() {
   await mongo.close();
 }
 
-module.exports = { init, close, alertRepo, tradeRepo, indexTradeRepo, signalOutcomeRepo, settingsRepo, equityScanRepo, equityCandleCacheRepo };
+module.exports = { init, close, alertRepo, tradeRepo, indexTradeRepo, signalOutcomeRepo, settingsRepo, equityScanRepo, equityCandleCacheRepo, kumoBreakoutCacheRepo };

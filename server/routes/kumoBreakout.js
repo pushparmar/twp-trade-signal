@@ -1,8 +1,13 @@
 /**
  * Kumo Breakout dedicated scanner route.
  *
- * GET  /api/kumo-breakout/scan   — Run kumo-breakout on stocks, indices, and F&O
- *                                  across 15m, 1h, 4h, and daily timeframes.
+ * GET  /api/kumo-breakout/scan/:interval — Run kumo-breakout for a single timeframe
+ * GET  /api/kumo-breakout/results        — Load cached results from DB (all intervals)
+ * GET  /api/kumo-breakout/status         — Scheduler status (next scan times)
+ * POST /api/kumo-breakout/start          — Start the scheduled scanner
+ * POST /api/kumo-breakout/stop           — Stop the scheduled scanner
+ * POST /api/kumo-breakout/run-all        — Trigger full scan (all intervals in parallel)
+ * GET  /api/kumo-breakout/universe       — Instrument counts
  *
  * This is a simplified, purpose-built endpoint that returns all kumo breakout
  * signals in one call, grouped by timeframe for easy UI rendering.
@@ -16,6 +21,7 @@ const foStockRegistry  = require('../services/foStockRegistry');
 const { to4H, getFutureCloudColor } = require('../services/ichimoku');
 const { VIX_TOKEN, getFrontMonthFutures } = require('../services/macroAnalysis');
 const store            = require('../store');
+const kumoBreakoutService = require('../services/kumoBreakoutService');
 
 const router = express.Router();
 
@@ -214,6 +220,82 @@ router.get('/universe', (req, res) => {
     stock:     universe.filter(u => u.category === 'stock').length,
   };
   res.json({ total: universe.length, ...byCategory });
+});
+
+// ── GET /api/kumo-breakout/results ────────────────────────────────────────────
+// Load today's cached scan results from DB for all intervals.
+router.get('/results', async (req, res) => {
+  try {
+    const cached = await kumoBreakoutService.getCachedResults();
+    res.json(cached);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/kumo-breakout/status ─────────────────────────────────────────────
+// Scheduler status: running, next scan times, last scan times.
+router.get('/status', (req, res) => {
+  res.json(kumoBreakoutService.getStatus());
+});
+
+// ── POST /api/kumo-breakout/start ─────────────────────────────────────────────
+// Start the scheduled scanner.
+router.post('/start', async (req, res) => {
+  try {
+    await kumoBreakoutService.start();
+    res.json({ success: true, status: kumoBreakoutService.getStatus() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/kumo-breakout/stop ──────────────────────────────────────────────
+// Stop the scheduled scanner.
+router.post('/stop', (req, res) => {
+  kumoBreakoutService.stop();
+  res.json({ success: true, status: kumoBreakoutService.getStatus() });
+});
+
+// ── POST /api/kumo-breakout/run-all ───────────────────────────────────────────
+// Trigger a full scan of all intervals in parallel.
+router.post('/run-all', async (req, res) => {
+  req.setTimeout(0);
+  res.setTimeout(0);
+  try {
+    const results = await kumoBreakoutService.runAllScans();
+    const summary = {};
+    for (const r of results) {
+      summary[r.tfLabel] = { matchCount: r.matches.length, scannedCount: r.scannedCount };
+    }
+    res.json({ success: true, summary, ts: Date.now() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/kumo-breakout/run/:interval ─────────────────────────────────────
+// Trigger a single interval scan.
+router.post('/run/:interval', async (req, res) => {
+  req.setTimeout(0);
+  res.setTimeout(0);
+  const { interval } = req.params;
+  try {
+    const result = await kumoBreakoutService.runSingleScan(interval);
+    if (!result) {
+      return res.status(404).json({ error: 'Scan returned no results or interval invalid' });
+    }
+    res.json({
+      success: true,
+      interval: result.interval,
+      tfLabel: result.tfLabel,
+      matchCount: result.matches.length,
+      scannedCount: result.scannedCount,
+      ts: Date.now(),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

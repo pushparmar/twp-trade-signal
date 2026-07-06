@@ -95,7 +95,15 @@
       "Bash(pkill -f node)",
       "Bash(npm start *)",
       "Read(//dev/**)",
-      "Bash(node --check routes/kumoBreakout.js)"
+      "Bash(node --check routes/kumoBreakout.js)",
+      "Bash(mkdir -p ~/Desktop/shivraj-portfolio/assets)",
+      "Bash(pdftotext -layout \"/Users/pushpendraparmar/Downloads/Shivraj _ Lead Product Designer _ Website.pdf\" -)",
+      "Bash(open /Users/pushpendraparmar/Desktop/shivraj-portfolio/index.html)",
+      "Bash(node -e \"require\\('./services/kumoBreakoutService'\\)\")",
+      "Bash(node -e \"require\\('./db/repositories/kumoBreakoutCacheRepo'\\)\")",
+      "Bash(node -e \"const fs = require\\('fs'\\); const code = fs.readFileSync\\('./client/src/components/KumoBreakout/KumoBreakoutPage.jsx', 'utf8'\\); console.log\\('Lines:', code.split\\('\\\\n'\\).length\\); console.log\\('OK'\\)\")",
+      "Bash(node -e \"require\\('./db/repositories/kumoBreakoutCacheRepo'\\); require\\('./services/kumoBreakoutService'\\); console.log\\('All modules loaded OK'\\)\")",
+      "Bash(node -e \"require\\('./services/kumoBreakoutService'\\); require\\('./db/repositories/kumoBreakoutCacheRepo'\\); console.log\\('OK'\\)\")"
     ]
   }
 }

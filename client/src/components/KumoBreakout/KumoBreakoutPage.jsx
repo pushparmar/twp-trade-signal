@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import api from '../../api';
 import './KumoBreakoutPage.css';
 
 const TF_ORDER = ['15m', '1h', '4h', '1d'];
 const TF_LABELS = { '15m': '15 Min', '1h': '1 Hour', '4h': '4 Hour', '1d': 'Daily' };
 const TF_INTERVALS = { '15m': '15minute', '1h': '60minute', '4h': '4h', '1d': 'day' };
+const INTERVAL_TO_TF = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d' };
 
 function fmt(n, decimals = 2) {
   if (n == null || isNaN(n)) return '—';
@@ -17,6 +18,15 @@ function relativeTime(ts) {
   if (diffSec < 60) return `${diffSec}s ago`;
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
   return `${Math.floor(diffSec / 3600)}h ago`;
+}
+
+function countdown(targetTs) {
+  if (!targetTs) return '—';
+  const diffSec = Math.floor((targetTs - Date.now()) / 1000);
+  if (diffSec <= 0) return 'now';
+  if (diffSec < 60) return `${diffSec}s`;
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`;
+  return `${Math.floor(diffSec / 3600)}h ${Math.floor((diffSec % 3600) / 60)}m`;
 }
 
 function ScoreDots({ score, signal }) {
@@ -101,7 +111,7 @@ function BreakoutCard({ match }) {
   );
 }
 
-function TimeframeSection({ tfLabel, matches, filter, isLoading }) {
+function TimeframeSection({ tfLabel, matches, filter, isLoading, scanInfo }) {
   const filtered = matches.filter(m => {
     if (filter.signal !== 'all' && m.signal !== filter.signal) return false;
     if (filter.category !== 'all' && m.category !== filter.category) return false;
@@ -113,11 +123,19 @@ function TimeframeSection({ tfLabel, matches, filter, isLoading }) {
     <div className="kb-tf-section">
       <div className="kb-tf-header">
         <h3>{TF_LABELS[tfLabel]}</h3>
-        {isLoading ? (
-          <span className="kb-tf-loading">Scanning...</span>
-        ) : (
-          <span className="kb-tf-count">{filtered.length} signal{filtered.length !== 1 ? 's' : ''}</span>
-        )}
+        <div className="kb-tf-meta">
+          {scanInfo?.lastScanAt && (
+            <span className="kb-tf-scanned">Scanned {relativeTime(scanInfo.lastScanAt)}</span>
+          )}
+          {scanInfo?.nextScanAt && (
+            <span className="kb-tf-next">Next: {countdown(scanInfo.nextScanAt)}</span>
+          )}
+          {isLoading ? (
+            <span className="kb-tf-loading">Scanning...</span>
+          ) : (
+            <span className="kb-tf-count">{filtered.length} signal{filtered.length !== 1 ? 's' : ''}</span>
+          )}
+        </div>
       </div>
       <div className="kb-tf-grid">
         {isLoading ? (
@@ -132,6 +150,23 @@ function TimeframeSection({ tfLabel, matches, filter, isLoading }) {
   );
 }
 
+function SchedulerStatus({ status, onStart, onStop }) {
+  if (!status) return null;
+  return (
+    <div className={`kb-scheduler ${status.running ? 'kb-scheduler--running' : 'kb-scheduler--stopped'}`}>
+      <span className="kb-scheduler-dot" />
+      <span className="kb-scheduler-label">
+        {status.running ? 'Auto-scanning' : 'Scheduler stopped'}
+      </span>
+      {status.running ? (
+        <button className="kb-scheduler-btn kb-scheduler-btn--stop" onClick={onStop}>Stop</button>
+      ) : (
+        <button className="kb-scheduler-btn kb-scheduler-btn--start" onClick={onStart}>Start</button>
+      )}
+    </div>
+  );
+}
+
 export default function KumoBreakoutPage() {
   const [results, setResults] = useState({ '15m': [], '1h': [], '4h': [], '1d': [] });
   const [loading, setLoading] = useState({ '15m': false, '1h': false, '4h': false, '1d': false });
@@ -139,6 +174,77 @@ export default function KumoBreakoutPage() {
   const [lastScan, setLastScan] = useState(null);
   const [universe, setUniverse] = useState(null);
   const [filter, setFilter] = useState({ signal: 'all', category: 'all', minScore: 0 });
+  const [schedulerStatus, setSchedulerStatus] = useState(null);
+  const countdownRef = useRef(null);
+  const [, forceUpdate] = useState(0);
+
+  // Load cached results from DB on mount
+  useEffect(() => {
+    api.get('/kumo-breakout/results')
+      .then(res => {
+        const data = res.data;
+        const newResults = { '15m': [], '1h': [], '4h': [], '1d': [] };
+        let hasAny = false;
+        for (const [interval, cached] of Object.entries(data)) {
+          const tf = INTERVAL_TO_TF[interval];
+          if (tf && cached?.matches) {
+            newResults[tf] = cached.matches;
+            hasAny = true;
+          }
+        }
+        if (hasAny) {
+          setResults(newResults);
+          setLastScan(Date.now());
+        }
+      })
+      .catch(() => {});
+
+    api.get('/kumo-breakout/universe')
+      .then(res => setUniverse(res.data))
+      .catch(() => {});
+
+    api.get('/kumo-breakout/status')
+      .then(res => setSchedulerStatus(res.data))
+      .catch(() => {});
+  }, []);
+
+  // Countdown timer refresh (every 10s to update "Next: Xm" labels)
+  useEffect(() => {
+    countdownRef.current = setInterval(() => {
+      forceUpdate(n => n + 1);
+      // Refresh scheduler status
+      api.get('/kumo-breakout/status')
+        .then(res => setSchedulerStatus(res.data))
+        .catch(() => {});
+    }, 10_000);
+    return () => clearInterval(countdownRef.current);
+  }, []);
+
+  // Listen for SSE kumo_scan_complete events to auto-refresh results from DB
+  useEffect(() => {
+    const streamUrl = import.meta.env.VITE_API_URL
+      ? `${import.meta.env.VITE_API_URL}/api/stream`
+      : '/api/stream';
+    const es = new EventSource(streamUrl);
+
+    es.addEventListener('kumo_scan_complete', (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        const tf = INTERVAL_TO_TF[payload.interval];
+        if (tf) {
+          // Refetch that interval's results from the cached API
+          api.get(`/kumo-breakout/scan/${payload.interval}`)
+            .then(res => {
+              setResults(prev => ({ ...prev, [tf]: res.data.matches }));
+              setLastScan(Date.now());
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    });
+
+    return () => es.close();
+  }, []);
 
   const runScan = useCallback(async () => {
     setError(null);
@@ -166,15 +272,32 @@ export default function KumoBreakoutPage() {
     setLastScan(Date.now());
   }, []);
 
-  useEffect(() => {
-    api.get('/kumo-breakout/universe')
-      .then(res => setUniverse(res.data))
-      .catch(() => {});
+  const startScheduler = useCallback(async () => {
+    try {
+      const res = await api.post('/kumo-breakout/start');
+      setSchedulerStatus(res.data.status);
+    } catch {}
+  }, []);
+
+  const stopScheduler = useCallback(async () => {
+    try {
+      const res = await api.post('/kumo-breakout/stop');
+      setSchedulerStatus(res.data.status);
+    } catch {}
   }, []);
 
   const totalMatches = TF_ORDER.reduce((sum, tf) => sum + (results[tf]?.length || 0), 0);
   const anyLoading = Object.values(loading).some(Boolean);
   const hasResults = totalMatches > 0 || lastScan;
+
+  // Build scan info per interval from scheduler status
+  const scanInfoMap = {};
+  if (schedulerStatus?.intervals) {
+    for (const [interval, info] of Object.entries(schedulerStatus.intervals)) {
+      const tf = INTERVAL_TO_TF[interval];
+      if (tf) scanInfoMap[tf] = info;
+    }
+  }
 
   return (
     <div className="kb-page">
@@ -188,6 +311,11 @@ export default function KumoBreakoutPage() {
           )}
         </div>
         <div className="kb-toolbar-right">
+          <SchedulerStatus
+            status={schedulerStatus}
+            onStart={startScheduler}
+            onStop={stopScheduler}
+          />
           <button className="kb-scan-btn" onClick={runScan} disabled={anyLoading}>
             {anyLoading ? 'Scanning...' : 'Run Scan'}
           </button>
@@ -239,6 +367,7 @@ export default function KumoBreakoutPage() {
                 matches={results[tf] || []}
                 filter={filter}
                 isLoading={loading[tf]}
+                scanInfo={scanInfoMap[tf]}
               />
             ))}
           </div>
@@ -249,6 +378,9 @@ export default function KumoBreakoutPage() {
         <div className="kb-placeholder">
           <p>Click "Run Scan" to find Kumo Breakout signals across all timeframes.</p>
           <p className="kb-hint">Scans indices, MCX commodities, and all F&O stocks on 15m, 1h, 4h, and Daily charts.</p>
+          {schedulerStatus?.running && (
+            <p className="kb-hint">Auto-scanner is running — results will appear after the next scheduled scan.</p>
+          )}
         </div>
       )}
     </div>
