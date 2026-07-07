@@ -345,46 +345,19 @@ app.listen(PORT, async () => {
       console.warn('[LiveScanner] Could not seed from watchlist:', err.message);
     }
 
-    try {
-      indexSignalWatcher.start();
-    } catch (err) {
-      console.warn('[IndexSignalWatcher] Could not start:', err.message);
-    }
-
-    try {
-      macroWatcher.start();
-    } catch (err) {
-      console.warn('[MacroWatcher] Could not start:', err.message);
-    }
-
-    try {
-      patternAlertWatcher.start();
-    } catch (err) {
-      console.warn('[PatternAlert] Could not start:', err.message);
-    }
-
-    // Background scanner — auto-scans all ~200 NFO futures at every candle
-    // close (15m / 1h / 4h / 1d) and sends Telegram alerts for pattern matches.
-    // This runs independently of KiteTicker so it works even when no user
-    // watchlist stocks are explicitly subscribed.
-    try {
-      backgroundScanner.start();
-    } catch (err) {
-      console.warn('[BgScanner] Could not start:', err.message);
-    }
+    // Index trade scanner — runs kumo-breakout + tk-reversion on index options
     try {
       indexTrade.start();
     } catch (err) {
       console.warn('[IndexTrade] Could not start:', err.message);
     }
 
-    // Kumo Breakout scheduled scanner — runs every 15min and 1h,
-    // caches candles + results in MongoDB for instant page loads.
-    try {
-      kumoBreakoutService.start();
-    } catch (err) {
-      console.warn('[KumoBreakout] Could not start:', err.message);
-    }
+    // Other background scanners disabled — use UI or API to start manually.
+    // try { indexSignalWatcher.start(); } catch (err) { console.warn('[IndexSignalWatcher] Could not start:', err.message); }
+    // try { macroWatcher.start(); } catch (err) { console.warn('[MacroWatcher] Could not start:', err.message); }
+    // try { patternAlertWatcher.start(); } catch (err) { console.warn('[PatternAlert] Could not start:', err.message); }
+    // try { backgroundScanner.start(); } catch (err) { console.warn('[BgScanner] Could not start:', err.message); }
+    // try { kumoBreakoutService.start(); } catch (err) { console.warn('[KumoBreakout] Could not start:', err.message); }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }

@@ -245,7 +245,12 @@ async function _scanInterval(interval) {
 
         let result;
         try {
-          result = pattern.run(candles, { ...pattern.defaultOpts, interval });
+          result = pattern.run(candles, {
+            ...pattern.defaultOpts,
+            interval,
+            lookback: 2,
+            maxDistanceFromCloud: 0.05,
+          });
         } catch {
           return null;
         }
