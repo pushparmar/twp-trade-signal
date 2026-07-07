@@ -52,6 +52,20 @@ function parse(text) {
     return null;
   }
 
+  // Minimum R:R filter — reject signals with reward:risk below 1:2
+  if (sl !== null) {
+    const risk = entry - sl;
+    const reward = target - entry;
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < 2) {
+      console.log(
+        `[SignalParser] ⏭ Rejected (R:R < 1:2) — ${symbol} ` +
+        `entry=₹${entry} target=₹${target} sl=₹${sl} R:R=1:${rr.toFixed(1)}`
+      );
+      return null;
+    }
+  }
+
   return {
     symbol,
     action:  'BUY',
