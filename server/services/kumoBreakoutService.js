@@ -30,6 +30,8 @@ const { to4H, getFutureCloudColor } = require('./ichimoku');
 const { VIX_TOKEN, getFrontMonthFutures } = require('./macroAnalysis');
 const { broadcast }    = require('../sseHub');
 const { isNseOpen }    = require('../utils/marketHours');
+const telegramNotifier = require('./telegramNotifier');
+const mainStore        = require('../store');
 const kumoBreakoutCacheRepo = require('../db/repositories/kumoBreakoutCacheRepo');
 
 // ── Config ──────────────────────────────────────────────────────────────────
@@ -53,6 +55,62 @@ const _lastScanAt = new Map();
 const _nextScanAt = new Map();
 let _running = false;
 const _scanInProgress = new Map();
+const _telegramDedup = new Map(); // "token:interval" → IST date string
+
+function _istDateStr() {
+  return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+// ── Telegram notification for Kumo Breakout alerts ─────────────────────────
+
+async function _sendKumoTelegram(match) {
+  const chatId = mainStore.getTelegramChatId();
+  if (!chatId) return;
+
+  // Only bullish signals
+  if (match.signal !== 'bullish') return;
+
+  // R:R filter — minimum 1:2
+  if (match.close && match.sl && match.target) {
+    const risk = Math.abs(match.close - match.sl);
+    const reward = Math.abs(match.target - match.close);
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < 2) return;
+  } else {
+    return;
+  }
+
+  // Dedup — same token+interval once per day
+  const dedupKey = `${match.token}:${match.interval}`;
+  const today = _istDateStr();
+  if (_telegramDedup.get(dedupKey) === today) return;
+  _telegramDedup.set(dedupKey, today);
+
+  const rr = match.rrRatio ? match.rrRatio.toFixed(1) : '—';
+
+  const msg = [
+    `🟢 <b>KUMO BREAKOUT</b> — BULLISH`,
+    ``,
+    `<b>${match.name || match.symbol}</b> (${match.exchange})`,
+    ``,
+    `📊 <b>Trade Setup</b>`,
+    `Entry: ₹${match.close?.toFixed(2) ?? '—'}`,
+    `SL: ₹${match.sl?.toFixed(2) ?? '—'}`,
+    `Target: ₹${match.target?.toFixed(2) ?? '—'}`,
+    `R:R: 1:${rr}`,
+    ``,
+    match.score != null ? `Score: ${match.score}/5` : null,
+    match.futureCloudColor ? `Future Cloud: ${match.futureCloudColor}` : null,
+    `TF: ${match.tfLabel}`,
+  ].filter(Boolean).join('\n');
+
+  try {
+    await telegramNotifier.sendMessage(chatId, msg);
+    console.log(`[KumoService] 📱 Telegram sent: ${match.symbol} ${match.tfLabel}`);
+  } catch (err) {
+    console.warn(`[KumoService] Telegram failed:`, err.message);
+  }
+}
 
 // ── Universe ────────────────────────────────────────────────────────────────
 
@@ -233,6 +291,11 @@ async function _scanInterval(interval) {
 
     // Sort by score descending
     matches.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+    // Send Telegram for qualifying matches (bullish + R:R >= 2, fire-and-forget)
+    for (const match of matches) {
+      _sendKumoTelegram(match).catch(() => {});
+    }
 
     // Cache candles in DB (fire-and-forget, FIFO applied inside repo)
     if (candlesToCache.length > 0) {

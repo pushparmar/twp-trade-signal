@@ -78,22 +78,41 @@ async function _sendPatternTelegram(signalPayload) {
   if (!chatId) return;
 
   const config = tradeStore.getConfig();
-  if (!config.patternAlertTelegramEnabled) return; // Config flag to enable/disable
+  if (!config.patternAlertTelegramEnabled) return;
 
   const { token, patternId } = signalPayload;
+  const { signal, close, sl, target } = signalPayload;
+
+  // Only send BULLISH alerts — skip bearish (red dot) signals
+  if (signal !== 'bullish') {
+    return;
+  }
+
+  // R:R filter — skip signals with reward:risk below 1:2
+  if (close && sl && target) {
+    const risk = Math.abs(close - sl);
+    const reward = Math.abs(target - close);
+    const rr = risk > 0 ? reward / risk : 0;
+    if (rr < 2) {
+      console.log(
+        `[IdxScanner] ⏭ Telegram skipped (R:R < 1:2): ${signalPayload.symbol} ` +
+        `entry=₹${close.toFixed(2)} target=₹${target.toFixed(2)} sl=₹${sl.toFixed(2)} R:R=1:${rr.toFixed(1)}`
+      );
+      return;
+    }
+  }
 
   // Global telegram dedup — same token + pattern only sends ONE telegram per day
-  // (even if it fires on multiple timeframes like 5m, 15m, 1h)
   const telegramKey = `${token}:${patternId}`;
   const today = _istDateStr();
   if (_telegramDedup.get(telegramKey) === today) {
-    return; // Already sent telegram for this token+pattern today
+    return;
   }
   _telegramDedup.set(telegramKey, today);
 
   const {
-    symbol, index, strike, optionType, patternLabel, signal,
-    tfLabel, close, sl, target, score, rsi14, rrRatio,
+    symbol, index, strike, optionType, patternLabel,
+    tfLabel, score, rsi14, rrRatio,
     volumeRatio, volumeConfirmed
   } = signalPayload;
 
