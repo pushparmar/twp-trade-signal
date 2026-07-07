@@ -1,15 +1,12 @@
 /**
- * Fixed signal format (4 lines):
+ * Signal format from Telegram (4 lines):
  *   Line 1 — symbol        e.g. nifty24550ce
  *   Line 2 — entry price(s) e.g. 216  OR  216,-205  OR  216-205
- *   Line 3 — stop loss      e.g. 200
- *   Line 4 — target(s)      e.g. 289  OR  289-310  OR  289,310   (optional)
+ *   Line 3 — target(s)      e.g. 289  OR  289-310  OR  289,310
+ *   Line 4 — stop loss      e.g. 200
  *
- * NOTE: Only BUY signals are supported (upward direction).
- * SELL signals are filtered out by:
- *   1. Checking for "sell" or "short" keywords
- *   2. Validating target > entry (upward movement expected)
- *   3. Validating stop loss < entry (downward protection)
+ * NOTE: Only BUY signals are accepted (upward direction).
+ * Strict validation: target > entry > sl. Anything else is rejected.
  */
 
 function extractNums(str) {
@@ -29,30 +26,28 @@ function parse(text) {
 
   const symbol = lines[0].toUpperCase().replace(/\s+/g, '');
   const entries = extractNums(lines[1]);
-  const slNums  = extractNums(lines[2]);
-  const targets = lines[3] ? extractNums(lines[3]) : [];
+  const targets = extractNums(lines[2]);           // Line 3 = target(s)
+  const slNums  = lines[3] ? extractNums(lines[3]) : [];  // Line 4 = stop loss
 
-  if (!symbol || entries.length === 0 || slNums.length === 0) return null;
+  if (!symbol || entries.length === 0 || targets.length === 0) return null;
 
   const entry = entries[0];
-  const sl = slNums[0];
-  const target = targets[0] ?? null;
+  const target = targets[0];
+  const sl = slNums[0] ?? null;
 
-  // Validate BUY signal structure: target > entry and sl < entry
-  // This filters out downward/sell signals where target < entry
-  if (target !== null && target <= entry) {
+  // STRICT validation: only accept signals where target > entry > sl
+  if (target <= entry) {
     console.log(
-      `[SignalParser] ⏭ SELL signal rejected (target ≤ entry) — ` +
-      `${symbol} entry=₹${entry} target=₹${target}. Only upward signals allowed.`
+      `[SignalParser] ⏭ Rejected (target ≤ entry) — ${symbol} ` +
+      `entry=₹${entry} target=₹${target} sl=₹${sl}. Need target > entry > sl.`
     );
     return null;
   }
 
-  // Additional validation: stop loss should be below entry for BUY
-  if (sl >= entry) {
+  if (sl !== null && sl >= entry) {
     console.log(
-      `[SignalParser] ⏭ Invalid signal rejected (sl ≥ entry) — ` +
-      `${symbol} entry=₹${entry} sl=₹${sl}. Stop loss must be below entry for BUY.`
+      `[SignalParser] ⏭ Rejected (sl ≥ entry) — ${symbol} ` +
+      `entry=₹${entry} target=₹${target} sl=₹${sl}. Need target > entry > sl.`
     );
     return null;
   }
@@ -60,10 +55,10 @@ function parse(text) {
   return {
     symbol,
     action:  'BUY',
-    entries,               // all entry prices  [216] or [216, 205]
-    price:   entry,        // primary entry
+    entries,
+    price:   entry,
     sl,
-    targets,               // all targets  [289] or [289, 310]
+    targets,
     target,
   };
 }
