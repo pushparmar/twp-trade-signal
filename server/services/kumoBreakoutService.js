@@ -41,8 +41,10 @@ const TF_LABEL  = { '15minute': '15m', '60minute': '1h', '4h': '4h', 'day': '1d'
 const SCAN_BARS = { '15minute': 100, '60minute': 450, 'day': 150 };
 
 const SCHEDULE_MS = {
-  '15minute': 15 * 60 * 1000,
-  '60minute': 60 * 60 * 1000,
+  '15minute': 15 * 60 * 1000,       // every 15 minutes
+  '60minute': 60 * 60 * 1000,       // every 1 hour
+  '4h':       4 * 60 * 60 * 1000,   // every 4 hours
+  'day':      24 * 60 * 60 * 1000,  // every 24 hours
 };
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -361,6 +363,8 @@ async function start() {
 
   _scheduleInterval('15minute');
   _scheduleInterval('60minute');
+  _scheduleInterval('4h');
+  _scheduleInterval('day');
 
   // Run initial scan for all intervals in parallel (if market is open)
   if (isNseOpen()) {
