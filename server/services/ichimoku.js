@@ -2798,18 +2798,21 @@ function getFlatSpanBRejection(candles, opts = {}) {
     }
     if (lowestIdx < 0 || lowestIdx === n - 1) return null;
 
-    // Current high must be within proximity of flat SpanB
-    const distToSpanB = (flatLevel - high) / flatLevel;
-    if (distToSpanB < 0) return null; // high already above SpanB — penetrated too far
-    if (distToSpanB > proximity) return null; // too far from SpanB
+    // Current candle must TOUCH the cloud border (cloudBottom) from below.
+    // High must reach within proximity of cloudBottom (the near edge).
+    const nearEdge = cloudBottom;
+    const distToEdge = (nearEdge - high) / nearEdge;
+    if (distToEdge > proximity) return null; // too far — hasn't reached cloud border
+    // Price must stay outside cloud: close must remain below cloudBottom
+    if (close >= nearEdge) return null;
 
-    // Current open must be below SpanB
-    if (open >= flatLevel) return null;
+    // Current open must be below cloud
+    if (open >= nearEdge) return null;
 
-    // Previous noTouchBars candles must NOT have touched SpanB
+    // Previous noTouchBars candles must NOT have touched cloud border (first touch)
     for (let i = n - 1 - noTouchBars; i < n - 1; i++) {
       if (i < 0) continue;
-      if (results[i] && results[i].high >= flatLevel * (1 - flatThreshold)) return null;
+      if (results[i] && results[i].high >= nearEdge * (1 - flatThreshold)) return null;
     }
 
     signal = 'bearish';
@@ -2836,18 +2839,21 @@ function getFlatSpanBRejection(candles, opts = {}) {
     }
     if (highestIdx < 0 || highestIdx === n - 1) return null;
 
-    // Current low must be within proximity of flat SpanB
-    const distToSpanB = (low - flatLevel) / flatLevel;
-    if (distToSpanB < 0) return null; // low already below SpanB — penetrated too far
-    if (distToSpanB > proximity) return null; // too far from SpanB
+    // Current candle must TOUCH the cloud border (cloudTop) from above.
+    // Low must reach within proximity of cloudTop (the near edge).
+    const nearEdge = cloudTop;
+    const distToEdge = (low - nearEdge) / nearEdge;
+    if (distToEdge > proximity) return null; // too far — hasn't reached cloud border
+    // Price must stay outside cloud: close must remain above cloudTop
+    if (close <= nearEdge) return null;
 
-    // Current open must be above SpanB
-    if (open <= flatLevel) return null;
+    // Current open must be above cloud
+    if (open <= nearEdge) return null;
 
-    // Previous noTouchBars candles must NOT have touched SpanB
+    // Previous noTouchBars candles must NOT have touched cloud border (first touch)
     for (let i = n - 1 - noTouchBars; i < n - 1; i++) {
       if (i < 0) continue;
-      if (results[i] && results[i].low <= flatLevel * (1 + flatThreshold)) return null;
+      if (results[i] && results[i].low <= nearEdge * (1 + flatThreshold)) return null;
     }
 
     signal = 'bullish';
@@ -2871,11 +2877,11 @@ function getFlatSpanBRejection(candles, opts = {}) {
   // +1: Volume confirmation (current bar higher than average)
   const volCtx = getVolumeContext(candles);
   if (volCtx && volCtx.volumeRatio >= 1.2) score++;
-  // +1: Very close to SpanB (within 2%)
-  const dist = signal === 'bearish'
-    ? (flatLevel - high) / flatLevel
-    : (low - flatLevel) / flatLevel;
-  if (dist <= 0.02) score++;
+  // +1: Actually touched the cloud border (within 1%)
+  const touchDist = signal === 'bearish'
+    ? (cloudBottom - high) / cloudBottom
+    : (low - cloudTop) / cloudTop;
+  if (touchDist <= 0.01) score++;
 
   return {
     signal,
