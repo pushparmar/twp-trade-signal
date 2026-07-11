@@ -345,27 +345,41 @@ app.listen(PORT, async () => {
       console.warn('[LiveScanner] Could not seed from watchlist:', err.message);
     }
 
-    // Index trade scanner — works as before (kumo-breakout + tk-reversion on index options)
+    try {
+      indexSignalWatcher.start();
+    } catch (err) {
+      console.warn('[IndexSignalWatcher] Could not start:', err.message);
+    }
+
+    try {
+      macroWatcher.start();
+    } catch (err) {
+      console.warn('[MacroWatcher] Could not start:', err.message);
+    }
+
+    try {
+      patternAlertWatcher.start();
+    } catch (err) {
+      console.warn('[PatternAlert] Could not start:', err.message);
+    }
+
+    try {
+      backgroundScanner.start();
+    } catch (err) {
+      console.warn('[BgScanner] Could not start:', err.message);
+    }
+
     try {
       indexTrade.start();
     } catch (err) {
       console.warn('[IndexTrade] Could not start:', err.message);
     }
 
-    // Kumo Breakout scheduled scanner — replaces backgroundScanner for auto-scan.
-    // Scans indices, MCX, F&O stocks every 15m, 1h, 4h, daily.
-    // Sends Telegram alerts for fresh bullish breakouts with R:R >= 1:2.
     try {
       kumoBreakoutService.start();
     } catch (err) {
       console.warn('[KumoBreakout] Could not start:', err.message);
     }
-
-    // Other background scanners disabled.
-    // try { backgroundScanner.start(); } catch (err) { console.warn('[BgScanner] Could not start:', err.message); }
-    // try { indexSignalWatcher.start(); } catch (err) { console.warn('[IndexSignalWatcher] Could not start:', err.message); }
-    // try { macroWatcher.start(); } catch (err) { console.warn('[MacroWatcher] Could not start:', err.message); }
-    // try { patternAlertWatcher.start(); } catch (err) { console.warn('[PatternAlert] Could not start:', err.message); }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }

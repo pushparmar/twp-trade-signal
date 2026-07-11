@@ -21,7 +21,7 @@ const {
   getTKCross, getKijunCross, getChikouCross, getPerfectOrder, getKumoBounce,
   getKijunLevel, getCloudSupport, getVolumeContext, getATR, getRSI,
   getCloudExit, getKijunRetest, getTKReversion, getSenkouCross,
-  getKumoInsideConsolidation,
+  getKumoInsideConsolidation, getFlatSpanBRejection,
 } = require('./ichimoku');
 
 // Minimum SL distance as a multiple of ATR14.  Anything tighter gets widened
@@ -398,6 +398,73 @@ const PATTERNS = {
         atr: atr != null ? Math.round(atr * 100) / 100 : null,
         targetSource,
         trailingAnchor,
+        ..._volumeFields(candles),
+        ..._rsiFields(candles),
+      };
+    },
+  },
+
+  'flat-spanb-rejection': {
+    id:          'flat-spanb-rejection',
+    label:       'Flat SpanB Rejection',
+    description: 'First touch of a flat Senkou Span B (strong S/R magnet) from outside the cloud. Bearish: price below cloud rallies to flat SpanB resistance. Bullish: price above cloud pulls back to flat SpanB support.',
+    maxScore:    5,
+    defaultOpts: {
+      flatBars:       8,     // SpanB must be flat for this many bars
+      flatThreshold:  0.003, // 0.3% max variation to count as flat
+      belowCloudBars: 5,     // price must be outside cloud for this many bars
+      lowestLookback: 10,    // lookback for lowest-low / highest-high
+      noTouchBars:    5,     // previous N bars must not have touched SpanB
+      proximity:      0.05,  // within 5% of SpanB to trigger signal
+    },
+
+    run(candles, opts = {}) {
+      const result = getFlatSpanBRejection(candles, { ...this.defaultOpts, ...opts });
+      if (!result || !result.signal) return { matched: false };
+
+      const { signal, close, spanB, cloudTop, cloudBottom } = result;
+      const atr = getATR(candles, 14);
+
+      // SL = inside the cloud (past SpanB). If price closes inside cloud, setup invalid.
+      let sl = signal === 'bearish'
+        ? spanB + (spanB * 0.01)   // just above SpanB for bearish (resistance broken = invalid)
+        : spanB - (spanB * 0.01);  // just below SpanB for bullish (support broken = invalid)
+
+      // Apply ATR buffer if available
+      if (atr != null) {
+        const atrBuf = SL_ANCHOR_BUFFER_ATR * atr;
+        sl = signal === 'bearish' ? sl + atrBuf : sl - atrBuf;
+      }
+
+      // Validate SL on correct side
+      if (signal === 'bearish' && sl <= close) return { matched: false };
+      if (signal === 'bullish' && sl >= close) return { matched: false };
+
+      // Target: natural swing level or 2× ATR
+      let target = _naturalTarget(candles, signal, close, opts.interval);
+      let targetSource = 'swing';
+
+      if (target == null && atr != null) {
+        target = signal === 'bearish'
+          ? close - 2.0 * atr
+          : close + 2.0 * atr;
+        targetSource = 'atr';
+      }
+
+      if (target == null) return { matched: false };
+      if (signal === 'bearish' && target >= close) return { matched: false };
+      if (signal === 'bullish' && target <= close) return { matched: false };
+
+      sl = Math.round(sl * 100) / 100;
+      const targetRounded = Math.round(target * 100) / 100;
+
+      return {
+        matched: true,
+        ...result,
+        sl,
+        target: targetRounded,
+        atr: atr != null ? Math.round(atr * 100) / 100 : null,
+        targetSource,
         ..._volumeFields(candles),
         ..._rsiFields(candles),
       };

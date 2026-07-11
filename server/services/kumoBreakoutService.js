@@ -69,9 +69,6 @@ async function _sendKumoTelegram(match) {
   const chatId = mainStore.getTelegramChatId();
   if (!chatId) return;
 
-  // Only bullish signals
-  if (match.signal !== 'bullish') return;
-
   // R:R filter — minimum 1:2
   if (match.close && match.sl && match.target) {
     const risk = Math.abs(match.close - match.sl);
@@ -82,16 +79,19 @@ async function _sendKumoTelegram(match) {
     return;
   }
 
-  // Dedup — same token+interval once per day
-  const dedupKey = `${match.token}:${match.interval}`;
+  // Dedup — same token+interval+pattern once per day
+  const dedupKey = `${match.token}:${match.interval}:${match.patternId || 'kumo'}`;
   const today = _istDateStr();
   if (_telegramDedup.get(dedupKey) === today) return;
   _telegramDedup.set(dedupKey, today);
 
   const rr = match.rrRatio ? match.rrRatio.toFixed(1) : '—';
+  const emoji = match.signal === 'bullish' ? '🟢' : '🔴';
+  const signalLabel = match.signal === 'bullish' ? 'BULLISH' : 'BEARISH';
+  const patternName = match.patternLabel || 'Kumo Breakout';
 
   const msg = [
-    `🟢 <b>KUMO BREAKOUT</b> — BULLISH`,
+    `${emoji} <b>${patternName}</b> — ${signalLabel}`,
     ``,
     `<b>${match.name || match.symbol}</b> (${match.exchange})`,
     ``,
@@ -210,14 +210,23 @@ async function _scanInterval(interval) {
   const tfLabel = TF_LABEL[interval];
 
   try {
-    const pattern = patternRegistry.get('kumo-breakout');
-    if (!pattern) {
-      console.warn('[KumoService] kumo-breakout pattern not found in registry');
+    const SCAN_PATTERNS = [
+      { id: 'kumo-breakout', opts: { lookback: 2, maxDistanceFromCloud: 0.05 } },
+      { id: 'flat-spanb-rejection', opts: {} },
+    ];
+
+    const patterns = SCAN_PATTERNS.map(p => ({
+      ...p,
+      pattern: patternRegistry.get(p.id),
+    })).filter(p => p.pattern);
+
+    if (patterns.length === 0) {
+      console.warn('[KumoService] No patterns found in registry');
       return null;
     }
 
     const universe = _buildUniverse();
-    console.log(`[KumoService] Scanning ${tfLabel} — ${universe.length} instruments`);
+    console.log(`[KumoService] Scanning ${tfLabel} — ${universe.length} instruments × ${patterns.length} patterns`);
 
     // Load DB-cached candles for this interval to reduce Kite API calls
     const fetchInterval = interval === '4h' ? '60minute' : interval;
@@ -245,55 +254,64 @@ async function _scanInterval(interval) {
           candlesToCache.push({ token: inst.instrumentToken, interval, candles });
         }
 
-        let result;
-        try {
-          result = pattern.run(candles, {
-            ...pattern.defaultOpts,
+        // Run all patterns on this instrument's candles
+        const instMatches = [];
+        for (const { id: patternId, pattern, opts: patOpts } of patterns) {
+          let result;
+          try {
+            result = pattern.run(candles, {
+              ...pattern.defaultOpts,
+              interval,
+              ...patOpts,
+            });
+          } catch {
+            continue;
+          }
+
+          if (!result?.matched || !result.signal) continue;
+
+          let futureCloudColor = null;
+          try {
+            futureCloudColor = getFutureCloudColor(candles);
+          } catch {}
+
+          instMatches.push({
+            token:        inst.instrumentToken,
+            symbol:       inst.tradingsymbol,
+            name:         inst.name || inst.tradingsymbol,
+            exchange:     inst.exchange,
+            category:     inst.category || 'stock',
             interval,
-            lookback: 2,
-            maxDistanceFromCloud: 0.05,
+            tfLabel,
+            patternId,
+            patternLabel: pattern.label,
+            signal:       result.signal,
+            score:        result.score ?? null,
+            close:        result.close,
+            sl:           result.sl,
+            target:       result.target,
+            rrRatio:      result.sl && result.target && result.close
+                            ? Math.abs(result.target - result.close) / Math.abs(result.close - result.sl)
+                            : null,
+            cloudTop:     result.cloudTop,
+            cloudBottom:  result.cloudBottom,
+            cloudWidth:   result.cloudWidth,
+            tenkan:       result.tenkan,
+            kijun:        result.kijun,
+            chikou:       result.chikou,
+            atr:          result.atr,
+            futureCloudColor,
+            ts:           Date.now(),
           });
-        } catch {
-          return null;
         }
 
-        if (!result?.matched || !result.signal) return null;
-
-        let futureCloudColor = null;
-        try {
-          futureCloudColor = getFutureCloudColor(candles);
-        } catch {}
-
-        return {
-          token:        inst.instrumentToken,
-          symbol:       inst.tradingsymbol,
-          name:         inst.name || inst.tradingsymbol,
-          exchange:     inst.exchange,
-          category:     inst.category || 'stock',
-          interval,
-          tfLabel,
-          signal:       result.signal,
-          score:        result.score ?? null,
-          close:        result.close,
-          sl:           result.sl,
-          target:       result.target,
-          rrRatio:      result.sl && result.target && result.close
-                          ? Math.abs(result.target - result.close) / Math.abs(result.close - result.sl)
-                          : null,
-          cloudTop:     result.cloudTop,
-          cloudBottom:  result.cloudBottom,
-          cloudWidth:   result.cloudWidth,
-          tenkan:       result.tenkan,
-          kijun:        result.kijun,
-          chikou:       result.chikou,
-          atr:          result.atr,
-          futureCloudColor,
-          ts:           Date.now(),
-        };
+        return instMatches.length > 0 ? instMatches : null;
       });
 
       const batchResults = await Promise.all(batchPromises);
-      matches.push(...batchResults.filter(Boolean));
+      for (const res of batchResults) {
+        if (res) matches.push(...(Array.isArray(res) ? res : [res]));
+      }
     }
 
     // Sort by score descending

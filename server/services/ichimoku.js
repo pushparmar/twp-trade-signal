@@ -2698,6 +2698,201 @@ function getSenkouCross(candles, { lookback = 5, minCloudWidthPct = 0.003 } = {}
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Flat SpanB Rejection — First Touch of Flat Cloud Edge from Outside
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Detects price approaching a flat Senkou Span B (strong S/R) for the first
+// time after trending away from the cloud. Works both directions:
+//
+//   BEARISH (sell setup — retest from below):
+//     - Future cloud is red (bearish bias ahead)
+//     - SpanB flat for N candles (strong resistance)
+//     - Price BELOW cloud for last M candles (established downtrend)
+//     - Made lowest low in last K candles (fresh push down = snapback expected)
+//     - Current candle's high reaches within proximity of SpanB (first touch)
+//     - Current open is below SpanB (approaching from below)
+//     - Previous P candles never touched SpanB (confirming first touch)
+//
+//   BULLISH (buy setup — retest from above):
+//     - Future cloud is green (bullish bias ahead)
+//     - SpanB flat for N candles (strong support)
+//     - Price ABOVE cloud for last M candles (established uptrend)
+//     - Made highest high in last K candles (fresh push up = pullback expected)
+//     - Current candle's low reaches within proximity of SpanB (first touch)
+//     - Current open is above SpanB (approaching from above)
+//     - Previous P candles never touched SpanB (confirming first touch)
+
+function getFlatSpanBRejection(candles, opts = {}) {
+  const {
+    flatBars       = 8,     // SpanB must be flat for this many bars
+    flatThreshold  = 0.003, // max % variation to consider "flat" (0.3%)
+    belowCloudBars = 5,     // price must be outside cloud for this many bars
+    lowestLookback = 10,    // lookback for lowest-low / highest-high
+    noTouchBars    = 5,     // previous N bars must not have touched SpanB
+    proximity      = 0.05,  // within 5% of SpanB to trigger
+  } = opts;
+
+  if (!candles || candles.length < 78) return null;
+
+  const results = calculate(candles);
+  const n = results.length;
+  const last = results[n - 1];
+  if (!last || last.senkouB == null || last.senkouA == null) return null;
+
+  const { close, high, low, open } = last;
+  const spanB = last.senkouB;
+  const spanA = last.senkouA;
+  const cloudTop = last.cloudTop;
+  const cloudBottom = last.cloudBottom;
+  const tenkan = last.tenkan;
+  const kijun = last.kijun;
+
+  if (cloudTop == null || cloudBottom == null) return null;
+
+  // ── Check SpanB is flat for flatBars candles ──────────────────────────────
+  const spanBValues = [];
+  for (let i = n - flatBars; i < n; i++) {
+    if (i < 0 || !results[i] || results[i].senkouB == null) return null;
+    spanBValues.push(results[i].senkouB);
+  }
+  const sbMax = Math.max(...spanBValues);
+  const sbMin = Math.min(...spanBValues);
+  const sbAvg = spanBValues.reduce((a, b) => a + b, 0) / spanBValues.length;
+  if (sbAvg <= 0) return null;
+  if ((sbMax - sbMin) / sbAvg > flatThreshold) return null;
+
+  // The flat SpanB level
+  const flatLevel = sbAvg;
+
+  // ── Determine direction: is SpanB the cloud top or cloud bottom? ──────────
+  // If SpanB > SpanA → SpanB is cloud top (resistance from below = bearish)
+  // If SpanB < SpanA → SpanB is cloud bottom (support from above = bullish)
+  const spanBisTop = spanB >= spanA;
+
+  // ── Future cloud color ────────────────────────────────────────────────────
+  const futureCloud = getFutureCloudColor(candles);
+
+  let signal = null;
+
+  if (spanBisTop) {
+    // SpanB is cloud TOP → potential BEARISH rejection (approaching resistance from below)
+    // Future cloud should be bearish (red)
+    if (futureCloud !== 'bearish') return null;
+
+    // Price must be BELOW cloud for last belowCloudBars
+    for (let i = n - belowCloudBars; i < n; i++) {
+      if (i < 0) return null;
+      if (!results[i] || !results[i].belowCloud) return null;
+    }
+
+    // Must have made lowest low in last lowestLookback candles
+    let lowestLow = Infinity;
+    let lowestIdx = -1;
+    for (let i = n - lowestLookback; i < n; i++) {
+      if (i < 0) continue;
+      if (results[i] && results[i].low < lowestLow) {
+        lowestLow = results[i].low;
+        lowestIdx = i;
+      }
+    }
+    if (lowestIdx < 0 || lowestIdx === n - 1) return null;
+
+    // Current high must be within proximity of flat SpanB
+    const distToSpanB = (flatLevel - high) / flatLevel;
+    if (distToSpanB < 0) return null; // high already above SpanB — penetrated too far
+    if (distToSpanB > proximity) return null; // too far from SpanB
+
+    // Current open must be below SpanB
+    if (open >= flatLevel) return null;
+
+    // Previous noTouchBars candles must NOT have touched SpanB
+    for (let i = n - 1 - noTouchBars; i < n - 1; i++) {
+      if (i < 0) continue;
+      if (results[i] && results[i].high >= flatLevel * (1 - flatThreshold)) return null;
+    }
+
+    signal = 'bearish';
+  } else {
+    // SpanB is cloud BOTTOM → potential BULLISH rejection (approaching support from above)
+    // Future cloud should be bullish (green)
+    if (futureCloud !== 'bullish') return null;
+
+    // Price must be ABOVE cloud for last belowCloudBars
+    for (let i = n - belowCloudBars; i < n; i++) {
+      if (i < 0) return null;
+      if (!results[i] || !results[i].aboveCloud) return null;
+    }
+
+    // Must have made highest high in last lowestLookback candles
+    let highestHigh = -Infinity;
+    let highestIdx = -1;
+    for (let i = n - lowestLookback; i < n; i++) {
+      if (i < 0) continue;
+      if (results[i] && results[i].high > highestHigh) {
+        highestHigh = results[i].high;
+        highestIdx = i;
+      }
+    }
+    if (highestIdx < 0 || highestIdx === n - 1) return null;
+
+    // Current low must be within proximity of flat SpanB
+    const distToSpanB = (low - flatLevel) / flatLevel;
+    if (distToSpanB < 0) return null; // low already below SpanB — penetrated too far
+    if (distToSpanB > proximity) return null; // too far from SpanB
+
+    // Current open must be above SpanB
+    if (open <= flatLevel) return null;
+
+    // Previous noTouchBars candles must NOT have touched SpanB
+    for (let i = n - 1 - noTouchBars; i < n - 1; i++) {
+      if (i < 0) continue;
+      if (results[i] && results[i].low <= flatLevel * (1 + flatThreshold)) return null;
+    }
+
+    signal = 'bullish';
+  }
+
+  // ── Score (0–5) ───────────────────────────────────────────────────────────
+  let score = 0;
+  // +1: Future cloud confirms direction
+  score++;
+  // +1: SpanB very flat (variation < 0.1%)
+  if ((sbMax - sbMin) / sbAvg < 0.001) score++;
+  // +1: Price was outside cloud for extra time (>= belowCloudBars + 3)
+  let extraOutside = 0;
+  for (let i = n - belowCloudBars - 5; i < n - belowCloudBars; i++) {
+    if (i >= 0 && results[i]) {
+      if (signal === 'bearish' && results[i].belowCloud) extraOutside++;
+      if (signal === 'bullish' && results[i].aboveCloud) extraOutside++;
+    }
+  }
+  if (extraOutside >= 3) score++;
+  // +1: Volume confirmation (current bar higher than average)
+  const volCtx = getVolumeContext(candles);
+  if (volCtx && volCtx.volumeRatio >= 1.2) score++;
+  // +1: Very close to SpanB (within 2%)
+  const dist = signal === 'bearish'
+    ? (flatLevel - high) / flatLevel
+    : (low - flatLevel) / flatLevel;
+  if (dist <= 0.02) score++;
+
+  return {
+    signal,
+    close,
+    high,
+    low,
+    open,
+    tenkan,
+    kijun,
+    spanB: round(flatLevel),
+    cloudTop,
+    cloudBottom,
+    futureCloud,
+    score: Math.min(5, score),
+  };
+}
+
 module.exports = {
   calculate,
   snapshot,
@@ -2725,4 +2920,5 @@ module.exports = {
   getKijunRetest,
   getTKReversion,
   getSenkouCross,
+  getFlatSpanBRejection,
 };

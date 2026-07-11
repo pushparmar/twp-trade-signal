@@ -103,7 +103,10 @@
       "Bash(node -e \"require\\('./db/repositories/kumoBreakoutCacheRepo'\\)\")",
       "Bash(node -e \"const fs = require\\('fs'\\); const code = fs.readFileSync\\('./client/src/components/KumoBreakout/KumoBreakoutPage.jsx', 'utf8'\\); console.log\\('Lines:', code.split\\('\\\\n'\\).length\\); console.log\\('OK'\\)\")",
       "Bash(node -e \"require\\('./db/repositories/kumoBreakoutCacheRepo'\\); require\\('./services/kumoBreakoutService'\\); console.log\\('All modules loaded OK'\\)\")",
-      "Bash(node -e \"require\\('./services/kumoBreakoutService'\\); require\\('./db/repositories/kumoBreakoutCacheRepo'\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"require\\('./services/kumoBreakoutService'\\); require\\('./db/repositories/kumoBreakoutCacheRepo'\\); console.log\\('OK'\\)\")",
+      "Bash(node -c server/services/ichimoku.js)",
+      "Bash(node -c server/services/kumoBreakoutService.js)",
+      "Bash(node -e \"const pr = require\\('./server/services/patternRegistry'\\); const p = pr.get\\('flat-spanb-rejection'\\); console.log\\('Pattern loaded:', p.id, p.label\\); console.log\\('Description:', p.description\\);\")"
     ]
   }
 }
