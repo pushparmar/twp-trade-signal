@@ -173,7 +173,7 @@ export default function KumoBreakoutPage() {
   const [error, setError] = useState(null);
   const [lastScan, setLastScan] = useState(null);
   const [universe, setUniverse] = useState(null);
-  const [filter, setFilter] = useState({ signal: 'all', category: 'all', minScore: 0 });
+  const [filter, setFilter] = useState({ signal: 'all', category: 'all', minScore: 0, timeframes: ['15m', '1h', '1d'] });
   const [schedulerStatus, setSchedulerStatus] = useState(null);
   const countdownRef = useRef(null);
   const [, forceUpdate] = useState(0);
@@ -353,6 +353,28 @@ export default function KumoBreakoutPage() {
                 <option value={5}>5 only</option>
               </select>
             </div>
+            <div className="kb-filter-group kb-tf-filter">
+              <label>Timeframes</label>
+              <div className="kb-tf-checkboxes">
+                {TF_ORDER.map(tf => (
+                  <label key={tf} className="kb-tf-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={filter.timeframes.includes(tf)}
+                      onChange={e => {
+                        setFilter(f => ({
+                          ...f,
+                          timeframes: e.target.checked
+                            ? [...f.timeframes, tf]
+                            : f.timeframes.filter(t => t !== tf)
+                        }));
+                      }}
+                    />
+                    {TF_LABELS[tf]}
+                  </label>
+                ))}
+              </div>
+            </div>
             <div className="kb-stats">
               <span>{totalMatches} total breakouts</span>
               {lastScan && <span className="kb-last-scan">Last scan: {relativeTime(lastScan)}</span>}
@@ -360,7 +382,7 @@ export default function KumoBreakoutPage() {
           </div>
 
           <div className="kb-results">
-            {TF_ORDER.map(tf => (
+            {TF_ORDER.filter(tf => filter.timeframes.includes(tf)).map(tf => (
               <TimeframeSection
                 key={tf}
                 tfLabel={tf}

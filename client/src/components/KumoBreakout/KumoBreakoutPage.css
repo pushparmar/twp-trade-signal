@@ -96,6 +96,34 @@
   cursor: pointer;
 }
 
+.kb-tf-filter {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.kb-tf-checkboxes {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.kb-tf-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-primary, #f0f0f0);
+  cursor: pointer;
+}
+
+.kb-tf-checkbox input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent-primary, #3b82f6);
+}
+
 .kb-stats {
   margin-left: auto;
   display: flex;
