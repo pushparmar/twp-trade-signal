@@ -1,5 +1,5 @@
 {
-  "builtAt": 1782230626553,
+  "builtAt": 1785333430081,
   "stocks": [
     {
       "name": "360ONE",
@@ -76,7 +76,7 @@
       "tradingsymbol": "AMBUJACEM",
       "instrumentToken": 325121,
       "exchange": "NSE",
-      "lotSize": 1050
+      "lotSize": 1200
     },
     {
       "name": "ANGELONE",
@@ -153,14 +153,14 @@
       "tradingsymbol": "BAJAJFINSV",
       "instrumentToken": 4268801,
       "exchange": "NSE",
-      "lotSize": 250
+      "lotSize": 300
     },
     {
       "name": "BAJAJHLDNG",
       "tradingsymbol": "BAJAJHLDNG",
       "instrumentToken": 78081,
       "exchange": "NSE",
-      "lotSize": 50
+      "lotSize": 75
     },
     {
       "name": "BAJFINANCE",
@@ -195,7 +195,7 @@
       "tradingsymbol": "BDL",
       "instrumentToken": 548865,
       "exchange": "NSE",
-      "lotSize": 350
+      "lotSize": 425
     },
     {
       "name": "BEL",
@@ -265,14 +265,14 @@
       "tradingsymbol": "BSE",
       "instrumentToken": 5013761,
       "exchange": "NSE",
-      "lotSize": 375
+      "lotSize": 200
     },
     {
       "name": "CAMS",
       "tradingsymbol": "CAMS",
       "instrumentToken": 87553,
       "exchange": "NSE",
-      "lotSize": 750
+      "lotSize": 825
     },
     {
       "name": "CANBK",
@@ -307,7 +307,7 @@
       "tradingsymbol": "CIPLA",
       "instrumentToken": 177665,
       "exchange": "NSE",
-      "lotSize": 375
+      "lotSize": 425
     },
     {
       "name": "COALINDIA",
@@ -328,14 +328,14 @@
       "tradingsymbol": "COFORGE",
       "instrumentToken": 2955009,
       "exchange": "NSE",
-      "lotSize": 375
+      "lotSize": 475
     },
     {
       "name": "COLPAL",
       "tradingsymbol": "COLPAL",
       "instrumentToken": 3876097,
       "exchange": "NSE",
-      "lotSize": 225
+      "lotSize": 275
     },
     {
       "name": "CONCOR",
@@ -349,7 +349,7 @@
       "tradingsymbol": "CROMPTON",
       "instrumentToken": 4376065,
       "exchange": "NSE",
-      "lotSize": 1800
+      "lotSize": 2150
     },
     {
       "name": "CUMMINSIND",
@@ -398,7 +398,7 @@
       "tradingsymbol": "DLF",
       "instrumentToken": 3771393,
       "exchange": "NSE",
-      "lotSize": 825
+      "lotSize": 950
     },
     {
       "name": "DMART",
@@ -429,13 +429,6 @@
       "lotSize": 2425
     },
     {
-      "name": "EXIDEIND",
-      "tradingsymbol": "EXIDEIND",
-      "instrumentToken": 173057,
-      "exchange": "NSE",
-      "lotSize": 1800
-    },
-    {
       "name": "FEDERALBNK",
       "tradingsymbol": "FEDERALBNK",
       "instrumentToken": 261889,
@@ -461,7 +454,7 @@
       "tradingsymbol": "GAIL",
       "instrumentToken": 1207553,
       "exchange": "NSE",
-      "lotSize": 3150
+      "lotSize": 3550
     },
     {
       "name": "GLENMARK",
@@ -496,7 +489,7 @@
       "tradingsymbol": "GODREJPROP",
       "instrumentToken": 4576001,
       "exchange": "NSE",
-      "lotSize": 275
+      "lotSize": 325
     },
     {
       "name": "GRASIM",
@@ -531,7 +524,7 @@
       "tradingsymbol": "HCLTECH",
       "instrumentToken": 1850625,
       "exchange": "NSE",
-      "lotSize": 350
+      "lotSize": 400
     },
     {
       "name": "HDFCAMC",
@@ -545,7 +538,7 @@
       "tradingsymbol": "HDFCBANK",
       "instrumentToken": 341249,
       "exchange": "NSE",
-      "lotSize": 550
+      "lotSize": 650
     },
     {
       "name": "HDFCLIFE",
@@ -636,7 +629,7 @@
       "tradingsymbol": "IEX",
       "instrumentToken": 56321,
       "exchange": "NSE",
-      "lotSize": 3750
+      "lotSize": 4350
     },
     {
       "name": "INDHOTEL",
@@ -685,7 +678,7 @@
       "tradingsymbol": "INOXWIND",
       "instrumentToken": 2010113,
       "exchange": "NSE",
-      "lotSize": 3575
+      "lotSize": 6400
     },
     {
       "name": "IOC",
@@ -699,21 +692,21 @@
       "tradingsymbol": "IREDA",
       "instrumentToken": 5186817,
       "exchange": "NSE",
-      "lotSize": 3450
+      "lotSize": 4525
     },
     {
       "name": "IRFC",
       "tradingsymbol": "IRFC",
       "instrumentToken": 519425,
       "exchange": "NSE",
-      "lotSize": 4250
+      "lotSize": 5425
     },
     {
       "name": "ITC",
       "tradingsymbol": "ITC",
       "instrumentToken": 424961,
       "exchange": "NSE",
-      "lotSize": 1600
+      "lotSize": 1725
     },
     {
       "name": "JINDALSTEL",
@@ -734,7 +727,7 @@
       "tradingsymbol": "JSWENERGY",
       "instrumentToken": 4574465,
       "exchange": "NSE",
-      "lotSize": 1000
+      "lotSize": 1075
     },
     {
       "name": "JSWSTEEL",
@@ -755,14 +748,14 @@
       "tradingsymbol": "KALYANKJIL",
       "instrumentToken": 756481,
       "exchange": "NSE",
-      "lotSize": 1175
+      "lotSize": 1350
     },
     {
       "name": "KAYNES",
       "tradingsymbol": "KAYNES",
       "instrumentToken": 3095553,
       "exchange": "NSE",
-      "lotSize": 100
+      "lotSize": 150
     },
     {
       "name": "KEI",
@@ -776,7 +769,7 @@
       "tradingsymbol": "KFINTECH",
       "instrumentToken": 3419905,
       "exchange": "NSE",
-      "lotSize": 500
+      "lotSize": 575
     },
     {
       "name": "KOTAKBANK",
@@ -790,7 +783,7 @@
       "tradingsymbol": "KPITTECH",
       "instrumentToken": 2478849,
       "exchange": "NSE",
-      "lotSize": 425
+      "lotSize": 775
     },
     {
       "name": "LAURUSLABS",
@@ -818,7 +811,7 @@
       "tradingsymbol": "LODHA",
       "instrumentToken": 824321,
       "exchange": "NSE",
-      "lotSize": 450
+      "lotSize": 625
     },
     {
       "name": "LT",
@@ -867,7 +860,7 @@
       "tradingsymbol": "MANKIND",
       "instrumentToken": 3937281,
       "exchange": "NSE",
-      "lotSize": 225
+      "lotSize": 250
     },
     {
       "name": "MARICO",
@@ -895,14 +888,14 @@
       "tradingsymbol": "MAZDOCK",
       "instrumentToken": 130305,
       "exchange": "NSE",
-      "lotSize": 200
+      "lotSize": 225
     },
     {
       "name": "MCX",
       "tradingsymbol": "MCX",
       "instrumentToken": 7982337,
       "exchange": "NSE",
-      "lotSize": 625
+      "lotSize": 225
     },
     {
       "name": "MFSL",
@@ -958,7 +951,7 @@
       "tradingsymbol": "NAUKRI",
       "instrumentToken": 3520257,
       "exchange": "NSE",
-      "lotSize": 375
+      "lotSize": 550
     },
     {
       "name": "NBCC",
@@ -979,7 +972,7 @@
       "tradingsymbol": "NHPC",
       "instrumentToken": 4454401,
       "exchange": "NSE",
-      "lotSize": 6400
+      "lotSize": 6950
     },
     {
       "name": "NMDC",
@@ -994,13 +987,6 @@
       "instrumentToken": 2977281,
       "exchange": "NSE",
       "lotSize": 1500
-    },
-    {
-      "name": "NUVAMA",
-      "tradingsymbol": "NUVAMA",
-      "instrumentToken": 4792577,
-      "exchange": "NSE",
-      "lotSize": 500
     },
     {
       "name": "NYKAA",
@@ -1021,7 +1007,7 @@
       "tradingsymbol": "OFSS",
       "instrumentToken": 2748929,
       "exchange": "NSE",
-      "lotSize": 75
+      "lotSize": 100
     },
     {
       "name": "OIL",
@@ -1042,14 +1028,14 @@
       "tradingsymbol": "PAGEIND",
       "instrumentToken": 3689729,
       "exchange": "NSE",
-      "lotSize": 15
+      "lotSize": 20
     },
     {
       "name": "PATANJALI",
       "tradingsymbol": "PATANJALI",
       "instrumentToken": 4359425,
       "exchange": "NSE",
-      "lotSize": 900
+      "lotSize": 1075
     },
     {
       "name": "PAYTM",
@@ -1063,7 +1049,7 @@
       "tradingsymbol": "PERSISTENT",
       "instrumentToken": 4701441,
       "exchange": "NSE",
-      "lotSize": 100
+      "lotSize": 125
     },
     {
       "name": "PETRONET",
@@ -1154,7 +1140,7 @@
       "tradingsymbol": "PREMIERENE",
       "instrumentToken": 6412545,
       "exchange": "NSE",
-      "lotSize": 575
+      "lotSize": 650
     },
     {
       "name": "PRESTIGE",
@@ -1182,7 +1168,7 @@
       "tradingsymbol": "RECLTD",
       "instrumentToken": 3930881,
       "exchange": "NSE",
-      "lotSize": 1400
+      "lotSize": 1575
     },
     {
       "name": "RELIANCE",
@@ -1196,7 +1182,7 @@
       "tradingsymbol": "RVNL",
       "instrumentToken": 2445313,
       "exchange": "NSE",
-      "lotSize": 1525
+      "lotSize": 1925
     },
     {
       "name": "SAIL",
@@ -1204,13 +1190,6 @@
       "instrumentToken": 758529,
       "exchange": "NSE",
       "lotSize": 4700
-    },
-    {
-      "name": "SAMMAANCAP",
-      "tradingsymbol": "SAMMAANCAP",
-      "instrumentToken": 7712001,
-      "exchange": "NSE",
-      "lotSize": 4300
     },
     {
       "name": "SBICARD",
@@ -1294,14 +1273,14 @@
       "tradingsymbol": "SUZLON",
       "instrumentToken": 3076609,
       "exchange": "NSE",
-      "lotSize": 9025
+      "lotSize": 12700
     },
     {
       "name": "SWIGGY",
       "tradingsymbol": "SWIGGY",
       "instrumentToken": 6928897,
       "exchange": "NSE",
-      "lotSize": 1300
+      "lotSize": 1825
     },
     {
       "name": "TATACONSUM",
@@ -1315,7 +1294,7 @@
       "tradingsymbol": "TATAELXSI",
       "instrumentToken": 873217,
       "exchange": "NSE",
-      "lotSize": 100
+      "lotSize": 125
     },
     {
       "name": "TATAPOWER",
@@ -1336,7 +1315,7 @@
       "tradingsymbol": "TCS",
       "instrumentToken": 2953217,
       "exchange": "NSE",
-      "lotSize": 175
+      "lotSize": 225
     },
     {
       "name": "TECHM",
@@ -1364,7 +1343,7 @@
       "tradingsymbol": "TMPV",
       "instrumentToken": 884737,
       "exchange": "NSE",
-      "lotSize": 800
+      "lotSize": 1600
     },
     {
       "name": "TORNTPHARM",
@@ -1378,7 +1357,7 @@
       "tradingsymbol": "TRENT",
       "instrumentToken": 502785,
       "exchange": "NSE",
-      "lotSize": 150
+      "lotSize": 225
     },
     {
       "name": "TVSMOTOR",
@@ -1427,7 +1406,7 @@
       "tradingsymbol": "VBL",
       "instrumentToken": 4843777,
       "exchange": "NSE",
-      "lotSize": 1125
+      "lotSize": 1275
     },
     {
       "name": "VEDL",

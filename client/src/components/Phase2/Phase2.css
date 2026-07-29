@@ -1,0 +1,320 @@
+/* ── Phase-2 shell ─────────────────────────────────────────────────────── */
+
+.p2-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--bg-primary, #0a0a0a);
+  color: var(--text-primary, #f0f0f0);
+}
+
+.p2-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border-color, #222);
+  background: var(--bg-secondary, #111);
+  flex-wrap: wrap;
+}
+
+.p2-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.p2-logo { font-size: 18px; }
+.p2-title { font-weight: 700; font-size: 15px; }
+
+.p2-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--accent-primary, #3b82f6);
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.p2-tabs {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+}
+
+.p2-tab {
+  padding: 8px 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.p2-tab:hover { color: var(--text-primary, #f0f0f0); }
+
+.p2-tab--active {
+  background: var(--accent-primary, #3b82f6);
+  color: #fff;
+}
+
+.p2-switch-btn {
+  padding: 6px 14px;
+  font-size: 0.78rem;
+  background: transparent;
+  color: var(--text-secondary, #888);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.p2-switch-btn:hover {
+  color: var(--text-primary, #f0f0f0);
+  border-color: var(--text-secondary, #666);
+}
+
+.p2-main {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* ── Strikes page ──────────────────────────────────────────────────────── */
+
+.p2-page {
+  padding: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+.p2-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.p2-toolbar-left h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.p2-universe-hint {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  margin-top: 2px;
+}
+
+.p2-toolbar-right {
+  display: flex;
+  gap: 8px;
+}
+
+.p2-btn {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.p2-btn--run {
+  background: var(--accent-primary, #3b82f6);
+  color: #fff;
+}
+
+.p2-btn--run:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.p2-btn--start {
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--text-secondary, #94a3b8);
+}
+
+.p2-btn--stop {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+/* Scheduler strip */
+.p2-sched {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--bg-secondary, #111);
+  border: 1px solid var(--border-color, #222);
+  border-radius: 10px;
+  margin-bottom: 12px;
+  font-size: 0.8rem;
+}
+
+.p2-sched-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--text-secondary, #888);
+}
+
+.p2-sched-item b { color: var(--text-primary, #f0f0f0); }
+.p2-sched-next { color: var(--accent-primary, #3b82f6); }
+.p2-sched-count { font-size: 0.75rem; }
+
+.p2-error {
+  padding: 10px 14px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  color: #f87171;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+
+/* ATM strip */
+.p2-atm-strip {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.p2-atm-chip {
+  font-size: 0.78rem;
+  padding: 6px 12px;
+  background: var(--bg-secondary, #111);
+  border: 1px solid var(--border-color, #222);
+  border-radius: 16px;
+  color: var(--text-secondary, #aaa);
+}
+
+.p2-atm-chip b { color: var(--text-primary, #f0f0f0); }
+
+/* Filters */
+.p2-filters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.p2-filters select {
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  background: var(--bg-primary, #0a0a0a);
+  color: var(--text-primary, #f0f0f0);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.p2-count {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #888);
+}
+
+/* Results grid */
+.p2-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.p2-empty {
+  grid-column: 1 / -1;
+  padding: 40px;
+  text-align: center;
+  color: var(--text-secondary, #777);
+  font-size: 0.9rem;
+}
+
+/* Match card */
+.p2-card {
+  background: var(--bg-secondary, #111);
+  border: 1px solid var(--border-color, #222);
+  border-left: 3px solid transparent;
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.p2-card--bullish { border-left-color: #22c55e; }
+.p2-card--bearish { border-left-color: #ef4444; }
+
+.p2-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.p2-signal--bullish { color: #22c55e; }
+.p2-signal--bearish { color: #ef4444; }
+
+.p2-symbol {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.p2-pattern {
+  font-size: 0.68rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  font-weight: 600;
+}
+
+.p2-tf {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #888);
+  font-weight: 600;
+}
+
+.p2-card-sub {
+  font-size: 0.72rem;
+  color: var(--text-secondary, #888);
+  margin: 4px 0 10px;
+}
+
+.p2-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.p2-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+}
+
+.p2-row span { color: var(--text-secondary, #888); }
+.p2-sl { color: #f87171; }
+.p2-target { color: #4ade80; }
+
+.p2-card-foot {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color, #1c1c1c);
+  font-size: 0.7rem;
+  color: var(--text-secondary, #666);
+}
+
+/* Mobile */
+@media (max-width: 640px) {
+  .p2-header { gap: 10px; padding: 8px 12px; }
+  .p2-tabs { order: 3; width: 100%; }
+  .p2-page { padding: 12px; }
+  .p2-grid { grid-template-columns: 1fr; }
+}

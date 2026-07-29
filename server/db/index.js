@@ -24,6 +24,7 @@ const settingsRepo       = require('./repositories/settingsRepo');
 const equityScanRepo        = require('./repositories/equityScanRepo');
 const equityCandleCacheRepo = require('./repositories/equityCandleCacheRepo');
 const kumoBreakoutCacheRepo = require('./repositories/kumoBreakoutCacheRepo');
+const phase2CandleCacheRepo = require('../phase2/candleCacheRepo');
 
 /**
  * Connect to MongoDB and bootstrap collection indexes.
@@ -47,6 +48,7 @@ async function init() {
     equityScanRepo.createIndexes(),
     equityCandleCacheRepo.createIndexes(),
     kumoBreakoutCacheRepo.createIndexes(),
+    phase2CandleCacheRepo.createIndexes(),
   ]);
 
   return true;

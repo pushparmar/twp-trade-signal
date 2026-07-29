@@ -14,6 +14,7 @@ import IndexTradePage from "./components/IndexTrade/IndexTradePage";
 import EquityScanPanel from "./components/Scanner/EquityScanPanel";
 import KumoBreakoutPage from "./components/KumoBreakout/KumoBreakoutPage";
 import LoginPage from "./components/Auth/LoginPage";
+import Phase2Shell from "./components/Phase2/Phase2Shell";
 import "./App.css";
 
 // ── Client-side fallback for SL / Target / TSL ────────────────────────────────
@@ -389,12 +390,21 @@ class ErrorBoundary extends Component {
     }
 }
 
-// ── Root — auth gate ───────────────────────────────────────────────────────────
-// Renders either the login screen or the full app shell based on the stored flag.
+// ── Root — auth gate + app-mode switch ─────────────────────────────────────────
+// Renders either the login screen or one of the two app shells:
+//   phase2  — minimal two-tab app (Screener + Index Strikes)  [default]
+//   classic — the full previous application
+// The choice persists in localStorage and is toggled via in-app buttons.
 export default function App() {
     // A simple localStorage flag keeps the session alive across refreshes.
     // LoginPage sets twp_auth='1' on success; clearing it here forces a re-login.
     const [loggedIn, setLoggedIn] = useState(() => localStorage.getItem("twp_auth") === "1");
+    const [appMode, setAppMode] = useState(() => localStorage.getItem("twp_app_mode") || "phase2");
+
+    const switchMode = (mode) => {
+        localStorage.setItem("twp_app_mode", mode);
+        setAppMode(mode);
+    };
 
     if (!loggedIn) {
         return <LoginPage onLogin={() => setLoggedIn(true)} />;
@@ -402,7 +412,33 @@ export default function App() {
 
     return (
         <ErrorBoundary>
-            <AppShell />
+            {appMode === "phase2" ? (
+                <Phase2Shell onSwitchApp={() => switchMode("classic")} />
+            ) : (
+                <>
+                    <AppShell />
+                    <button
+                        onClick={() => switchMode("phase2")}
+                        title="Switch to the Phase-2 app (Screener + Index Strikes)"
+                        style={{
+                            position: "fixed",
+                            bottom: 16,
+                            right: 16,
+                            zIndex: 9999,
+                            padding: "8px 14px",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            borderRadius: 20,
+                            border: "1px solid #3b82f6",
+                            background: "rgba(59,130,246,0.15)",
+                            color: "#60a5fa",
+                            cursor: "pointer"
+                        }}
+                    >
+                        ⚡ Phase 2
+                    </button>
+                </>
+            )}
         </ErrorBoundary>
     );
 }

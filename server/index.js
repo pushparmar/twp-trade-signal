@@ -21,6 +21,7 @@ const backtestRouter     = require('./routes/backtest');
 const equityScanRouter   = require('./routes/equityScan');
 const debugEquityRouter  = require('./routes/debug-equity');
 const kumoBreakoutRouter = require('./routes/kumoBreakout');
+const phase2Router       = require('./routes/phase2');
 const autoTrader         = require('./services/autoTrader');
 const telegramPoller = require('./services/telegramPoller');
 const instrumentCache = require('./services/instrumentCache');
@@ -36,6 +37,8 @@ const signalOutcomeTracker  = require('./services/signalOutcomeTracker');
 const dailySnapshotJob      = require('./services/dailySnapshotJob');
 const equityScanScheduler   = require('./services/equityScanScheduler');
 const kumoBreakoutService   = require('./services/kumoBreakoutService');
+const phase2ScanService     = require('./phase2/scanService');
+const phase2TickWatcher     = require('./phase2/tickWatcher');
 const db                    = require('./db');
 const store = require('./store');
 const indexTrade            = require('./index-trade');
@@ -123,6 +126,7 @@ app.use('/api/backtest',    backtestRouter);
 app.use('/api/equity-scan', equityScanRouter);
 app.use('/api/debug',       debugEquityRouter);
 app.use('/api/kumo-breakout', kumoBreakoutRouter);
+app.use('/api/phase2', phase2Router);
 app.use('/api/index-trade', indexTrade.router);
 
 app.listen(PORT, async () => {
@@ -380,6 +384,21 @@ app.listen(PORT, async () => {
     } catch (err) {
       console.warn('[KumoBreakout] Could not start:', err.message);
     }
+
+    // Phase-2 index-option strike scanner (kumo breakout + TK reversion, 5m/15m/1h)
+    try {
+      phase2ScanService.start();
+    } catch (err) {
+      console.warn('[Phase2Scan] Could not start:', err.message);
+    }
+
+    // Phase-2 live level watcher — subscribes strikes every morning and fires
+    // instant Telegram alerts when a setup's entry/SL/target level is hit.
+    try {
+      phase2TickWatcher.start();
+    } catch (err) {
+      console.warn('[Phase2Ticks] Could not start:', err.message);
+    }
   } else {
     console.log('[MarketWatch] Kite not authenticated — ticker and instrument cache will init after login');
   }
@@ -397,6 +416,8 @@ function _gracefulShutdown(signal) {
   dailySnapshotJob.stop();
   indexTrade.stop();
   kumoBreakoutService.stop();
+  phase2ScanService.stop();
+  phase2TickWatcher.stop();
   // Close MongoDB connection so any in-flight writes complete before exit
   db.close().catch(() => {});
   // Give in-flight requests a moment to complete, then exit

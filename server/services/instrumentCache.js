@@ -355,6 +355,23 @@ function getAllOptionsForCurrentExpiry(name, exchange) {
  * Returns all CE and PE options for the index's second-nearest expiry.
  * name: e.g. 'NIFTY', exchange: e.g. 'NFO'
  */
+/**
+ * Get ALL future-dated CE/PE options for an index across ALL expiries.
+ * Used by the phase-2 strike universe to build current/next-week/monthly
+ * expiry buckets. Returns the raw instrument list — caller filters.
+ */
+function getOptionChainAllExpiries(name, exchange) {
+  const today = new Date().toISOString().split('T')[0];
+  return _instruments.filter(
+    (i) =>
+      i.name === name &&
+      i.exchange === exchange &&
+      (i.instrumentType === 'CE' || i.instrumentType === 'PE') &&
+      i.expiry &&
+      i.expiry >= today,
+  );
+}
+
 function getAllOptionsForNextExpiry(name, exchange) {
   const today = new Date().toISOString().split('T')[0];
   const candidates = _instruments.filter(
@@ -371,4 +388,4 @@ function getAllOptionsForNextExpiry(name, exchange) {
   return candidates.filter((i) => i.expiry === nextExpiry);
 }
 
-module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount, getAllOptionsForCurrentExpiry, getAllOptionsForNextExpiry };
+module.exports = { load, search, getBySymbol, getByToken, getNseEquity, getFrontMonthFuture, getOptionsByStrike, getNearestATMOption, getFutureNames, getAllNseEquity, getAllEquity, isLoaded, getLastLoaded, getCount, getAllOptionsForCurrentExpiry, getAllOptionsForNextExpiry, getOptionChainAllExpiries };

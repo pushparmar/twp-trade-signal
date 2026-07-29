@@ -134,6 +134,12 @@ function connect() {
                     _tradeWatcherWarned = true;
                 }
             }
+
+            // Phase-2 level watcher — instant entry/SL/target hit alerts for
+            // index-option strike setups. No-ops when phase2 isn't running.
+            try {
+                require("../phase2/tickWatcher").onTick(tick.instrument_token, tick.last_price);
+            } catch { /* phase2 watcher unavailable — ignore */ }
         }
     });
 

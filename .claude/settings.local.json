@@ -106,7 +106,31 @@
       "Bash(node -e \"require\\('./services/kumoBreakoutService'\\); require\\('./db/repositories/kumoBreakoutCacheRepo'\\); console.log\\('OK'\\)\")",
       "Bash(node -c server/services/ichimoku.js)",
       "Bash(node -c server/services/kumoBreakoutService.js)",
-      "Bash(node -e \"const pr = require\\('./server/services/patternRegistry'\\); const p = pr.get\\('flat-spanb-rejection'\\); console.log\\('Pattern loaded:', p.id, p.label\\); console.log\\('Description:', p.description\\);\")"
+      "Bash(node -e \"const pr = require\\('./server/services/patternRegistry'\\); const p = pr.get\\('flat-spanb-rejection'\\); console.log\\('Pattern loaded:', p.id, p.label\\); console.log\\('Description:', p.description\\);\")",
+      "mcp__b7051804-7cd5-4710-9ed5-fa3f5e48cf0a__jira_search",
+      "mcp__visualize__read_me",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import json; t=json.load\\(open\\('/Users/pushpendraparmar/.claude/projects/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/e5b05acd-72db-423c-82d5-49701bc2333b/tool-results/toolu_bdrk_018GBGzPrGLsHQytt5wdQWRQ.json'\\)\\)[0]['text']; i=t.find\\('SVG setup'\\); print\\(t[i:i+5000]\\)\")",
+      "Bash(python3 -c \"import json; t=json.load\\(open\\('/Users/pushpendraparmar/.claude/projects/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/e5b05acd-72db-423c-82d5-49701bc2333b/tool-results/toolu_bdrk_018GBGzPrGLsHQytt5wdQWRQ.json'\\)\\)[0]['text']; i=t.find\\('## Diagram'\\); print\\(t[i:i+6000]\\)\")",
+      "Bash(python3 -c \"import json; t=json.load\\(open\\('/Users/pushpendraparmar/.claude/projects/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/e5b05acd-72db-423c-82d5-49701bc2333b/tool-results/toolu_bdrk_018GBGzPrGLsHQytt5wdQWRQ.json'\\)\\)[0]['text']; i=t.find\\('viewBox'\\); print\\(t[i:i+3500]\\)\")",
+      "Bash(python3 -c \"import json; t=json.load\\(open\\('/Users/pushpendraparmar/.claude/projects/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/e5b05acd-72db-423c-82d5-49701bc2333b/tool-results/toolu_bdrk_018GBGzPrGLsHQytt5wdQWRQ.json'\\)\\)[0]['text']; i=t.find\\('ramp'\\); print\\(t[i-200:i+2500]\\)\")",
+      "Bash(python3 -c \"import json; t=json.load\\(open\\('/Users/pushpendraparmar/.claude/projects/-Users-pushpendraparmar-Documents-TM-Claude-learning-TelegramToKiteModal/e5b05acd-72db-423c-82d5-49701bc2333b/tool-results/toolu_bdrk_018GBGzPrGLsHQytt5wdQWRQ.json'\\)\\)[0]['text']; i=t.find\\('pre-built classes'\\); print\\(t[i:i+4000]\\)\")",
+      "mcp__b7051804-7cd5-4710-9ed5-fa3f5e48cf0a__jira_get_issue",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/Claude-learning/TelegramToKiteModal fetch origin)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/Claude-learning/TelegramToKiteModal branch -a)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/Claude-learning/TelegramToKiteModal remote -v)",
+      "Bash(mdfind -name amgr-frontend)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend fetch origin)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend branch -r)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend branch -a)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend for-each-ref --format='%\\(refname:short\\) %\\(committerdate:short\\)' refs/remotes/origin)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend branch --show-current)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/amgr-frontend log --oneline -3)",
+      "mcp__visualize__show_widget",
+      "mcp__b7051804-7cd5-4710-9ed5-fa3f5e48cf0a__jira_get_comments",
+      "Read(//Users/pushpendraparmar/Documents/TM/**)",
+      "Read(//Users/pushpendraparmar/Documents/**)",
+      "Bash(git -C /Users/pushpendraparmar/Documents/TM/Claude-learning/TelegramToKiteModal checkout -b phase-2)"
     ]
   }
 }
