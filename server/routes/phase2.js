@@ -12,8 +12,27 @@
 const express = require('express');
 const strikeUniverse = require('../phase2/strikeUniverse');
 const scanService = require('../phase2/scanService');
+const tickWatcher = require('../phase2/tickWatcher');
+const kiteTicker = require('../services/kiteTicker');
+const instrumentCache = require('../services/instrumentCache');
+const store = require('../store');
+const { isNseOpen } = require('../utils/marketHours');
 
 const router = express.Router();
+
+// ── GET /api/phase2/health ────────────────────────────────────────────────────
+// Connection + pipeline diagnostics for the Phase-2 UI indicator.
+router.get('/health', (_req, res) => {
+  const { kite } = store.getConfig();
+  res.json({
+    kiteAuthenticated: !!kite.accessToken,
+    tickerConnected: kiteTicker.isConnected(),
+    instrumentCacheLoaded: instrumentCache.isLoaded(),
+    marketOpen: isNseOpen(),
+    scan: scanService.getStatus(),
+    tickWatcher: tickWatcher.getStatus(),
+  });
+});
 
 router.get('/strikes', async (req, res) => {
   try {

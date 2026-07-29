@@ -9,7 +9,8 @@
  * the full previous application.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import api from '../../api';
 import useSSE from '../../hooks/useSSE';
 import ScanAlertsPage from '../Scanner/ScanAlertsPage';
 import Phase2StrikesPage from './Phase2StrikesPage';
@@ -22,9 +23,21 @@ const TABS = [
 
 export default function Phase2Shell({ onSwitchApp }) {
   const [tab, setTab] = useState('screener');
+  const [health, setHealth] = useState(null);
 
   // Keep the SSE pipeline alive — the screener relies on scan alert events
   useSSE();
+
+  // Kite connection health — poll every 20s
+  useEffect(() => {
+    const load = () => api.get('/phase2/health').then(r => setHealth(r.data)).catch(() => setHealth(null));
+    load();
+    const t = setInterval(load, 20_000);
+    return () => clearInterval(t);
+  }, []);
+
+  const kiteOk = health?.kiteAuthenticated;
+  const tickerOk = health?.tickerConnected;
 
   return (
     <div className="p2-shell">
@@ -34,6 +47,15 @@ export default function Phase2Shell({ onSwitchApp }) {
           <span className="p2-title">Trade Scanner</span>
           <span className="p2-badge">Phase 2</span>
         </div>
+        {health !== null && (
+          <div className="p2-health" title={`Kite API: ${kiteOk ? 'authenticated' : 'NOT authenticated'} · Live ticker: ${tickerOk ? 'connected' : 'disconnected'} · Market: ${health.marketOpen ? 'open' : 'closed'}`}>
+            <span className={`p2-health-dot ${kiteOk ? 'p2-health-dot--ok' : 'p2-health-dot--bad'}`} />
+            <span className="p2-health-label">Kite {kiteOk ? 'Connected' : 'Disconnected'}</span>
+            <span className={`p2-health-dot ${tickerOk ? 'p2-health-dot--ok' : 'p2-health-dot--bad'}`} />
+            <span className="p2-health-label">Ticker</span>
+            {!health.marketOpen && <span className="p2-health-market">Market Closed</span>}
+          </div>
+        )}
         <nav className="p2-tabs">
           {TABS.map(t => (
             <button

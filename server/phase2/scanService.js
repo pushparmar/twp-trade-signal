@@ -60,6 +60,7 @@ const _nextScanAt = new Map();  // interval → ts
 const _scanInProgress = new Map();
 const _results = new Map();     // interval → { matches, scannedCount, totalInstruments, ts }
 const _telegramDedup = new Map(); // "token:pattern:interval" → IST date
+const _lastError = new Map();   // interval → last scan error message
 
 function _istDate() {
   return new Date(Date.now() + IST_OFFSET_MS).toISOString().slice(0, 10);
@@ -142,6 +143,7 @@ async function scanInterval(interval) {
     const { instruments } = await strikeUniverse.getUniverse();
     if (!instruments.length) {
       console.warn('[Phase2Scan] Empty strike universe — is Kite authenticated?');
+      _lastError.set(interval, 'Strike universe empty — Kite not authenticated or instrument cache not loaded');
       return null;
     }
 
@@ -154,6 +156,8 @@ async function scanInterval(interval) {
 
     const matches = [];
     let scannedCount = 0;
+    let fetchFailCount = 0;
+    let shortHistoryCount = 0;
 
     const todayIst = _istDate();
 
@@ -170,6 +174,7 @@ async function scanInterval(interval) {
         const canIncrement = cached && cached.length >= MIN_BARS && lastCachedDate === todayIst;
 
         let candles = null;
+        let fetchFailed = false;
         try {
           const fetchCount = canIncrement ? INCREMENTAL_BARS : SCAN_BARS[interval];
           const fresh = await fetchLastNCandles(inst.token, interval, fetchCount, false);
@@ -179,14 +184,20 @@ async function scanInterval(interval) {
               : fresh;
             candlesToPersist.push({ token: inst.token, interval, candles: fresh });
           }
-        } catch { /* fall back to DB cache below */ }
+        } catch {
+          fetchFailed = true;
+        }
 
         // Kite failed — use the FIFO-cached history as-is if sufficient
         if ((!candles || candles.length < MIN_BARS) && cached && cached.length >= MIN_BARS) {
           candles = cached;
         }
 
-        if (!candles || candles.length < MIN_BARS) return null;
+        if (!candles || candles.length < MIN_BARS) {
+          if (fetchFailed) fetchFailCount++;
+          else shortHistoryCount++; // contract too new — not enough bars for Ichimoku
+          return null;
+        }
         scannedCount++;
 
         const found = [];
@@ -233,13 +244,19 @@ async function scanInterval(interval) {
       tfLabel,
       matches,
       scannedCount,
+      fetchFailCount,
+      shortHistoryCount,
       totalInstruments: instruments.length,
       ts: Date.now(),
     };
     _results.set(interval, summary);
     _lastScanAt.set(interval, Date.now());
+    _lastError.delete(interval);
 
-    console.log(`[Phase2Scan] ${tfLabel} complete — ${matches.length} matches (${scannedCount} scanned)`);
+    console.log(
+      `[Phase2Scan] ${tfLabel} complete — ${matches.length} matches ` +
+      `(${scannedCount} scanned, ${fetchFailCount} fetch-failed, ${shortHistoryCount} short-history)`,
+    );
 
     broadcast('phase2_scan_complete', {
       interval,
@@ -262,6 +279,7 @@ async function scanInterval(interval) {
     return summary;
   } catch (err) {
     console.error(`[Phase2Scan] ${tfLabel} scan error:`, err.message);
+    _lastError.set(interval, err.message);
     return null;
   } finally {
     _scanInProgress.set(interval, false);
@@ -313,6 +331,7 @@ function getStatus() {
       lastScanAt: _lastScanAt.get(iv) ?? null,
       nextScanAt: _nextScanAt.get(iv) ?? null,
       scanning: _scanInProgress.get(iv) ?? false,
+      lastError: _lastError.get(iv) ?? null,
     };
   }
   return { running: _running, intervals };

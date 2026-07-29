@@ -160,14 +160,16 @@ export default function Phase2StrikesPage() {
           {INTERVALS.map(iv => {
             const info = status.intervals[iv];
             if (!info) return null;
+            const r = results[iv];
             return (
               <div key={iv} className="p2-sched-item">
                 <b>{TF_LABELS[iv]}</b>
                 <span>{info.scanning ? 'scanning…' : info.lastScanAt ? `scanned ${relativeTime(info.lastScanAt)}` : 'not scanned yet'}</span>
                 {status.running && <span className="p2-sched-next">next: {countdown(info.nextScanAt)}</span>}
                 <span className="p2-sched-count">
-                  {results[iv] ? `${results[iv].matches.length} matches / ${results[iv].scannedCount} scanned` : ''}
+                  {r ? `${r.matches.length} matches / ${r.scannedCount} scanned${r.shortHistoryCount ? ` · ${r.shortHistoryCount} too new` : ''}${r.fetchFailCount ? ` · ${r.fetchFailCount} fetch failed` : ''}` : ''}
                 </span>
+                {info.lastError && <span className="p2-sched-error" title={info.lastError}>⚠ {info.lastError}</span>}
               </div>
             );
           })}

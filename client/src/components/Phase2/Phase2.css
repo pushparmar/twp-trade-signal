@@ -38,6 +38,44 @@
   letter-spacing: 0.5px;
 }
 
+.p2-health {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 1px solid var(--border-color, #222);
+  border-radius: 14px;
+  font-size: 0.72rem;
+  color: var(--text-secondary, #888);
+}
+
+.p2-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.p2-health-dot--ok { background: #22c55e; box-shadow: 0 0 5px rgba(34,197,94,.6); }
+.p2-health-dot--bad { background: #ef4444; box-shadow: 0 0 5px rgba(239,68,68,.6); }
+
+.p2-health-market {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(234, 179, 8, 0.15);
+  color: #eab308;
+  font-weight: 600;
+}
+
+.p2-sched-error {
+  color: #f87171;
+  font-size: 0.72rem;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .p2-tabs {
   display: flex;
   gap: 4px;
