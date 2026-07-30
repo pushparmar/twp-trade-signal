@@ -349,10 +349,87 @@
   color: var(--text-secondary, #666);
 }
 
-/* Mobile */
+/* ── Tablet ────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .p2-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .p2-sched { gap: 10px; }
+  .p2-sched-item { flex-wrap: wrap; row-gap: 2px; }
+}
+
+/* ── Mobile ────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
-  .p2-header { gap: 10px; padding: 8px 12px; }
-  .p2-tabs { order: 3; width: 100%; }
+  /* Header: brand row on top, tabs become a full-width segmented bar */
+  .p2-header {
+    gap: 8px;
+    padding: 8px 12px;
+    row-gap: 8px;
+  }
+  .p2-brand { order: 1; }
+  .p2-health { order: 2; margin-left: auto; padding: 3px 8px; }
+  .p2-health-label { display: none; }  /* dots only — hover/tap title has detail */
+  .p2-health-market { font-size: 0.62rem; padding: 1px 6px; }
+  .p2-switch-btn { order: 3; padding: 4px 10px; font-size: 0.7rem; }
+  .p2-tabs {
+    order: 4;
+    width: 100%;
+    flex: none;
+  }
+  .p2-tab {
+    flex: 1;
+    padding: 8px 0;
+    font-size: 0.85rem;
+    text-align: center;
+  }
+
+  /* Page + toolbar stack */
   .p2-page { padding: 12px; }
-  .p2-grid { grid-template-columns: 1fr; }
+  .p2-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .p2-toolbar-left h2 { font-size: 1.05rem; }
+  .p2-universe-hint { font-size: 0.7rem; }
+  .p2-toolbar-right { width: 100%; }
+  .p2-toolbar-right .p2-btn { flex: 1; padding: 10px 8px; font-size: 0.8rem; }
+
+  /* Scheduler strip: one TF per row */
+  .p2-sched { flex-direction: column; gap: 8px; padding: 8px 12px; }
+  .p2-sched-item { flex-wrap: wrap; row-gap: 2px; font-size: 0.75rem; }
+  .p2-sched-count { width: 100%; }
+  .p2-sched-error { max-width: 100%; white-space: normal; }
+
+  /* ATM chips scroll horizontally instead of wrapping tall */
+  .p2-atm-strip {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+  .p2-atm-chip { flex-shrink: 0; font-size: 0.72rem; }
+
+  /* Filters: two per row */
+  .p2-filters { gap: 8px; }
+  .p2-filters select {
+    flex: 1 1 calc(50% - 8px);
+    min-width: 0;
+    padding: 8px 8px;
+    font-size: 0.8rem;
+  }
+  .p2-count {
+    margin-left: 0;
+    width: 100%;
+    text-align: right;
+  }
+
+  /* Cards: single column, larger tap targets */
+  .p2-grid { grid-template-columns: 1fr; gap: 10px; }
+  .p2-card { padding: 12px; }
+  .p2-row { font-size: 0.85rem; padding: 2px 0; }
+  .p2-empty { padding: 28px 12px; font-size: 0.82rem; }
+}
+
+/* ── Small phones ──────────────────────────────────────────────────────── */
+@media (max-width: 380px) {
+  .p2-title { font-size: 13px; }
+  .p2-badge { display: none; }
+  .p2-card-head { gap: 6px; }
+  .p2-symbol { font-size: 0.82rem; }
+  .p2-pattern { font-size: 0.6rem; padding: 2px 6px; }
 }

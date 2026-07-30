@@ -63,7 +63,7 @@ export default function Phase2StrikesPage() {
   const [status, setStatus] = useState(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
-  const [filter, setFilter] = useState({ index: 'all', bucket: 'all', pattern: 'all', signal: 'all' });
+  const [filter, setFilter] = useState({ index: 'all', bucket: 'all', pattern: 'all' });
   const [, tick] = useState(0);
 
   const loadAll = useCallback(() => {
@@ -122,7 +122,6 @@ export default function Phase2StrikesPage() {
     if (filter.index !== 'all' && m.index !== filter.index) return false;
     if (filter.bucket !== 'all' && m.expiryBucket !== filter.bucket) return false;
     if (filter.pattern !== 'all' && m.pattern !== filter.pattern) return false;
-    if (filter.signal !== 'all' && m.signal !== filter.signal) return false;
     return true;
   });
 
@@ -135,7 +134,7 @@ export default function Phase2StrikesPage() {
           <h2>Index Option Strikes</h2>
           {universe && (
             <span className="p2-universe-hint">
-              {totalInstruments} strikes · ATM ±5 ITM / 2 OTM · current + next week + monthly
+              {totalInstruments} strikes · ATM ±3 · current + next week + monthly · bullish only
             </span>
           )}
         </div>
@@ -207,11 +206,6 @@ export default function Phase2StrikesPage() {
           <option value="all">All Patterns</option>
           <option value="kumo-breakout">Kumo Breakout</option>
           <option value="tk-reversion">TK Reversion</option>
-        </select>
-        <select value={filter.signal} onChange={e => setFilter(f => ({ ...f, signal: e.target.value }))}>
-          <option value="all">All Signals</option>
-          <option value="bullish">Bullish</option>
-          <option value="bearish">Bearish</option>
         </select>
         <span className="p2-count">{filtered.length} signal{filtered.length !== 1 ? 's' : ''}</span>
       </div>

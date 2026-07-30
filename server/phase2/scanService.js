@@ -209,6 +209,8 @@ async function scanInterval(interval) {
             continue;
           }
           if (!result) continue;
+          // Option-buyer rule: only BULLISH premium setups (CE or PE premium rising)
+          if (result.signal !== 'bullish') continue;
 
           found.push({
             ...result,

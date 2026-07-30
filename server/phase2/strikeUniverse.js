@@ -27,9 +27,9 @@ const INDICES = {
   SENSEX:    { ltpSymbol: 'BSE:SENSEX',     exchange: 'BFO', name: 'SENSEX',    step: 100 },
 };
 
-// Strike window relative to ATM (mirrors index-trade behaviour)
-const ITM_STRIKES = 5;
-const OTM_STRIKES = 2;
+// Strike window relative to ATM — ±3 strikes per option type
+const ITM_STRIKES = 3;
+const OTM_STRIKES = 3;
 
 // Universe cache — strikes shift with the underlying, so refresh periodically
 const CACHE_TTL_MS = 5 * 60_000;
